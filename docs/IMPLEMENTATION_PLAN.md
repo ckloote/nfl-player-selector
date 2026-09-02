@@ -14,7 +14,7 @@ or activate `.venv` first. See the README for setup.
 
 | Phase | Status |
 |---|---|
-| 0 — Scaffolding & data | **Done** |
+| 0 — Scaffolding & data | **Done** (see the schema note under Phase 0) |
 | 1 — Projections + optimizer + CLI | **Done** (see notes under Phase 1) |
 | 2 — In-season learning | Partly started: the prior/current shrinkage blend and depth-chart roles shipped with Phase 1; per-type rates, dispersion, and `score` remain |
 | 3 — Leaderboard-aware strategy | Not started |
@@ -29,15 +29,26 @@ or activate `.venv` first. See the README for setup.
 - Project layout (`src/pool/`, `tests/`, `pyproject.toml`), `uv`-managed
   environment and lockfile, lint/format (`ruff`), CI-friendly test setup
   (`uv sync --locked` then `uv run pytest`).
-- SQLite schema: imported tables (weekly player stats, schedules, team defense,
-  Vegas lines, injuries/byes) and pool-state tables (my picks, opponent picks,
-  standings).
+- SQLite schema: imported tables (`player_weeks`, `games` — schedule and Vegas
+  lines in one table, `rosters`, `depth_charts`, `injuries`) plus the
+  `my_picks` pool-state table and a `meta` key/value table.
+  - Team-defense strength is **derived at query time** from opponents' stat
+    lines (`projections.defense_multipliers`), not stored as an imported
+    table; byes are likewise derived from the absence of a schedule row.
+  - Opponent picks and standings are **Phase 3** tables and do not exist yet.
 - `pool refresh`: idempotent import of prior-season (2025) stats and the
   current (2026) schedule/lines via `nflreadpy`; re-runnable all season for
   current-season data.
 - **Done when:** `pool refresh` populates the DB from scratch; queries can list
   any player's 2025 weekly TD lines and any team's 2026 schedule; tests cover
   the import transforms.
+- *Verified against live nflverse data:* refresh builds the DB in ~3s and is
+  idempotent — a second run leaves every table byte-identical and preserves
+  recorded picks. Current-season files that don't exist yet degrade to
+  "not published yet" instead of erroring, which is the normal preseason state.
+- *Coverage:* every import transform now has unit tests. What remains untested
+  in `ingest.py` (~50% line coverage) is the network fetch layer and the
+  `refresh` orchestration around it; `cli.py` is at 0% and has no tests at all.
 
 ## Phase 1 — Projections + optimizer + CLI (minimum useful product)
 
@@ -45,7 +56,10 @@ or activate `.venv` first. See the README for setup.
 
 - Projection v1: per-player Poisson TD rate from regressed prior-season rates ×
   opponent-defense multiplier × Vegas team-total scaling × home/away; byes and
-  ruled-out players excluded. Exposed as `project(player, week)`.
+  ruled-out players excluded. Exposed as a whole (player, week) frame from
+  `build_projections` / `projections_for`, not the per-player
+  `project(player, week)` call originally sketched here — everything
+  downstream consumes that frame.
 - Optimizer: per-slot linear assignment over remaining weeks
   (`linear_sum_assignment`), future-week discount, respects used players.
 - CLI: `recommend` (pick + top-5 alternatives + rationale per open slot, plus
@@ -58,12 +72,21 @@ or activate `.venv` first. See the README for setup.
 - **Done when:** `pool recommend --week N` produces a defensible pick sheet in
   seconds, slots can be locked independently, and recorded picks are correctly
   excluded from future weeks.
+- *Verified against live 2026 data:* `recommend` returns in under a second;
+  locking one slot leaves the other two open and re-solves the rest of the
+  season around it; a full plan assigns 53 slot-weeks to 53 distinct players
+  with no reuse of a recorded pick.
 - *Implementation notes:* the projection already blends current-season
   observations into the prior (it is the same shrinkage formula, so there was
   no reason to defer it), and a depth-chart role multiplier was added after
   real-data testing surfaced backup QBs as candidates. Alternatives are ranked
   by *season cost* (optimal plan value minus the plan value if that player is
   forced into this week), which is the honest price of overriding the plan.
+  The ruled-out/questionable path (`INJURY_MULT` → a forbidden cell in the
+  assignment matrix) is covered by tests at all three layers — the transform,
+  the multiplier, and the resulting exclusion from both the assignment and the
+  advice — but has still never run against real injury data, since
+  current-season reports don't publish until Week 1.
 
 ## Phase 2 — In-season learning & data depth
 
@@ -125,8 +148,8 @@ or activate `.venv` first. See the README for setup.
 ## Sequencing notes
 
 - Phases 0–1 are the critical path to first real use; 2 and 3 layer on without
-  reworking interfaces (`project()` and the assignment matrix are the stable
-  seams).
+  reworking interfaces (the projection frame and the assignment matrix are the
+  stable seams).
 - The backtesting harness (Phase 4) is worth starting as soon as Phase 1
   exists — it's the fastest way to catch modeling mistakes, and requires no
   new data work thanks to the DB layer.

@@ -101,10 +101,13 @@ Four layers, deliberately decoupled so each can improve independently:
   "not published yet" rather than an error.
 - **Storage:** a local SQLite database (`data/pool.db`). Two categories of
   tables:
-  - *Imported*: weekly player stats (prior season + current season), schedules,
-    team-defense stats, Vegas lines.
+  - *Imported*: weekly player stats (prior season + current season), schedules
+    and Vegas lines, weekly rosters, depth charts, injury reports. Team-defense
+    strength is derived from opponents' stat lines at query time rather than
+    imported as its own table.
   - *Pool state*: your picks and results, each opponent's picks and results,
-    weekly standings.
+    weekly standings. (Only your own picks exist today; the opponent and
+    standings tables arrive with Phase 3.)
 - **Refresh:** one command (`refresh`) re-pulls current-season data. Everything
   downstream reads only from the database, so the model and optimizer never
   care where data came from — which also makes backtesting on past seasons
@@ -143,10 +146,10 @@ per position from historical data. "Boom/bust" players are those whose TD
 production concentrates (goal-line backs, deep-threat WRs on high-total games);
 the dispersion measure is what the risk module leans on.
 
-The model layer exposes one interface:
-`project(player, week) -> distribution over TD counts`. Everything above it
-depends only on that interface, so the model can be upgraded (better features,
-ML) without touching the optimizer.
+The model layer exposes one interface: a (player, week) projection frame
+carrying a TD rate per row — today a Poisson `lam`, later the parameters of a
+distribution over TD counts. Everything above it depends only on that frame, so
+the model can be upgraded (better features, ML) without touching the optimizer.
 
 ### 3.3 Optimizer
 
@@ -242,7 +245,7 @@ A web dashboard is a possible Phase 4 nicety, not a requirement.
 - **Simple statistical model over ML:** with 18 games/season, TD data is far
   too sparse to train fancy models without overfitting. Poisson rates + Vegas
   lines + shrinkage is transparent, debuggable, and near the practical ceiling.
-  The `project()` interface leaves the door open.
+  The projection-frame interface leaves the door open.
 - **Leaderboard from the official weekly report:** the pool publishes
   everyone's picks and totals at week's end, so opponent state is entered once
   a week from that report (a CSV/paste import, with manual entry as fallback)
