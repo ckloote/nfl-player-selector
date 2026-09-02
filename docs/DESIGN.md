@@ -10,7 +10,11 @@ Pool rules, restated as constraints:
    receiving TDs, etc.).
 3. A player may be used **at most once per season**, across all weeks.
 4. Highest cumulative TD total after the final week wins. **Winner take all.**
-5. Picks lock **1 hour before a game starts**.
+5. Each pick locks independently, **1 hour before that player's game starts**.
+   The three picks in a week need not be submitted together: you could lock a
+   RB before Thursday's game, a QB before Sunday's, and a WR before Monday's.
+6. At the end of each week, an official report confirms every entrant's picks
+   and running totals.
 
 Consequences worth calling out:
 
@@ -29,10 +33,20 @@ Consequences worth calling out:
   middle of the pack: a trailing player should prefer a high-variance pick with
   a lower mean, a leader should prefer a high-floor pick and/or copy the
   second-place player's likely picks to deny them ground.
-- The 1-hour-before-kickoff deadline means Thursday-game picks lock with less
-  information (injury reports, weather) than Sunday picks. The tool should flag
-  when a recommended pick plays early and offer the best "wait for Sunday"
-  alternative.
+- Per-pick deadlines create an **in-week timing game**. Committing to a
+  Thursday player means giving up Friday/Saturday injury news and Sunday
+  inactives for that slot — so a Thursday pick has to be *better enough* than
+  the best Sunday alternative to pay for the information you forfeit. In the
+  other direction, your own early-week results are known before your later
+  picks lock: if your Thursday RB busts in a week where you're protecting a
+  lead, you can dial up variance on the QB and WR/TE picks that haven't locked
+  yet. The recommender must therefore work slot-by-slot within a week, not
+  only week-by-week.
+- Opponents' current-week picks are hidden until the end-of-week report, so
+  in-week you're playing against a one-week-old picture of the leaderboard and
+  everyone's remaining player pools. That's still highly informative — the
+  used-player lists are exact — but blocking/mirroring decisions are made
+  against *predicted* opponent picks, never observed ones.
 
 ## 2. What the tool does
 
@@ -48,9 +62,15 @@ It outputs, per position slot:
   intends to spend each remaining top player — so you can see the cost of
   deviating.
 
-It also tracks state: your used players, your weekly scores, opponents' used
-players and scores (entered manually), and adjusts recommendations based on
-your leaderboard position.
+Because picks lock slot-by-slot at different times, "this week" is not one
+decision: the tool supports recording picks one slot at a time and
+re-recommending for the still-open slots with everything known at that moment
+(locked picks, injury news, and — late in the season — your own early-game
+results).
+
+It also tracks state: your used players, your weekly scores, and every
+opponent's picks and totals (entered from the official end-of-week report),
+and adjusts recommendations based on your leaderboard position.
 
 ## 3. Architecture
 
@@ -142,6 +162,16 @@ re-solved. The future plan is a *forecast of intent*, recomputed as information
 arrives — that's how "revise the model as stats accumulate" propagates into
 decisions automatically.
 
+**Within-week, slot-by-slot decisions:** the assignment is computed at week
+granularity, but the recommendation layer applies an **early-commitment rule**
+for players whose games kick off before the week's main slate: commit early
+only when the early player's projected edge over the best later-game
+alternative exceeds an "information premium" (a tunable threshold representing
+the value of Friday injury news and Sunday inactives — calibratable from
+historical late-week injury-downgrade rates). Otherwise the tool says "hold
+this slot," and re-solving after early games have locked (or finished) is a
+first-class operation: locked slots are frozen, everything else re-optimizes.
+
 **Future-uncertainty discount:** a projected TD in week 17 is worth slightly
 less than one now (injury risk, role changes, late-season benching of
 locked-playoff-seed starters). Apply a small per-week decay (~1–2%/week,
@@ -153,9 +183,9 @@ far-future matchups that may never materialize.
 
 Turns "maximize expected TDs" into "maximize probability of winning the pool."
 
-- **State tracked:** every opponent's cumulative score *and used players* (they
-  face the same one-use constraint, so their remaining arsenal is knowable and
-  matters).
+- **State tracked:** every opponent's cumulative score *and used players*,
+  imported from the official end-of-week report (they face the same one-use
+  constraint, so their remaining arsenal is exactly knowable, one week behind).
 - **Monte Carlo simulation:** simulate the rest of the season a few thousand
   times. Your picks follow the optimizer plan; opponents are modeled as playing
   a near-optimal assignment over their own remaining pools (with noise). Each
@@ -164,8 +194,9 @@ Turns "maximize expected TDs" into "maximize probability of winning the pool."
 - **Decision rule:** rank this week's candidate picks by *win probability*, not
   expected TDs. This automatically produces the intuitive behavior:
   - **Trailing:** high-variance picks and *differentiation* — avoid picking the
-    same player the leader is likely to pick this week; you can't gain ground
-    on mirrored picks.
+    same player the leader is likely to pick this week (their actual pick is
+    unknown until the report, so this is played against their modeled best
+    move); you can't gain ground on mirrored picks.
   - **Leading:** high-floor picks and *blocking/mirroring* — favor your
     chaser's best remaining options' equivalents; matched outcomes preserve a
     lead.
@@ -183,12 +214,17 @@ exists.
 A CLI (Python, `typer`), because the weekly workflow is short and scripted:
 
 ```
-pool refresh                  # pull latest stats/lines/injuries into SQLite
-pool recommend --week 4       # picks + alternatives + rest-of-season plan
-pool record --week 4 --qb "J.Allen" --rb "B.Robinson" --flex "J.Chase"
-pool opponent record ...      # log an opponent's picks/score
-pool standings                # leaderboard + remaining-arsenal comparison
-pool plan                     # full remaining-season assignment view
+pool refresh                    # pull latest stats/lines/injuries into SQLite
+pool recommend --week 4         # open slots only: picks, alternatives, plan,
+                                #   and hold-vs-commit advice for early games
+pool record --week 4 --rb "B.Robinson"     # lock one slot (slots lock at
+pool record --week 4 --qb "J.Allen"        #   different times, so recording
+                                           #   is per-slot; repeatable)
+pool report import week4.csv    # ingest the official end-of-week report
+                                #   (everyone's picks + totals); manual
+                                #   `pool opponent record` as fallback
+pool standings                  # leaderboard + remaining-arsenal comparison
+pool plan                       # full remaining-season assignment view
 ```
 
 A web dashboard is a possible Phase 4 nicety, not a requirement.
@@ -202,9 +238,12 @@ A web dashboard is a possible Phase 4 nicety, not a requirement.
   too sparse to train fancy models without overfitting. Poisson rates + Vegas
   lines + shrinkage is transparent, debuggable, and near the practical ceiling.
   The `project()` interface leaves the door open.
-- **Manual opponent-pick entry:** there's no API for your pool. Entering ~a
-  dozen opponents' picks weekly is a 2-minute cost that unlocks the entire
-  leaderboard-aware layer. The tool works (in EV mode) even if you skip it.
+- **Leaderboard from the official weekly report:** the pool publishes
+  everyone's picks and totals at week's end, so opponent state is entered once
+  a week from that report (a CSV/paste import, with manual entry as fallback)
+  rather than scraped or guessed. The one-week lag is a fact of the game, not
+  a tooling gap — everyone plays under it. The tool works (in EV mode) even if
+  you skip opponent tracking entirely.
 - **SQLite over files:** pool state (picks, opponents) needs transactional
   updates and joins against stats; SQLite gives that with zero infrastructure.
 - **Backtesting as a first-class concern:** because data access is behind the

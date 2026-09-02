@@ -34,12 +34,16 @@ solver), `numpy`/`pandas`, `typer` (CLI), `pytest`.
   ruled-out players excluded. Exposed as `project(player, week)`.
 - Optimizer: per-slot linear assignment over remaining weeks
   (`linear_sum_assignment`), future-week discount, respects used players.
-- CLI: `recommend` (pick + top-5 alternatives + rationale per slot, plus
-  rest-of-season plan), `record` (log my pick), `plan`.
-- Early-game flag: warn when a recommended pick plays Thursday and show the
-  best late-game alternative.
+- CLI: `recommend` (pick + top-5 alternatives + rationale per open slot, plus
+  rest-of-season plan), `record` (log picks **per slot**, since QB/RB/WR-TE
+  lock at different times), `plan`. Re-running `recommend` with some slots
+  already locked freezes those and re-optimizes the rest.
+- Early-commitment advice: when a candidate plays before the main slate, show
+  the edge over the best later-game alternative and a hold/commit suggestion
+  (fixed information-premium threshold in v1; calibrated later).
 - **Done when:** `pool recommend --week N` produces a defensible pick sheet in
-  seconds, and recorded picks are correctly excluded from future weeks.
+  seconds, slots can be locked independently, and recorded picks are correctly
+  excluded from future weeks.
 
 ## Phase 2 — In-season learning & data depth
 
@@ -62,15 +66,20 @@ solver), `numpy`/`pandas`, `typer` (CLI), `pytest`.
 
 **Goal:** optimize P(win the pool), not expected TDs.
 
-- Opponent tracking: `pool opponent record` for each rival's weekly picks and
-  scores; `pool standings` with remaining-arsenal comparison (who has already
-  burned which stars).
+- Opponent tracking: `pool report import` to ingest the official end-of-week
+  report (every entrant's picks and totals; CSV or pasted text), with
+  `pool opponent record` as a manual fallback; `pool standings` with
+  remaining-arsenal comparison (who has already burned which stars).
 - Monte Carlo engine: simulate remaining season (mine + modeled opponent
   behavior) drawing from projection distributions; per-candidate-pick win
   probability.
 - Decision layer: rank by win probability; surface EV vs. win-prob divergence
   with an explanation (e.g., "trailing by 9 with 5 weeks left → high-variance
-  pick and diverge from leader").
+  pick and diverge from leader"). Opponent picks for the current week are
+  unobserved (report lag), so blocking/mirroring runs against modeled picks.
+- In-week adaptivity: when re-recommending open slots after an early game,
+  fold your own already-known TD results into the risk posture (e.g., a
+  Thursday bust while protecting a lead shifts remaining slots toward floor).
 - **Done when:** given contrived standings (big lead / big deficit), the
   recommender visibly shifts toward floor/mirror or ceiling/contrarian picks,
   with tests asserting those directional behaviors.
