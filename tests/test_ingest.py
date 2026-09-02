@@ -68,3 +68,43 @@ def test_transform_rosters_drops_missing_ids_and_other_positions():
     )
     out = ingest.transform_rosters(raw)
     assert list(out.player_id) == ["p1"]
+
+
+def test_transform_injuries_filters_and_dedupes():
+    raw = pd.DataFrame(
+        {
+            "season": [2025] * 5,
+            "week": [1, 1, 1, 20, 2],
+            "season_type": ["REG", "REG", "REG", "POST", "REG"],
+            "gsis_id": ["p1", None, "p3", "p1", "p1"],
+            "full_name": ["A", "B", "C", "A", "A"],
+            "team": ["X"] * 5,
+            "position": ["RB", "RB", "LB", "RB", "RB"],
+            "report_status": ["Out", "Out", "Out", "Out", "Questionable"],
+            "practice_status": ["DNP", "DNP", "DNP", "DNP", "Limited"],
+        }
+    )
+    out = ingest.transform_injuries(raw)
+    # missing gsis_id, a non-pool position, and the postseason row are all dropped
+    assert sorted(zip(out.player_id, out.week, strict=True)) == [("p1", 1), ("p1", 2)]
+    assert out.set_index(["player_id", "week"]).loc[("p1", 2), "report_status"] == "Questionable"
+
+
+def test_transform_injuries_keeps_last_duplicate_report():
+    """The same player can be listed twice in a week; the later row wins."""
+    raw = pd.DataFrame(
+        {
+            "season": [2025, 2025],
+            "week": [1, 1],
+            "season_type": ["REG", "REG"],
+            "gsis_id": ["p1", "p1"],
+            "full_name": ["A", "A"],
+            "team": ["X", "X"],
+            "position": ["RB", "RB"],
+            "report_status": ["Questionable", "Out"],
+            "practice_status": ["Limited", "DNP"],
+        }
+    )
+    out = ingest.transform_injuries(raw)
+    assert len(out) == 1
+    assert out.iloc[0].report_status == "Out"

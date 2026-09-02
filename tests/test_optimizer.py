@@ -69,4 +69,38 @@ def test_future_discount_prefers_using_value_now(make_proj):
     assert plan.pick_for(1).player_id == "a"
 
 
+def test_ruled_out_player_is_forbidden_not_merely_unattractive(make_proj):
+    # Star is the best RB but is ruled out in week 1 (lam 0 via the injury report).
+    proj = make_proj(
+        [
+            proj_row("star", "Star", "RB", 1, 0.0, status="Out"),
+            proj_row("star", "Star", "RB", 2, 1.5),
+            proj_row("role", "Role", "RB", 1, 0.4),
+            proj_row("role", "Role", "RB", 2, 0.4),
+        ]
+    )
+    plan = O.plan_slot(proj, "RB", 1, set(), {}, discount=1.0)
+    assert plan.pick_for(1).player_id == "role"
+    assert plan.pick_for(2).player_id == "star"
+    star = plan.players.index[plan.players.player_id == "star"][0]
+    # A zero cell must be unreachable, not just low-valued: otherwise a week in
+    # which everyone is hurt would still hand back a pick.
+    assert plan.values[star, plan.weeks.index(1)] == O.FORBIDDEN
+    assert plan.total == pytest.approx(1.9)  # role wk1 + star wk2, nothing from the 0 cell
+
+
+def test_week_with_every_candidate_ruled_out_yields_no_pick(make_proj):
+    proj = make_proj(
+        [
+            proj_row("a", "A", "RB", 1, 0.0, status="Out"),
+            proj_row("b", "B", "RB", 1, 0.0, status="Doubtful"),
+            proj_row("a", "A", "RB", 2, 1.0),
+            proj_row("b", "B", "RB", 2, 0.5),
+        ]
+    )
+    plan = O.plan_slot(proj, "RB", 1, set(), {}, discount=1.0)
+    assert plan.pick_for(1) is None
+    assert plan.pick_for(2).player_id == "a"
+
+
 from tests.conftest import proj_row  # noqa: E402

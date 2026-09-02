@@ -57,3 +57,33 @@ def test_alternatives_sorted_by_season_cost(make_proj):
     assert a.recommended.cost == 0
     costs = [c.cost for c in a.alternatives]
     assert costs == sorted(costs) and all(c >= 0 for c in costs)
+
+
+def test_ruled_out_player_is_neither_recommended_nor_listed(make_proj):
+    """A player who is Out must not surface even when he is the best name available."""
+    proj = make_proj(
+        [
+            proj_row("out", "Out Guy", "RB", 1, 0.0, kickoff=SUN, status="Out"),
+            proj_row("fit", "Fit Guy", "RB", 1, 0.5, kickoff=SUN),
+            proj_row("out", "Out Guy", "RB", 2, 2.0, kickoff=SUN),
+            proj_row("fit", "Fit Guy", "RB", 2, 0.5, kickoff=SUN),
+        ]
+    )
+    a = advise_slot(proj, "RB", 1, set(), {})
+    assert a.recommended.player_id == "fit"
+    assert "out" not in {c.player_id for c in a.alternatives}
+    # still spendable in a week he is healthy for
+    assert a.plan.pick_for(2).player_id == "out"
+
+
+def test_slot_with_no_playable_candidates_recommends_nothing(make_proj):
+    proj = make_proj(
+        [
+            proj_row("a", "A", "RB", 1, 0.0, kickoff=SUN, status="Out"),
+            proj_row("b", "B", "RB", 1, 0.0, kickoff=SUN, status="Doubtful"),
+        ]
+    )
+    a = advise_slot(proj, "RB", 1, set(), {})
+    assert a.recommended is None
+    assert a.alternatives == []
+    assert not a.hold

@@ -158,3 +158,42 @@ def test_build_projections_excludes_bye_weeks_and_applies_injuries():
     assert sorted(proj.week.unique()) == [1, 3]  # week 2 is a bye
     assert proj[proj.week == 3].lam.iloc[0] == 0.0
     assert proj[proj.week == 1].lam.iloc[0] > 0
+
+
+def injury_report(rows):
+    cols = ["player_id", "week", "report_status"]
+    return pd.DataFrame(rows, columns=cols)
+
+
+def test_injury_multipliers_map_status_and_default_to_available():
+    m = injury_report(
+        [
+            ["out", 1, "Out"],
+            ["doubt", 1, "Doubtful"],
+            ["quest", 1, "Questionable"],
+            ["full", 1, "Full Participation in Practice"],  # not a ruling-out status
+            ["none", 1, None],
+        ]
+    )
+    r = P.injury_multipliers(m).set_index("player_id").avail_mult
+    assert r["out"] == 0.0
+    assert r["doubt"] == 0.0
+    assert r["quest"] == pytest.approx(config.INJURY_MULT["Questionable"])
+    # an unrecognised or absent status must not silently zero a player out
+    assert r["full"] == 1.0
+    assert r["none"] == 1.0
+
+
+def test_injury_multipliers_are_keyed_by_week_not_player():
+    """Being Out in week 3 must not follow a player into every other week."""
+    r = P.injury_multipliers(injury_report([["p1", 3, "Out"], ["p1", 4, "Questionable"]]))
+    by_week = r.set_index("week").avail_mult
+    assert by_week[3] == 0.0
+    assert by_week[4] == pytest.approx(config.INJURY_MULT["Questionable"])
+    assert set(r.week) == {3, 4}  # other weeks carry no row and default to available
+
+
+def test_injury_multipliers_on_empty_report_returns_mergeable_frame():
+    r = P.injury_multipliers(injury_report([]))
+    assert len(r) == 0
+    assert {"player_id", "week", "avail_mult"} <= set(r.columns)
