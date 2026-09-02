@@ -4,8 +4,13 @@ Phased so that the tool is *useful from Phase 1 onward* — each phase ships a
 working improvement, and with the season starting in early September, Phase 1
 is scoped to be usable for real picks within the first weeks.
 
-Stack: Python 3.11+, `nflreadpy` (nflverse data), SQLite, `scipy` (assignment
-solver), `numpy`/`pandas`, `typer` + `rich` (CLI), `pytest`.
+Stack: Python 3.11+ managed with `uv` (environments, dependencies, and the
+`uv_build` backend; `uv.lock` is committed), `nflreadpy` (nflverse data),
+SQLite, `scipy` (assignment solver), `numpy`/`pandas`, `typer` + `rich` (CLI),
+`pytest`.
+
+CLI commands are written below as `pool <cmd>`; run them as `uv run pool <cmd>`,
+or activate `.venv` first. See the README for setup.
 
 | Phase | Status |
 |---|---|
@@ -21,8 +26,9 @@ solver), `numpy`/`pandas`, `typer` + `rich` (CLI), `pytest`.
 
 **Goal:** clean project skeleton and reliable data in a local database.
 
-- Project layout (`src/pool/`, `tests/`, `pyproject.toml`), lint/format
-  (`ruff`), CI-friendly test setup.
+- Project layout (`src/pool/`, `tests/`, `pyproject.toml`), `uv`-managed
+  environment and lockfile, lint/format (`ruff`), CI-friendly test setup
+  (`uv sync --locked` then `uv run pytest`).
 - SQLite schema: imported tables (weekly player stats, schedules, team defense,
   Vegas lines, injuries/byes) and pool-state tables (my picks, opponent picks,
   standings).

@@ -8,3 +8,6 @@ data/*.db
 data/*.db-journal
 .pytest_cache/
 .ruff_cache/
+.uv-cache/
+
+# uv.lock is intentionally committed — it pins the exact environment.

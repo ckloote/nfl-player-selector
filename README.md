@@ -20,11 +20,25 @@ Leaderboard-aware strategy (Phase 3) and backtesting (Phase 4) are not built yet
 
 ## Setup
 
+This project uses [uv](https://docs.astral.sh/uv/) for Python, dependency, and
+environment management. Install it once:
+
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
-.venv/bin/pool refresh          # pulls nflverse data into data/pool.db
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
+
+Then, from the repo root:
+
+```bash
+uv sync                         # creates .venv and installs everything from uv.lock
+uv run pool refresh             # pulls nflverse data into data/pool.db
+```
+
+`uv sync` provisions the right Python (see `.python-version`) if it is missing,
+so there is no separate `venv`/`pip` step. Every command below is prefixed with
+`uv run`, which keeps the environment in sync with the lockfile before running.
+If you prefer bare commands, `source .venv/bin/activate` once and drop the
+prefix, or install the CLI globally with `uv tool install .`.
 
 Data comes from [nflverse](https://github.com/nflverse) via `nflreadpy`. The
 default season is 2026 (override with `--season` or `POOL_SEASON`); the prior
@@ -33,14 +47,14 @@ season is always used for the start-of-season prior.
 ## Weekly workflow
 
 ```bash
-pool refresh                    # latest stats, lines, rosters, depth charts, injuries
-pool recommend                  # picks for every open slot this week
-pool record --rb "Saquon Barkley"        # lock a slot (others stay open)
-pool record --qb "Herbert" --flex "Goedert"
-pool recommend                  # re-optimizes the still-open slots
-pool plan                       # rest-of-season assignment
-pool players --pos RB           # projection table for a slot
-pool picks / pool unrecord 3 QB
+uv run pool refresh             # latest stats, lines, rosters, depth charts, injuries
+uv run pool recommend           # picks for every open slot this week
+uv run pool record --rb "Saquon Barkley"        # lock a slot (others stay open)
+uv run pool record --qb "Herbert" --flex "Goedert"
+uv run pool recommend           # re-optimizes the still-open slots
+uv run pool plan                # rest-of-season assignment
+uv run pool players --pos RB    # projection table for a slot
+uv run pool picks / uv run pool unrecord 3 QB
 ```
 
 `recommend` shows, per slot, the optimizer's pick, its expected TDs, its pick
@@ -57,6 +71,20 @@ depth-chart role multipliers, future discount, information premium).
 ## Development
 
 ```bash
-.venv/bin/pytest
-.venv/bin/ruff check src tests && .venv/bin/ruff format src tests
+uv run pytest
+uv run ruff check src tests && uv run ruff format src tests
+```
+
+`pytest` and `ruff` live in the `dev` dependency group, which `uv sync` installs
+by default; `uv sync --no-dev` gives a runtime-only environment.
+
+Dependency changes go through uv so that `uv.lock` stays authoritative — it is
+committed, and it is what pins the exact versions everyone gets:
+
+```bash
+uv add scikit-learn             # add a runtime dependency
+uv add --dev pytest-cov         # add a dev-only dependency
+uv remove pandas                # drop one
+uv lock --upgrade               # refresh every pin
+uv sync                         # apply the lockfile to .venv
 ```
