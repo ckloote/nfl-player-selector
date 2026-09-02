@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta, timezone
+
 import pandas as pd
 import pytest
 
@@ -39,9 +41,7 @@ def test_find_player_matching():
     assert len(state.find_player(pool, "Zzzz")) == 0
 
 
-def test_current_week_from_schedule(conn):
-    from datetime import datetime
-
+def _load_two_weeks(conn):
     conn.executemany(
         "INSERT INTO games(game_id, season, week, game_type, kickoff, home_team, away_team) "
         "VALUES (?,?,?,?,?,?,?)",
@@ -50,8 +50,38 @@ def test_current_week_from_schedule(conn):
             ("g2", 2026, 2, "REG", "2026-09-20T13:00", "A", "B"),
         ],
     )
+
+
+def test_current_week_from_schedule(conn):
+    _load_two_weeks(conn)
     assert state.current_week(conn, 2026, datetime(2026, 9, 1)) == 1
     assert (
         state.current_week(conn, 2026, datetime(2026, 9, 13, 18)) == 2
     )  # 4h after last wk1 kickoff
     assert state.current_week(conn, 2026, datetime(2027, 1, 1)) == 2
+
+
+def test_current_week_converts_an_aware_now_to_eastern(conn):
+    """Kickoffs are stored as Eastern wall-clock, so `now` must be converted.
+
+    Berlin runs 6h ahead of Eastern: reading a local clock straight off the
+    machine rolled the week over six hours early there, and three hours late
+    on the west coast.
+    """
+    _load_two_weeks(conn)
+    berlin = timezone(timedelta(hours=2))
+    pacific = timezone(timedelta(hours=-7))
+    # 2026-09-13 18:00 in Berlin is 12:00 in New York — week 1 is still being played
+    assert state.current_week(conn, 2026, datetime(2026, 9, 13, 18, tzinfo=berlin)) == 1
+    # the same instant, stated on a Pacific clock
+    assert state.current_week(conn, 2026, datetime(2026, 9, 13, 9, tzinfo=pacific)) == 1
+    # 2026-09-14 00:00 Berlin is 18:00 in New York — week 1 has finished
+    assert state.current_week(conn, 2026, datetime(2026, 9, 14, 0, tzinfo=berlin)) == 2
+    assert state.current_week(conn, 2026, datetime(2026, 9, 13, 15, tzinfo=pacific)) == 2
+
+
+def test_eastern_now_leaves_a_naive_time_alone(conn):
+    naive = datetime(2026, 9, 13, 18)
+    assert state.eastern_now(naive) == naive
+    assert state.eastern_now(datetime(2026, 9, 13, 22, tzinfo=UTC)) == naive
+    assert state.eastern_now().tzinfo is None

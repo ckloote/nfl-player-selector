@@ -6,6 +6,7 @@ import difflib
 import re
 import sqlite3
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -102,9 +103,27 @@ def find_player(
 
 
 # --- calendar ---------------------------------------------------------------
+def eastern_now(now: datetime | None = None) -> datetime:
+    """Naive Eastern wall-clock time — the form kickoffs are stored in.
+
+    `None` means "now", read off this machine's clock and converted; an aware
+    datetime is converted; a naive one is assumed to be Eastern already.
+    """
+    if now is None:
+        return datetime.now(ZoneInfo(config.TIMEZONE)).replace(tzinfo=None)
+    if now.tzinfo is not None:
+        return now.astimezone(ZoneInfo(config.TIMEZONE)).replace(tzinfo=None)
+    return now
+
+
 def current_week(conn: sqlite3.Connection, season: int, now: datetime | None = None) -> int:
-    """First week whose games haven't all finished (kickoff + 4h)."""
-    now = now or datetime.now()
+    """First week whose games haven't all finished (kickoff + 4h).
+
+    Compared in Eastern time: kickoffs are stored as Eastern wall-clock, so a
+    raw local `datetime.now()` would roll the week over by the caller's UTC
+    offset — six hours early from Berlin, three hours late from Los Angeles.
+    """
+    now = eastern_now(now)
     rows = conn.execute(
         "SELECT week, MAX(kickoff) AS last FROM games WHERE season = ? AND game_type = 'REG' "
         "GROUP BY week ORDER BY week",
