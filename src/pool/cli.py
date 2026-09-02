@@ -29,6 +29,29 @@ def _week(conn, season: int, week: int | None) -> int:
     return week if week is not None else state.current_week(conn, season)
 
 
+def _projections(conn, season: int, wk: int):
+    """Projections from `wk` onward, or a message saying why there are none.
+
+    The week is checked against the loaded schedule first: an out-of-range week
+    still yields rows when it is *below* the season (everything is "onward"),
+    so emptiness alone doesn't identify the problem.
+    """
+    lo, hi = conn.execute(
+        "SELECT MIN(week), MAX(week) FROM games WHERE season = ? AND game_type = 'REG'", (season,)
+    ).fetchone()
+    if lo is None:
+        msg = f"No {season} schedule loaded; run `pool refresh` first."
+    elif not lo <= wk <= hi:
+        msg = f"Week {wk} is outside the {season} season (weeks {lo}-{hi})."
+    else:
+        proj = projections.projections_for(conn, season, from_week=wk)
+        if len(proj):
+            return proj
+        msg = f"No projections for week {wk}; run `pool refresh` first."
+    console.print(f"[red]{msg}[/red]")
+    raise typer.Exit(1)
+
+
 def _fmt_dt(dt: datetime) -> str:
     return dt.strftime("%a %m/%d %I:%M%p ET").replace(" 0", " ")
 
@@ -49,10 +72,7 @@ def recommend(week: int | None = WeekOpt, season: int = SeasonOpt, db_path: Path
     """Recommend picks for every open slot this week."""
     conn = _conn(db_path)
     wk = _week(conn, season, week)
-    proj = projections.projections_for(conn, season, from_week=wk)
-    if not len(proj):
-        console.print("[red]No projections; run `pool refresh` first.[/red]")
-        raise typer.Exit(1)
+    proj = _projections(conn, season, wk)
     advice = advise_week(proj, wk, state.used_ids(conn, season), state.locked_by_slot(conn, season))
     console.print(
         f"[bold]Week {wk} — {season}[/bold]  (data refreshed {db.get_meta(conn, 'last_refresh')})"
@@ -182,7 +202,7 @@ def plan(week: int | None = WeekOpt, season: int = SeasonOpt, db_path: Path | No
     """Show the current rest-of-season assignment per slot."""
     conn = _conn(db_path)
     wk = _week(conn, season, week)
-    proj = projections.projections_for(conn, season, from_week=wk)
+    proj = _projections(conn, season, wk)
     used = state.used_ids(conn, season)
     locked = state.locked_by_slot(conn, season)
     names = proj.drop_duplicates("player_id").set_index("player_id").player_name
@@ -214,7 +234,7 @@ def players(
     """Projected TDs for a slot in a given week."""
     conn = _conn(db_path)
     wk = _week(conn, season, week)
-    proj = projections.projections_for(conn, season, from_week=wk)
+    proj = _projections(conn, season, wk)
     sub = proj[(proj.week == wk) & (proj.slot == pos.upper())].head(top)
     t = Table(
         "Player",

@@ -203,9 +203,7 @@ def game_context(games: pd.DataFrame, season: int) -> pd.DataFrame:
     known = ctx.implied_total.dropna()
     league_avg = float(known.mean()) if len(known) else config.FALLBACK_TEAM_TOTAL
     team_avg = ctx.groupby("team").implied_total.mean()
-    filled = ctx.implied_total.fillna(ctx.team.map(team_avg)).fillna(league_avg)
-    ctx["implied_total"] = filled
-    ctx["line_known"] = ctx.implied_total.notna() & known.reindex(ctx.index).notna()
+    ctx["implied_total"] = ctx.implied_total.fillna(ctx.team.map(team_avg)).fillna(league_avg)
     ctx["vegas_mult"] = ctx.implied_total / league_avg
     ctx["home_mult"] = np.where(ctx.home, config.HOME_MULT, config.AWAY_MULT)
     return ctx.sort_values(["week", "kickoff", "team"]).reset_index(drop=True)

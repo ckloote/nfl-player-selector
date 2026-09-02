@@ -46,9 +46,10 @@ or activate `.venv` first. See the README for setup.
   idempotent — a second run leaves every table byte-identical and preserves
   recorded picks. Current-season files that don't exist yet degrade to
   "not published yet" instead of erroring, which is the normal preseason state.
-- *Coverage:* every import transform now has unit tests. What remains untested
-  in `ingest.py` (~50% line coverage) is the network fetch layer and the
-  `refresh` orchestration around it; `cli.py` is at 0% and has no tests at all.
+- *Coverage:* ~74% overall. Every import transform has unit tests; what remains
+  untested in `ingest.py` (~50%) is the network fetch layer and the `refresh`
+  orchestration around it. `cli.py` (~37%) is covered only on its error paths —
+  no test yet renders a real pick sheet.
 
 ## Phase 1 — Projections + optimizer + CLI (minimum useful product)
 
