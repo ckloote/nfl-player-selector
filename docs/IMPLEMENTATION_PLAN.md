@@ -4,8 +4,16 @@ Phased so that the tool is *useful from Phase 1 onward* — each phase ships a
 working improvement, and with the season starting in early September, Phase 1
 is scoped to be usable for real picks within the first weeks.
 
-Stack: Python 3.11+, `nfl_data_py` (nflverse data), SQLite, `scipy` (assignment
-solver), `numpy`/`pandas`, `typer` (CLI), `pytest`.
+Stack: Python 3.11+, `nflreadpy` (nflverse data), SQLite, `scipy` (assignment
+solver), `numpy`/`pandas`, `typer` + `rich` (CLI), `pytest`.
+
+| Phase | Status |
+|---|---|
+| 0 — Scaffolding & data | **Done** |
+| 1 — Projections + optimizer + CLI | **Done** (see notes under Phase 1) |
+| 2 — In-season learning | Partly started: the prior/current shrinkage blend and depth-chart roles shipped with Phase 1; per-type rates, dispersion, and `score` remain |
+| 3 — Leaderboard-aware strategy | Not started |
+| 4 — Validation & polish | Not started |
 
 ---
 
@@ -19,7 +27,7 @@ solver), `numpy`/`pandas`, `typer` (CLI), `pytest`.
   Vegas lines, injuries/byes) and pool-state tables (my picks, opponent picks,
   standings).
 - `pool refresh`: idempotent import of prior-season (2025) stats and the
-  current (2026) schedule/lines via `nfl_data_py`; re-runnable all season for
+  current (2026) schedule/lines via `nflreadpy`; re-runnable all season for
   current-season data.
 - **Done when:** `pool refresh` populates the DB from scratch; queries can list
   any player's 2025 weekly TD lines and any team's 2026 schedule; tests cover
@@ -44,13 +52,21 @@ solver), `numpy`/`pandas`, `typer` (CLI), `pytest`.
 - **Done when:** `pool recommend --week N` produces a defensible pick sheet in
   seconds, slots can be locked independently, and recorded picks are correctly
   excluded from future weeks.
+- *Implementation notes:* the projection already blends current-season
+  observations into the prior (it is the same shrinkage formula, so there was
+  no reason to defer it), and a depth-chart role multiplier was added after
+  real-data testing surfaced backup QBs as candidates. Alternatives are ranked
+  by *season cost* (optimal plan value minus the plan value if that player is
+  forced into this week), which is the honest price of overriding the plan.
 
 ## Phase 2 — In-season learning & data depth
 
 **Goal:** the model revises itself as 2026 stats accumulate.
 
-- Bayesian shrinkage blend of prior-season and current-season rates (prior
-  weight ≈ 6–8 games, tunable).
+- ~~Bayesian shrinkage blend of prior-season and current-season rates~~
+  (shipped in Phase 1; tune `PRIOR_WEIGHT_GAMES` once real 2026 data exists).
+- Starter detection from depth charts shipped in Phase 1; refine multipliers
+  with current-season usage (a RB2 with 60% of the carries is not a backup).
 - Per-type rates (pass/rush/receive TDs) with matching defensive splits.
 - Negative-binomial dispersion per position → variance/boom-bust scores
   surfaced in the CLI.

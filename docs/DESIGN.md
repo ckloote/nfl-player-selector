@@ -92,9 +92,13 @@ Four layers, deliberately decoupled so each can improve independently:
 ### 3.1 Data layer
 
 - **Source:** the [nflverse](https://github.com/nflverse) data via the
-  `nfl_data_py` Python package — free, well-maintained, and includes weekly
-  player stats (with TD breakdowns by type), season schedules, rosters, injury
-  reports, and betting lines (spreads and totals) both historical and current.
+  `nflreadpy` Python package (the maintained successor to `nfl_data_py`) —
+  free and includes weekly player stats (with TD breakdowns by type), season
+  schedules with betting lines (spreads and totals), weekly rosters, depth
+  charts, and injury reports, both historical and current. Files for the
+  current season appear as the season progresses (e.g. no weekly stats or
+  injury reports before Week 1), so the importer treats a missing file as
+  "not published yet" rather than an error.
 - **Storage:** a local SQLite database (`data/pool.db`). Two categories of
   tables:
   - *Imported*: weekly player stats (prior season + current season), schedules,
@@ -120,7 +124,8 @@ Model TDs as a **Poisson-like count** with a per-game rate λ built from:
 | Opponent defense | Multiplier from TDs allowed by the opponent to that position, regressed toward league average (defense stats are noisy early in the season) |
 | Vegas implied team total | The single best public predictor of scoring; scale λ by implied team points relative to league average |
 | Home/away | Small fixed adjustment |
-| Availability | Injury status and bye weeks zero out or discount λ |
+| Role | Depth-chart rank multiplier: a backup QB is worth a small fraction of a starter; RB2/WR2 keep most of their value (committees and multiple starters) |
+| Availability | Injury status and bye weeks zero out or discount λ; only active-roster players are in the pool |
 
 **Start-of-season prior (before any 2026 games):** last season's rates,
 regressed toward positional means (touchdown rates are notoriously noisy —

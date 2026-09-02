@@ -1,0 +1,50 @@
+import pandas as pd
+import pytest
+
+
+def proj_row(
+    pid,
+    name,
+    slot,
+    week,
+    lam,
+    kickoff="2026-09-13T13:00",
+    team="AAA",
+    opp="BBB",
+    position=None,
+    home=True,
+    status=None,
+):
+    return dict(
+        player_id=pid,
+        player_name=name,
+        position=position or {"QB": "QB", "RB": "RB", "FLEX": "WR"}[slot],
+        slot=slot,
+        team=team,
+        week=week,
+        opponent=opp,
+        home=home,
+        kickoff=kickoff,
+        game_id=f"g{week}",
+        base_rate=lam,
+        def_mult=1.0,
+        vegas_mult=1.0,
+        home_mult=1.0,
+        avail_mult=1.0,
+        report_status=status,
+        role_mult=1.0,
+        depth_rank=1,
+        lam=lam,
+        prior_games=10,
+        prior_tds=5,
+        cur_games=0,
+        cur_tds=0,
+    )
+
+
+@pytest.fixture
+def make_proj():
+    def _make(rows):
+        return pd.DataFrame(rows)
+
+    return _make

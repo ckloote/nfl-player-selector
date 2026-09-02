@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nfl-pool"
+version = "0.1.0"
+description = "Decision support for a season-long NFL touchdown pool"
+requires-python = ">=3.11"
+dependencies = [
+    "nflreadpy>=0.1.5",
+    "polars>=1.0",
+    "pyarrow>=15",
+    "pandas>=2.0",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "typer>=0.12",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[project.scripts]
+pool = "pool.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
