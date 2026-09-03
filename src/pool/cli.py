@@ -11,6 +11,7 @@ from rich.table import Table
 
 from . import backtest as bt
 from . import config, db, ingest, projections, state
+from .experiments import per_slot
 from .optimizer import plan_slot
 from .recommend import Candidate, SlotAdvice, advise_week
 
@@ -28,6 +29,13 @@ HorizonOpt = typer.Option(
     config.VEGAS_HORIZON_WEEKS, "--vegas-horizon", help="Weeks ahead Vegas lines are visible"
 )
 CsvOpt = typer.Option(None, "--csv", help="Write every cell to a CSV")
+
+# Alternative projection models, kept runnable so they can be re-measured.
+# None means the shipped model. See src/pool/experiments/.
+PROJECTIONS: dict[str, object] = {"shipped": None, "per-slot": per_slot.build}
+ProjectionOpt = typer.Option(
+    "shipped", "--projection", help=f"Projection model: {' | '.join(PROJECTIONS)}"
+)
 
 
 def _conn(path: Path | None):
@@ -332,12 +340,19 @@ def backtest(
     prior_weight: float | None = typer.Option(None, help="Override PRIOR_WEIGHT_GAMES"),
     role_source: str = RoleSourceOpt,
     vegas_horizon: int = HorizonOpt,
+    projection: str = ProjectionOpt,
     detail: bool = typer.Option(False, "--detail", help="Show every week's picks"),
     db_path: Path | None = DbOpt,
 ):
     """Replay finished seasons with data frozen at each pick deadline."""
     conn = _conn(db_path)
     names = [s.strip() for s in strategy.split(",") if s.strip()]
+    if projection not in PROJECTIONS:
+        console.print(
+            f"[red]Unknown projection {projection!r}; choose from {list(PROJECTIONS)}.[/red]"
+        )
+        raise typer.Exit(1)
+    builder = PROJECTIONS[projection]
     unknown = [n for n in names if n not in bt.STRATEGIES and n != "hindsight"]
     if unknown:
         known = [*bt.STRATEGIES, "hindsight"]
@@ -359,6 +374,7 @@ def backtest(
                 discount=discount,
                 role_source=role_source,
                 vegas_horizon=vegas_horizon,
+                builder=builder,
             )
         by_name = {r.strategy: r for r in rows}
         ceiling = by_name["hindsight"].total if "hindsight" in by_name else 0.0

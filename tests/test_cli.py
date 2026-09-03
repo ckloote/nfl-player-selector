@@ -138,3 +138,11 @@ def test_sweep_renders_the_grid_and_warns_about_noise(tmp_path):
     assert result.exit_code == 0, result.stdout
     assert "Best cell" in result.stdout
     assert "noise" in result.stdout
+
+
+def test_backtest_rejects_an_unknown_projection_model(dbfile):
+    result = runner.invoke(
+        app, ["backtest", "--season", "2026", "--projection", "bogus", "--db", str(dbfile)]
+    )
+    assert result.exit_code == 1
+    assert "Unknown projection 'bogus'" in result.stdout
