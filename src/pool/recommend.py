@@ -94,8 +94,9 @@ def advise_slot(
     week: int,
     used_ids: set[str],
     locked: dict[int, str],
-    n_alternatives: int = config.ALTERNATIVES_SHOWN,
+    n_alternatives: int | None = None,
 ) -> SlotAdvice:
+    n_alternatives = config.ALTERNATIVES_SHOWN if n_alternatives is None else n_alternatives
     plan = plan_slot(proj, slot, week, used_ids, locked)
     if week in locked:
         name = proj.loc[proj.player_id == locked[week], "player_name"]

@@ -128,9 +128,20 @@ def transform_rosters(raw: pd.DataFrame) -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
+def _season_type(df: pd.DataFrame) -> pd.Series:
+    """REG/POST marker, whatever the file calls it.
+
+    Seasons from 2025 carry `season_type`; 2024 and earlier only have
+    `game_type` (REG/WC/DIV/CON/SB). Reading the wrong one raises KeyError, so
+    `refresh --season 2025` used to die on the prior season it always imports.
+    """
+    col = "season_type" if "season_type" in df.columns else "game_type"
+    return df[col].where(df[col].isin(("REG",)), other="POST")
+
+
 def transform_injuries(raw: pd.DataFrame) -> pd.DataFrame:
     df = raw[raw["position"].isin(config.POSITIONS) & raw["gsis_id"].notna()].copy()
-    df = df[df["season_type"] == "REG"]
+    df = df[_season_type(df) == "REG"]
     out = pd.DataFrame(
         {
             "season": df["season"],
@@ -147,11 +158,28 @@ def transform_injuries(raw: pd.DataFrame) -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
-def transform_depth_charts(raw: pd.DataFrame, season: int) -> pd.DataFrame:
-    """Latest snapshot per team; a player's rank is their best listed rank."""
+DEPTH_COLUMNS = ["season", "player_id", "team", "position", "rank", "as_of"]
+
+
+def transform_depth_charts(
+    raw: pd.DataFrame, season: int, max_week: int | None = None
+) -> pd.DataFrame:
+    """Latest snapshot per team; a player's rank is their best listed rank.
+
+    Two file formats exist upstream: 2025 onward publishes dated snapshots
+    (`dt`, `pos_abb`, `pos_rank`), while 2024 and earlier publish one row per
+    week (`week`, `position`, `depth_team`). Reading the newer columns off an
+    older file raises KeyError, which is what made `refresh --season 2024` fail.
+    """
+    if "pos_abb" in raw.columns:
+        return _depth_from_snapshots(raw, season)
+    return _depth_from_weeks(raw, season, max_week)
+
+
+def _depth_from_snapshots(raw: pd.DataFrame, season: int) -> pd.DataFrame:
     df = raw[raw["pos_abb"].isin(config.POSITIONS) & raw["gsis_id"].notna()].copy()
     if not len(df):
-        return pd.DataFrame(columns=["season", "player_id", "team", "position", "rank", "as_of"])
+        return pd.DataFrame(columns=DEPTH_COLUMNS)
     latest = df.groupby("team")["dt"].transform("max")
     df = df[df["dt"] == latest]
     out = (
@@ -167,7 +195,37 @@ def transform_depth_charts(raw: pd.DataFrame, season: int) -> pd.DataFrame:
     )
     out["season"] = season
     out["rank"] = out["rank"].astype(int)
-    return out[["season", "player_id", "team", "position", "rank", "as_of"]].reset_index(drop=True)
+    return out[DEPTH_COLUMNS].reset_index(drop=True)
+
+
+def _depth_from_weeks(raw: pd.DataFrame, season: int, max_week: int | None = None) -> pd.DataFrame:
+    df = raw[raw["position"].isin(config.POSITIONS) & raw["gsis_id"].notna()].copy()
+    df = df[_season_type(df) == "REG"]
+    df["week"] = pd.to_numeric(df["week"], errors="coerce")
+    df["rank"] = pd.to_numeric(df["depth_team"], errors="coerce")
+    df = df.dropna(subset=["week", "rank"])
+    # 2024 labels 1821 week-19 rows "REG"; trust the schedule's week count, not
+    # the file's own game_type, and never hardcode 18 (pre-2021 seasons had 17).
+    if max_week is not None:
+        df = df[df["week"] <= max_week]
+    if not len(df):
+        return pd.DataFrame(columns=DEPTH_COLUMNS)
+    df = df[df["week"] == df["week"].max()]
+    out = (
+        df.sort_values("rank")
+        .groupby("gsis_id", as_index=False)
+        .agg(
+            team=("club_code", "first"),
+            position=("position", "first"),
+            rank=("rank", "min"),
+            week=("week", "max"),
+        )
+        .rename(columns={"gsis_id": "player_id"})
+    )
+    out["season"] = season
+    out["rank"] = out["rank"].astype(int)
+    out["as_of"] = f"{season}-W" + out.pop("week").astype(int).astype(str)
+    return out[DEPTH_COLUMNS].reset_index(drop=True)
 
 
 # --- refresh ----------------------------------------------------------------
@@ -212,11 +270,17 @@ def refresh(conn: sqlite3.Connection, season: int, log=print) -> dict[str, int]:
     if raw is None:
         log(f"  depth charts {season}: not available")
     else:
+        reg = sched[(sched.season == season) & (sched.game_type == "REG")]
+        max_week = int(reg.week.max()) if len(reg) else None
         counts[f"depth_charts_{season}"] = db.replace_season(
-            conn, "depth_charts", season, transform_depth_charts(raw, season)
+            conn, "depth_charts", season, transform_depth_charts(raw, season, max_week)
         )
 
-    db.set_meta(conn, "last_refresh", datetime.now().isoformat(timespec="seconds"))
+    stamp = datetime.now().isoformat(timespec="seconds")
+    # Per-season as well as global: backfilling an old season for a backtest
+    # must not make the live season's pick sheet claim it was just refreshed.
+    db.set_meta(conn, f"last_refresh_{season}", stamp)
+    db.set_meta(conn, "last_refresh", stamp)
     return counts
 
 

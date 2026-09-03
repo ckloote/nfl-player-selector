@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 
@@ -82,3 +83,39 @@ CANDIDATES_PER_SLOT = 80
 # later-game alternative to justify locking before injury news arrives.
 INFO_PREMIUM_TD = 0.10
 ALTERNATIVES_SHOWN = 6
+
+# --- Role source ------------------------------------------------------------
+# Where the role multiplier comes from: the depth-chart snapshot ("depth"),
+# usage share to date ("usage"), or nothing at all ("none"). Live picks use the
+# depth chart; backtests use usage, because `depth_charts` stores a single
+# end-of-season snapshot that cannot be rewound to a past week.
+ROLE_SOURCE = "depth"
+
+# --- Backtesting ------------------------------------------------------------
+# How many weeks past the pick week Vegas lines are treated as visible. A
+# finished season has closing lines for every week, but live the database holds
+# roughly six weeks of lines and nothing beyond, so replaying with the whole
+# season's lines would make far-future matchups look more knowable than they
+# are — and that biases the future discount upward.
+VEGAS_HORIZON_WEEKS = 6
+# The random baseline picks uniformly among this many top players per slot.
+RANDOM_TOP_N = 10
+RANDOM_TRIALS = 20
+
+
+@contextlib.contextmanager
+def override(**values: object):
+    """Temporarily rebind tunables in this module. Used by the backtest sweep.
+
+    Unknown names raise: a typo'd parameter that silently changed nothing would
+    make a sweep report a flat surface and look like a finding.
+    """
+    missing = [k for k in values if k not in globals()]
+    if missing:
+        raise KeyError(f"unknown config parameter(s): {sorted(missing)}")
+    previous = {k: globals()[k] for k in values}
+    globals().update(values)
+    try:
+        yield
+    finally:
+        globals().update(previous)

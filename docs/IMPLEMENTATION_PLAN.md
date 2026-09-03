@@ -18,7 +18,7 @@ or activate `.venv` first. See the README for setup.
 | 1 — Projections + optimizer + CLI | **Done** (see notes under Phase 1) |
 | 2 — In-season learning | Partly started: the prior/current shrinkage blend and depth-chart roles shipped with Phase 1; per-type rates, dispersion, and `score` remain |
 | 3 — Leaderboard-aware strategy | Not started |
-| 4 — Validation & polish | Not started |
+| 4 — Validation & polish | Backtesting harness **done** (see Phase 4); calibration report and the optional niceties remain |
 
 ---
 
@@ -134,15 +134,57 @@ or activate `.venv` first. See the README for setup.
 
 **Goal:** trust and convenience.
 
-- Backtesting harness: replay 2024/2025 week-by-week with data frozen at each
+- ~~Backtesting harness: replay 2024/2025 week-by-week with data frozen at each
   pick deadline; compare cumulative TDs vs. baselines (greedy best-available,
   random top-10, perfect hindsight). Use it to tune the future-discount and
-  prior weight.
-- Calibration report: projected vs. actual TD distributions.
+  prior weight.~~ Shipped as `pool backtest` / `pool sweep` (`backtest.py`), and
+  replaying 2017-2025 rather than just two seasons — see
+  [`BACKTEST.md`](BACKTEST.md).
+- Calibration report: projected vs. actual TD distributions. (Not started; the
+  backtest surfaces a single projected/actual ratio per strategy, which is a
+  smoke alarm, not the report.)
 - Optional: simple local web dashboard (read-only view of plan/standings),
   pick-deadline reminders.
 - **Done when:** a documented backtest shows the optimizer beating the greedy
   baseline over a full season replay, with tuned parameters checked in.
+  - *Restated after the fact:* one season cannot support that claim either way.
+    The per-season SD of the optimizer-minus-greedy delta is ~10 TD, so a single
+    replay is a coin flip dressed as evidence. The honest criterion is the mean
+    paired delta across many seasons, reported with its standard error.
+- *Verified against 2011-2025 (fifteen full replays):* the harness works and the
+  answer is **negative** — the optimizer averages **-0.73 TD/season against
+  greedy** (SE 2.39, won 8 of 15), and the null holds independently in both
+  halves (2017-2025: -1.11; 2011-2016: -0.17). Both beat the random baseline by
+  ~13 TD/season, so the projection model has real signal; the assignment layer
+  does not add to it. A 3x5 sweep of `PRIOR_WEIGHT_GAMES` x `FUTURE_DISCOUNT`
+  spans -3.0 to +1.9 TD/season — entirely inside noise — so **no parameters were
+  changed**; the shipped values are confirmed, not tuned. The mechanism is
+  measured rather than guessed: only 13% (QB) to 28% (FLEX) of projection
+  variance comes from *which week* a player is used, so the quantity the
+  assignment optimizes is a small share of what decides the season.
+- *Decision:* the optimizer **stays, unchanged**. The result is a null, not a
+  defeat — the true effect sits in roughly [-5, +4] TD/season and the data
+  cannot narrow it — and the assignment solve is what produces `plan` and the
+  season-cost ranking, which greedy cannot, and which Phase 3 needs.
+- *The harness's own limits, which constrain every phase after this one:* the
+  paired season-to-season SD is ~6 TD for a projection change and ~9 TD for a
+  rule change, so with fifteen seasons only effects beyond **~±3 TD/season
+  (model) or ~±5 (rule)** are resolvable. Two candidate improvements were built
+  and rejected on that basis — per-type rates (no benefit) and per-slot base
+  rates (+3.67 on the seasons it was found on, **+0.17 on a 2011-2016 holdout**).
+  Treat any future small win from this harness as unproven until it survives a
+  holdout.
+- *Implementation notes:* point-in-time freezing lives in
+  `projections.load_frames(..., as_of_week=W)` rather than a parallel loader, so
+  live and replay share one code path. Backtests take their role multiplier from
+  usage to date (`projections.usage_roles`), because `depth_charts` holds one
+  snapshot per season with no week column — the stored 2025 chart is dated
+  2026-03-14. Two ingest bugs blocked all of this and are fixed: `season_type`
+  does not exist before 2025 (injuries), and depth charts up to 2024 use a
+  different schema entirely (`week`/`depth_team` rather than `dt`/`pos_rank`).
+  `config.override` plus `None`-resolved defaults in `build_matrix` make the
+  sweep actually reach the solver; bound as import-time defaults, every cell
+  silently returned the same number.
 
 ---
 
@@ -153,6 +195,9 @@ or activate `.venv` first. See the README for setup.
   stable seams).
 - The backtesting harness (Phase 4) is worth starting as soon as Phase 1
   exists — it's the fastest way to catch modeling mistakes, and requires no
-  new data work thanks to the DB layer.
+  new data work thanks to the DB layer. *Borne out:* it was built after Phase 1
+  and immediately showed the assignment layer is not paying for itself, which
+  re-orders what is worth doing next — better projections (Phase 2) and win
+  probability (Phase 3) both target larger effects than tuning the scheduler.
 - Manual-entry commands (`record`, `opponent record`) are deliberately dumb and
   early; they're what make the state real while fancier layers are built.

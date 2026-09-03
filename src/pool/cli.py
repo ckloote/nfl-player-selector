@@ -9,6 +9,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from . import backtest as bt
 from . import config, db, ingest, projections, state
 from .optimizer import plan_slot
 from .recommend import Candidate, SlotAdvice, advise_week
@@ -19,6 +20,14 @@ console = Console()
 SeasonOpt = typer.Option(config.DEFAULT_SEASON, "--season", "-s", help="Season year")
 DbOpt = typer.Option(None, "--db", help="SQLite path (default data/pool.db)")
 WeekOpt = typer.Option(None, "--week", "-w", help="Week (default: current)")
+SeasonsOpt = typer.Option(
+    "2025", "--season", "-s", help="Season, list, or range: 2025 | 2024,2025 | 2017-2025"
+)
+RoleSourceOpt = typer.Option("usage", "--role-source", help="usage, depth, or none")
+HorizonOpt = typer.Option(
+    config.VEGAS_HORIZON_WEEKS, "--vegas-horizon", help="Weeks ahead Vegas lines are visible"
+)
+CsvOpt = typer.Option(None, "--csv", help="Write every cell to a CSV")
 
 
 def _conn(path: Path | None):
@@ -74,9 +83,8 @@ def recommend(week: int | None = WeekOpt, season: int = SeasonOpt, db_path: Path
     wk = _week(conn, season, week)
     proj = _projections(conn, season, wk)
     advice = advise_week(proj, wk, state.used_ids(conn, season), state.locked_by_slot(conn, season))
-    console.print(
-        f"[bold]Week {wk} — {season}[/bold]  (data refreshed {db.get_meta(conn, 'last_refresh')})"
-    )
+    stamp = db.get_meta(conn, f"last_refresh_{season}") or db.get_meta(conn, "last_refresh")
+    console.print(f"[bold]Week {wk} — {season}[/bold]  (data refreshed {stamp})")
     for a in advice:
         _render_slot(a)
 
@@ -263,6 +271,220 @@ def players(
             f"{r.lam:.2f}",
         )
     console.print(t)
+
+
+# --- backtesting ------------------------------------------------------------
+def _seasons(spec: str) -> list[int]:
+    """Parse "2025", "2024,2025", or "2017-2025"."""
+    out: list[int] = []
+    try:
+        for part in spec.split(","):
+            part = part.strip()
+            if "-" in part:
+                lo, hi = (int(x) for x in part.split("-", 1))
+                out.extend(range(lo, hi + 1))
+            else:
+                out.append(int(part))
+    except ValueError:
+        console.print(f"[red]Cannot read {spec!r} as a season, list, or range.[/red]")
+        raise typer.Exit(1) from None
+    return out
+
+
+def _floats(spec: str, name: str) -> list[float]:
+    try:
+        return [float(x) for x in spec.split(",") if x.strip()]
+    except ValueError:
+        console.print(f"[red]Cannot read {spec!r} as a list of {name} values.[/red]")
+        raise typer.Exit(1) from None
+
+
+def _backtest_ready(conn, season: int) -> list[int]:
+    """Weeks available to replay, or a message naming the refresh that fixes it."""
+    weeks = bt.scored_weeks(conn, season)
+    prior = conn.execute(
+        "SELECT COUNT(*) FROM player_weeks WHERE season = ?", (season - 1,)
+    ).fetchone()[0]
+    if not projections.available_weeks(conn, season):
+        msg = f"No {season} schedule loaded; run `pool refresh --season {season}` first."
+    elif not prior:
+        msg = (
+            f"No {season - 1} stats loaded — the prior season is the model's starting "
+            f"prior. Run `pool refresh --season {season}`, which imports both."
+        )
+    elif not weeks:
+        msg = f"No {season} results loaded; there is nothing to score against."
+    else:
+        return weeks
+    console.print(f"[red]{msg}[/red]")
+    raise typer.Exit(1)
+
+
+@app.command()
+def backtest(
+    season: str = SeasonsOpt,
+    strategy: str = typer.Option(
+        "optimizer,greedy,random,hindsight", "--strategy", help="Comma-separated strategies"
+    ),
+    trials: int = typer.Option(config.RANDOM_TRIALS, help="Trials for the random baseline"),
+    seed: int = typer.Option(0, help="Seed for the random baseline"),
+    discount: float | None = typer.Option(None, help="Override FUTURE_DISCOUNT"),
+    prior_weight: float | None = typer.Option(None, help="Override PRIOR_WEIGHT_GAMES"),
+    role_source: str = RoleSourceOpt,
+    vegas_horizon: int = HorizonOpt,
+    detail: bool = typer.Option(False, "--detail", help="Show every week's picks"),
+    db_path: Path | None = DbOpt,
+):
+    """Replay finished seasons with data frozen at each pick deadline."""
+    conn = _conn(db_path)
+    names = [s.strip() for s in strategy.split(",") if s.strip()]
+    unknown = [n for n in names if n not in bt.STRATEGIES and n != "hindsight"]
+    if unknown:
+        known = [*bt.STRATEGIES, "hindsight"]
+        console.print(f"[red]Unknown strategy {unknown[0]!r}; choose from {known}.[/red]")
+        raise typer.Exit(1)
+
+    deltas: list[float] = []
+    overrides = {} if prior_weight is None else {"PRIOR_WEIGHT_GAMES": prior_weight}
+    for yr in _seasons(season):
+        weeks = _backtest_ready(conn, yr)
+        with config.override(**overrides):
+            rows = bt.run_season(
+                conn,
+                yr,
+                names,
+                weeks=weeks,
+                trials=trials,
+                seed=seed,
+                discount=discount,
+                role_source=role_source,
+                vegas_horizon=vegas_horizon,
+            )
+        by_name = {r.strategy: r for r in rows}
+        ceiling = by_name["hindsight"].total if "hindsight" in by_name else 0.0
+        base = by_name["greedy"].total if "greedy" in by_name else None
+        if base is not None and "optimizer" in by_name:
+            deltas.append(by_name["optimizer"].total - base)
+        _render_backtest(yr, weeks, rows, base, ceiling)
+        if detail:
+            _render_picks(by_name.get("optimizer") or rows[0])
+
+    if len(deltas) > 1:
+        mean = sum(deltas) / len(deltas)
+        sd = (sum((d - mean) ** 2 for d in deltas) / (len(deltas) - 1)) ** 0.5
+        wins = sum(1 for d in deltas if d > 0)
+        console.print(
+            f"\n[bold]optimizer - greedy:[/bold] mean {mean:+.2f} TD/season over "
+            f"{len(deltas)} seasons (SD {sd:.2f}, won {wins}/{len(deltas)}). "
+            f"Standard error {sd / len(deltas) ** 0.5:.2f} — treat anything smaller as noise."
+        )
+
+
+def _render_backtest(season: int, weeks: list[int], rows, base: float | None, ceiling: float):
+    t = Table(
+        "Strategy",
+        "TDs",
+        "vs greedy",
+        *config.SLOTS,
+        "Projected",
+        "Proj/act",
+        "Zero picks",
+        "% ceiling",
+        title=f"Backtest {season} (weeks {weeks[0]}-{weeks[-1]})",
+    )
+    for r in rows:
+        total = f"{r.total:.1f}" + (f" ± {r.sd:.1f}" if r.sd else "")
+        delta = "—" if base is None or r.strategy == "greedy" else f"{r.total - base:+.1f}"
+        ratio = f"{r.projected / r.total:.2f}" if r.projected and r.total else "—"
+        t.add_row(
+            r.strategy,
+            total,
+            delta,
+            *(f"{r.by_slot[s]:.0f}" for s in config.SLOTS),
+            f"{r.projected:.1f}" if r.projected else "—",
+            ratio,
+            f"{r.zero_picks}/{len(r.picks)}",
+            f"{100 * r.total / ceiling:.0f}%" if ceiling else "—",
+        )
+    console.print(t)
+
+
+def _render_picks(summary) -> None:
+    t = Table(
+        "Week",
+        "Slot",
+        "Player",
+        "xTD",
+        "Actual",
+        "Running",
+        title=f"{summary.strategy} picks, {summary.season}",
+    )
+    running = 0.0
+    for p in summary.picks:
+        running += p.actual
+        t.add_row(
+            str(p.week),
+            p.slot,
+            f"{p.player_name} ({p.team})" if p.player_name else "—",
+            f"{p.projected:.2f}",
+            f"{p.actual:.0f}",
+            f"{running:.0f}",
+        )
+    console.print(t)
+
+
+@app.command()
+def sweep(
+    season: str = SeasonsOpt,
+    discount: str = typer.Option("0.9,0.95,0.985,1.0", help="FUTURE_DISCOUNT grid"),
+    prior_weight: str = typer.Option("5,7,10", help="PRIOR_WEIGHT_GAMES grid"),
+    role_source: str = RoleSourceOpt,
+    vegas_horizon: int = HorizonOpt,
+    csv_out: Path | None = CsvOpt,
+    db_path: Path | None = DbOpt,
+):
+    """Grid-search the future discount and prior weight against the greedy baseline."""
+    conn = _conn(db_path)
+    seasons = _seasons(season)
+    for yr in seasons:
+        _backtest_ready(conn, yr)
+    discounts = _floats(discount, "discount")
+    weights = _floats(prior_weight, "prior weight")
+    console.print(
+        f"Sweeping {len(weights)}x{len(discounts)} cells over {len(seasons)} season(s)..."
+    )
+    df = bt.sweep(
+        conn, seasons, discounts, weights, role_source=role_source, vegas_horizon=vegas_horizon
+    )
+    if csv_out:
+        df.to_csv(csv_out, index=False)
+        console.print(f"Wrote {csv_out}")
+
+    grid = df.pivot_table(index="prior_weight", columns="discount", values="delta", aggfunc="mean")
+    sd = df.groupby(["prior_weight", "discount"]).delta.std().mean()
+    t = Table(
+        "prior weight",
+        *(f"{d:g}" for d in grid.columns),
+        title="Mean optimizer-minus-greedy TDs per season",
+    )
+    best = grid.stack().idxmax()
+    for w, row in grid.iterrows():
+        cells = []
+        for d, v in row.items():
+            cell = f"{v:+.2f}"
+            cells.append(f"[bold green]{cell}[/bold green]" if (w, d) == best else cell)
+        marker = " *" if w == config.PRIOR_WEIGHT_GAMES else ""
+        t.add_row(f"{w:g}{marker}", *cells)
+    console.print(t)
+    console.print(
+        f"Best cell: prior weight {best[0]:g}, discount {best[1]:g}. "
+        f"Current config: prior weight {config.PRIOR_WEIGHT_GAMES:g}, "
+        f"discount {config.FUTURE_DISCOUNT:g} (*)."
+    )
+    console.print(
+        f"[yellow]Per-season SD of the delta is {sd:.1f} TD.[/yellow] Differences smaller than "
+        "that are noise; prefer a cell that wins in most seasons over the maximum."
+    )
 
 
 if __name__ == "__main__":

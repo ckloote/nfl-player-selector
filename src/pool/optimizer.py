@@ -42,9 +42,14 @@ def build_matrix(
     weeks: list[int],
     current_week: int,
     used_ids: set[str],
-    discount: float = config.FUTURE_DISCOUNT,
-    max_players: int = config.CANDIDATES_PER_SLOT,
+    discount: float | None = None,
+    max_players: int | None = None,
 ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+    # Resolved here, not in the signature: a default argument binds at import,
+    # so `config.override(FUTURE_DISCOUNT=...)` would never reach this and a
+    # parameter sweep would silently report the same number for every value.
+    discount = config.FUTURE_DISCOUNT if discount is None else discount
+    max_players = config.CANDIDATES_PER_SLOT if max_players is None else max_players
     sub = proj[(proj.slot == slot) & proj.week.isin(weeks) & ~proj.player_id.isin(used_ids)]
     if not len(sub):
         empty = pd.DataFrame(columns=["player_id", "player_name", "team", "position"])

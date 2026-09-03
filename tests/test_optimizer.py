@@ -103,4 +103,25 @@ def test_week_with_every_candidate_ruled_out_yields_no_pick(make_proj):
     assert plan.pick_for(2).player_id == "a"
 
 
+def test_the_discount_is_read_from_config_at_call_time(make_proj, monkeypatch):
+    """`discount=config.FUTURE_DISCOUNT` in the signature bound at import, so
+    overriding the config reached nothing and a parameter sweep reported the
+    same total for every value — a flat surface that reads as a finding."""
+    from pool import config
+
+    proj = make_proj(
+        [
+            proj_row("a", "A", "QB", 1, 1.0),
+            proj_row("a", "A", "QB", 2, 1.0),
+            proj_row("b", "B", "QB", 1, 0.5),
+            proj_row("b", "B", "QB", 2, 0.5),
+        ]
+    )
+    monkeypatch.setattr(config, "FUTURE_DISCOUNT", 1.0)
+    undiscounted = O.plan_slot(proj, "QB", 1, set(), {}).total
+    monkeypatch.setattr(config, "FUTURE_DISCOUNT", 0.5)
+    discounted = O.plan_slot(proj, "QB", 1, set(), {}).total
+    assert discounted < undiscounted
+
+
 from tests.conftest import proj_row  # noqa: E402

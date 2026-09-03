@@ -11,12 +11,21 @@ appetite change with your position on the leaderboard?
 
 - [`docs/DESIGN.md`](docs/DESIGN.md) — the pool rules, the model, and the system architecture
 - [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — phased build plan and status
+- [`docs/BACKTEST.md`](docs/BACKTEST.md) — how the model performs against nine replayed seasons
 
 ## Status
 
 Phases 0 and 1 are implemented: data import, a matchup-adjusted projection
 model, the season-long assignment optimizer, and a CLI that gives weekly picks.
-Leaderboard-aware strategy (Phase 3) and backtesting (Phase 4) are not built yet.
+The Phase 4 backtesting harness is built too, and it reports an uncomfortable
+result: replayed over 2011-2025 the optimizer is **statistically tied with
+simply picking the best available player each week** (-0.73 TD/season, SE 2.39,
+better in 8 of 15 seasons), though both beat a random baseline by ~13 TD/season.
+The optimizer stays anyway — it is what produces the rest-of-season plan and the
+season-cost ranking — but the plan is a forecast of intent, not a proven edge.
+See [`docs/BACKTEST.md`](docs/BACKTEST.md) for the numbers, the ideas that were
+tested and rejected, and how small an effect the harness can actually resolve.
+Leaderboard-aware strategy (Phase 3) is not built yet.
 
 ## Setup
 
@@ -56,6 +65,21 @@ uv run pool plan                # rest-of-season assignment
 uv run pool players --pos RB    # projection table for a slot
 uv run pool picks / uv run pool unrecord 3 QB
 ```
+
+## Backtesting
+
+```bash
+uv run pool refresh --season 2025          # imports 2024 (prior) and 2025
+uv run pool backtest --season 2025         # replay one season against the baselines
+uv run pool backtest --season 2017-2025 --detail
+uv run pool sweep --season 2017-2025       # grid-search the discount and prior weight
+```
+
+Each week the model sees only what was knowable an hour before kickoff, picks a
+player per slot, and is scored on the touchdowns they actually went on to score
+— against greedy best-available, a random top-10 baseline, and perfect
+hindsight. Backfill more seasons with
+`for y in 2017 2019 2021 2023 2025; do uv run pool refresh --season $y; done`.
 
 `recommend` shows, per slot, the optimizer's pick, its expected TDs, its pick
 deadline (one hour before kickoff), and alternatives ranked by **season cost**:
