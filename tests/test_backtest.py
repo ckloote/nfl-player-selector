@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 
 from pool import backtest as B
-from pool import config, db
+from pool import config, db, models
 from pool import projections as P
 
 PRIOR, SEASON, WEEKS = 2023, 2024, [1, 2, 3, 4]
@@ -109,11 +109,6 @@ def _seed(conn, *, season_tds=None):
     return conn
 
 
-@pytest.fixture
-def seeded(tmp_path):
-    return _seed(db.connect(tmp_path / "bt.db"))
-
-
 # --- point-in-time freezing -------------------------------------------------
 def test_frozen_frames_hide_the_week_being_played(seeded):
     """Week W's own results are the answer; only earlier weeks may be visible.
@@ -128,12 +123,17 @@ def test_frozen_frames_hide_the_week_being_played(seeded):
 
 
 @pytest.mark.parametrize("week", [1, 2, 3])
-def test_projections_are_identical_whether_or_not_the_future_exists(tmp_path, week):
+@pytest.mark.parametrize("model", sorted(models.BUILDERS))
+def test_projections_are_identical_whether_or_not_the_future_exists(tmp_path, week, model):
     """The frozen frame must be a pure function of the visible slice.
 
     Stated this way the test catches any future leak, including through a
     column nobody thought about — which is how the depth-chart snapshot (a
     single end-of-season row, no week) slipped past review in the first place.
+
+    Every benchmark model is checked, not just the shipped one: a baseline that
+    quietly reads the whole season would flatter itself in the comparison, and
+    the comparison is the entire point of having baselines.
     """
     full = _seed(db.connect(tmp_path / "full.db"))
     trimmed = _seed(db.connect(tmp_path / "trimmed.db"))
@@ -144,10 +144,10 @@ def test_projections_are_identical_whether_or_not_the_future_exists(tmp_path, we
             "UPDATE games SET spread_line=NULL, total_line=NULL WHERE season=? AND week>?",
             (SEASON, week + config.VEGAS_HORIZON_WEEKS),
         )
-    a = P.build_projections(P.load_frames(full, SEASON, as_of_week=week), week, role_source="usage")
-    b = P.build_projections(
-        P.load_frames(trimmed, SEASON, as_of_week=week), week, role_source="usage"
-    )
+    builder = models.get(model)
+    build = P.build_projections if builder is None else builder
+    a = build(P.load_frames(full, SEASON, as_of_week=week), week, role_source="usage")
+    b = build(P.load_frames(trimmed, SEASON, as_of_week=week), week, role_source="usage")
     pd.testing.assert_frame_equal(a, b)
 
 

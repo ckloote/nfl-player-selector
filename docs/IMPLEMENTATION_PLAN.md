@@ -18,7 +18,7 @@ or activate `.venv` first. See the README for setup.
 | 1 — Projections + optimizer + CLI | **Done** (see notes under Phase 1) |
 | 2 — In-season learning | Partly started: the prior/current shrinkage blend and depth-chart roles shipped with Phase 1; per-type rates, dispersion, and `score` remain |
 | 3 — Leaderboard-aware strategy | Not started |
-| 4 — Validation & polish | Backtesting harness **done** (see Phase 4); calibration report and the optional niceties remain |
+| 4 — Validation & polish | Backtesting harness **done**; projection benchmark and calibration report **done** (see Phase 4); the optional niceties remain |
 
 ---
 
@@ -140,9 +140,20 @@ or activate `.venv` first. See the README for setup.
   prior weight.~~ Shipped as `pool backtest` / `pool sweep` (`backtest.py`), and
   replaying 2017-2025 rather than just two seasons — see
   [`BACKTEST.md`](BACKTEST.md).
-- Calibration report: projected vs. actual TD distributions. (Not started; the
-  backtest surfaces a single projected/actual ratio per strategy, which is a
-  smoke alarm, not the report.)
+- ~~Calibration report: projected vs. actual TD distributions.~~ Shipped as
+  `pool evaluate` (`evaluate.py`, `models/`) — see
+  [`PROJECTION_BENCHMARK.md`](PROJECTION_BENCHMARK.md). It scores every
+  player-week forecast (877k across eight models and fifteen seasons) rather
+  than the 54 picks a replay scores, which is roughly 5x the resolution for a
+  model change. Findings: the shipped model wins the eight-way bake-off; the
+  contextual multipliers are jointly worth −2.11 TD/season (SE 0.53) with a
+  holdout replication, having been individually null at the season level; the
+  model's calibration slope is 0.880 [0.865, 0.895], and the correction for it
+  is monotone so it cannot change any pick (greedy identical in 7/7 holdout
+  seasons); touchdown counts are not overdispersed; and no shrinkage constant
+  survived its holdout, so none was changed. The single projected/actual ratio
+  the backtest reported was actively misleading — it averaged 0.67 at the bottom
+  of the pool with 1.23 at the top.
 - Optional: simple local web dashboard (read-only view of plan/standings),
   pick-deadline reminders.
 - **Done when:** a documented backtest shows the optimizer beating the greedy

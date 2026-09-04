@@ -168,11 +168,16 @@ The solver is doing real work — only ~20 of 54 picks match greedy's — the
 quantity it optimizes is just a small share of what decides the season.
 
 Both strategies also over-project the players they *pick* (proj/act 1.23–1.44)
-while being well calibrated across all player-weeks (0.99–1.06). That gap is the
-optimizer's curse: maximising projected value preferentially selects the cells
-where the projection is most over-estimated. It is a plausible mechanism for the
-optimizer's slightly negative point estimate, and a reason to revisit the
-question if projections ever improve materially.
+while the ratio across all player-weeks sits at 0.99–1.06. **That second number
+does not mean the model is calibrated, and this doc used to say it did.**
+Splitting it by projection bin ([`PROJECTION_BENCHMARK.md`](PROJECTION_BENCHMARK.md))
+shows two opposite errors cancelling: the model under-projects the bottom of the
+pool (0.67 below λ = 0.05) and over-projects the top (1.21–1.23 above λ = 0.8),
+for a calibration slope of 0.880 [0.865, 0.895]. The selected-cell gap is
+therefore only partly the optimizer's curse — the top of the distribution is
+genuinely over-projected before anything selects from it. Correcting it is
+measured there, and turns out to be worth nothing for expected TDs: the
+correction is monotone, so it cannot reorder a single pick.
 
 ## 5. Ideas tested and rejected
 
@@ -225,7 +230,10 @@ The most useful thing this exercise produced. The paired season-to-season SD is
 seasons that exist:
 
 - **Resolvable:** effects larger than roughly **±3 TD/season** for a model
-  tweak, **±5 TD/season** for a rule change.
+  tweak, **±5 TD/season** for a rule change. *Scoring the projection layer
+  directly instead lifts this by roughly 5x for a model change — see
+  [`PROJECTION_BENCHMARK.md`](PROJECTION_BENCHMARK.md) — but only for claims
+  about the forecast. Season-level claims are still governed by this floor.*
 - **Not resolvable:** anything smaller — which is *every* model refinement
   tested here.
 
@@ -276,7 +284,11 @@ Ranked by expected value, given all of the above:
    Opportunity is a genuinely different feature rather than a refinement of the
    TD-rate estimator, so it is not capped by the saturation in §4 — but note the
    per-slot result above, and require a holdout before believing any gain.
-3. **Consider dropping `def_mult`** on simplicity grounds. It carries no
-   measurable signal; that is an argument about complexity, not performance.
+3. ~~**Consider dropping `def_mult`** on simplicity grounds.~~ **Refuted.**
+   Measured on forecasts rather than season totals, `def_mult`, `home_mult` and
+   `role_mult` together are worth −2.11 TD/season (SE 0.53), replicated on a
+   2019–2025 holdout. Individually null at ±3 TD; jointly visible at t = 4.
+   See [`PROJECTION_BENCHMARK.md`](PROJECTION_BENCHMARK.md).
 4. **Do not** pursue per-type rates, further shrinkage tuning, or discount
-   tuning. All measured flat.
+   tuning. All measured flat — and shrinkage has since been measured properly
+   and still comes out flat, with a holdout to prove it.

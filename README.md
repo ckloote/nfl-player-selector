@@ -11,7 +11,8 @@ appetite change with your position on the leaderboard?
 
 - [`docs/DESIGN.md`](docs/DESIGN.md) — the pool rules, the model, and the system architecture
 - [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — phased build plan and status
-- [`docs/BACKTEST.md`](docs/BACKTEST.md) — how the model performs against nine replayed seasons
+- [`docs/BACKTEST.md`](docs/BACKTEST.md) — how the model performs against fifteen replayed seasons
+- [`docs/PROJECTION_BENCHMARK.md`](docs/PROJECTION_BENCHMARK.md) — the projection layer scored on every player-week forecast, against seven alternatives
 
 ## Status
 
@@ -25,6 +26,14 @@ The optimizer stays anyway — it is what produces the rest-of-season plan and t
 season-cost ranking — but the plan is a forecast of intent, not a proven edge.
 See [`docs/BACKTEST.md`](docs/BACKTEST.md) for the numbers, the ideas that were
 tested and rejected, and how small an effect the harness can actually resolve.
+
+The projection layer has since been benchmarked on its own, scoring every
+player-week forecast rather than the 54 picks — 877,000 forecasts across eight
+models and fifteen seasons. The shipped model wins the bake-off; its contextual
+multipliers turn out to be worth ~2.5 TD/season (the season harness could not
+resolve them individually); and it is measurably over-confident about its best
+players, by an amount that provably cannot change a pick. See
+[`docs/PROJECTION_BENCHMARK.md`](docs/PROJECTION_BENCHMARK.md).
 Leaderboard-aware strategy (Phase 3) is not built yet.
 
 ## Setup
@@ -74,6 +83,20 @@ uv run pool backtest --season 2025         # replay one season against the basel
 uv run pool backtest --season 2017-2025 --detail
 uv run pool sweep --season 2017-2025       # grid-search the discount and prior weight
 ```
+
+Two layers are measured separately, because a better forecast is not the same
+thing as a better season:
+
+```bash
+uv run pool models                         # the benchmark's projection models
+uv run pool evaluate --season 2011-2025    # score every player-week forecast
+uv run pool backtest --season 2017-2025 --projection player-vegas
+```
+
+`backtest` answers "does this decision rule win more touchdowns"; `evaluate`
+answers "is this projection a better forecast". The first is limited to effects
+above ~±3 TD/season; the second resolves roughly 5x smaller — but only for claims
+about the forecast.
 
 Each week the model sees only what was knowable an hour before kickoff, picks a
 player per slot, and is scored on the touchdowns they actually went on to score

@@ -1,6 +1,8 @@
 import pandas as pd
 import pytest
 
+from pool import db
+
 
 def proj_row(
     pid,
@@ -48,3 +50,15 @@ def make_proj():
         return pd.DataFrame(rows)
 
     return _make
+
+
+@pytest.fixture
+def seeded(tmp_path):
+    """A four-week, four-team season with a full prior season behind it.
+
+    Shared by the backtest and evaluation suites; the builder lives with the
+    backtest tests that define the schema expectations.
+    """
+    from tests.test_backtest import _seed
+
+    return _seed(db.connect(tmp_path / "bt.db"))

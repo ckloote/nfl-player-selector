@@ -10,7 +10,8 @@ from rich.console import Console
 from rich.table import Table
 
 from . import backtest as bt
-from . import config, db, ingest, projections, state
+from . import config, db, ingest, models, projections, state
+from . import evaluate as ev
 from .optimizer import plan_slot
 from .recommend import Candidate, SlotAdvice, advise_week
 
@@ -28,6 +29,9 @@ HorizonOpt = typer.Option(
     config.VEGAS_HORIZON_WEEKS, "--vegas-horizon", help="Weeks ahead Vegas lines are visible"
 )
 CsvOpt = typer.Option(None, "--csv", help="Write every cell to a CSV")
+ProjectionOpt = typer.Option(
+    "shipped", "--projection", help="Projection model; see `pool models` for the list"
+)
 
 
 def _conn(path: Path | None):
@@ -299,6 +303,15 @@ def _floats(spec: str, name: str) -> list[float]:
         raise typer.Exit(1) from None
 
 
+def _builder(name: str):
+    """Resolve a projection-model name, or exit naming the valid ones."""
+    try:
+        return models.get(name)
+    except KeyError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from None
+
+
 def _backtest_ready(conn, season: int) -> list[int]:
     """Weeks available to replay, or a message naming the refresh that fixes it."""
     weeks = bt.scored_weeks(conn, season)
@@ -332,11 +345,13 @@ def backtest(
     prior_weight: float | None = typer.Option(None, help="Override PRIOR_WEIGHT_GAMES"),
     role_source: str = RoleSourceOpt,
     vegas_horizon: int = HorizonOpt,
+    projection: str = ProjectionOpt,
     detail: bool = typer.Option(False, "--detail", help="Show every week's picks"),
     db_path: Path | None = DbOpt,
 ):
     """Replay finished seasons with data frozen at each pick deadline."""
     conn = _conn(db_path)
+    builder = _builder(projection)
     names = [s.strip() for s in strategy.split(",") if s.strip()]
     unknown = [n for n in names if n not in bt.STRATEGIES and n != "hindsight"]
     if unknown:
@@ -359,6 +374,7 @@ def backtest(
                 discount=discount,
                 role_source=role_source,
                 vegas_horizon=vegas_horizon,
+                builder=builder,
             )
         by_name = {r.strategy: r for r in rows}
         ceiling = by_name["hindsight"].total if "hindsight" in by_name else 0.0
@@ -485,6 +501,173 @@ def sweep(
         f"[yellow]Per-season SD of the delta is {sd:.1f} TD.[/yellow] Differences smaller than "
         "that are noise; prefer a cell that wins in most seasons over the maximum."
     )
+
+
+# --- projection benchmark ---------------------------------------------------
+@app.command("models")
+def list_models():
+    """List the projection models the benchmark can run."""
+    t = Table("Model", "Role", title="Projection models")
+    roles = {
+        "random": "null — lambda shuffled within slot-week",
+        "within-player": "null — each player's lambda shuffled across their weeks",
+        "historical-rate": "baseline — prior-season TD/game, unregressed",
+        "regressed-rate": "baseline — prior season regressed to the positional mean",
+        "current-season-rate": "baseline — current season only, shrunk",
+        "vegas-environment": "baseline — team scoring environment, no player TD history",
+        "player-vegas": "baseline — base rate x Vegas; the principal challenger",
+        "shipped": "the production model, frozen",
+        "no-vegas": "ablation — shipped without the Vegas multiplier",
+        "base-rate-only": "ablation — shipped base rate, no matchup context",
+    }
+    for name in models.BUILDERS:
+        t.add_row(name, roles.get(name, ""))
+    console.print(t)
+
+
+def _model_set(spec: str) -> dict:
+    """Resolve a comma-separated model list, or `bakeoff` / `all`."""
+    if spec == "bakeoff":
+        names = list(models.BAKEOFF)
+    elif spec == "all":
+        names = list(models.BUILDERS)
+    else:
+        names = [n.strip() for n in spec.split(",") if n.strip()]
+    return {n: _builder(n) for n in names}
+
+
+@app.command()
+def evaluate(
+    season: str = SeasonsOpt,
+    model: str = typer.Option("bakeoff", "--model", "-m", help="Models, or bakeoff / all"),
+    baseline: str = typer.Option("shipped", help="Model every comparison is paired against"),
+    k: int = typer.Option(ev.PRIMARY_K, "--k", help="Primary top-k for paired comparison"),
+    role_source: str = RoleSourceOpt,
+    vegas_horizon: int = HorizonOpt,
+    csv_out: Path | None = CsvOpt,
+    db_path: Path | None = DbOpt,
+):
+    """Score the projection layer on every player-week forecast, not just the picks.
+
+    A replayed season yields 54 picks and one number; the same frozen
+    projections hold ~7,500 forecasts. That is the resolution the +/-3 TD
+    detection floor in BACKTEST.md denies the season-level harness.
+    """
+    conn = _conn(db_path)
+    seasons = _seasons(season)
+    for yr in seasons:
+        _backtest_ready(conn, yr)
+    chosen = _model_set(model)
+    console.print(f"Evaluating {len(chosen)} model(s) over {len(seasons)} season(s)...")
+    df = ev.forecast_set(
+        conn,
+        seasons,
+        chosen,
+        role_source=role_source,
+        vegas_horizon=vegas_horizon,
+        log=None,
+    )
+    console.print(
+        f"{len(df):,} forecasts — {len(df) // max(len(chosen), 1):,} per model, "
+        f"{len(df) // max(len(chosen) * len(seasons), 1):,} per model-season."
+    )
+    if csv_out:
+        df.to_csv(csv_out, index=False)
+        console.print(f"Wrote {csv_out}")
+    _render_evaluation(df, baseline, k)
+
+
+def _render_evaluation(df, baseline: str, k: int) -> None:
+    present = list(dict.fromkeys(df.model))
+
+    for rank, label in (("rank_available", "still available"), ("rank_in_slot", "full pool")):
+        t = Table(
+            "Model",
+            *[f"top{kk}" for kk in ev.TOP_K],
+            "played@1",
+            "lift@10",
+            title=f"Realised TDs per pick — ranked among players {label}",
+        )
+        tk = ev.top_k(df, rank=rank).set_index(["model", "k"])
+        for m in present:
+            cells = [f"{tk.loc[(m, kk), 'actual']:.3f}" for kk in ev.TOP_K]
+            t.add_row(
+                m, *cells, f"{tk.loc[(m, 1), 'played']:.3f}", f"{tk.loc[(m, 10), 'lift']:.1f}x"
+            )
+        console.print(t)
+
+    if baseline in present and len(present) > 1:
+        t = Table(
+            "Model",
+            f"PRIMARY top{k}",
+            "SE",
+            "won",
+            f"GATE top{ev.CONFIRM_K}",
+            "SE",
+            "won",
+            "deviance",
+            "SE",
+            title=(
+                f"Paired against {baseline}, TD/season — primary and gate are both on the "
+                "depleted pool; deviance is a diagnostic, not a gate"
+            ),
+        )
+        pk = ev.paired_top_k(df, baseline=baseline, k=k).set_index("model")
+        gate = ev.paired_top_k(df, baseline=baseline, k=ev.CONFIRM_K).set_index("model")
+        pd_ = ev.paired_deviance(df, baseline=baseline).set_index("model")
+        for m in present:
+            if m == baseline:
+                continue
+            a, g, b = pk.loc[m], gate.loc[m], pd_.loc[m]
+            t.add_row(
+                m,
+                f"{a.delta_per_season:+.2f}",
+                f"{a.se_per_season:.2f}",
+                f"{int(a.seasons_won)}/{int(a.seasons)}",
+                f"{g.delta_per_season:+.2f}",
+                f"{g.se_per_season:.2f}",
+                f"{int(g.seasons_won)}/{int(g.seasons)}",
+                f"{b.delta:+.4f}",
+                f"{b.se:.4f}",
+            )
+        console.print(t)
+
+    t = Table(
+        "Model",
+        "slope b",
+        "95% CI",
+        "intercept a",
+        "clusters",
+        "Spearman",
+        title="Calibration  E[Y]=exp(a + b*log lambda)   b<1 = forecasts too extreme",
+    )
+    sp = ev.spearman(df).set_index("model")
+    for m in present:
+        c = ev.calibration(df[df.model == m])
+        t.add_row(
+            m,
+            f"{c['slope']:.3f}",
+            f"[{c['slope_lo']:.3f}, {c['slope_hi']:.3f}]",
+            f"{c['intercept']:+.3f}",
+            f"{c['clusters']:,}",
+            f"{sp.loc[m, 'spearman']:.3f}",
+        )
+    console.print(t)
+
+    rel = ev.reliability(df[df.model == baseline])
+    t = Table(
+        "lambda bin", "n", "proj", "actual", "proj/act", "played", title=f"Reliability — {baseline}"
+    )
+    for _, r in rel.iterrows():
+        t.add_row(
+            str(r["bin"]),
+            f"{int(r.n):,}",
+            f"{r.proj:.3f}",
+            f"{r.actual:.3f}",
+            f"{r.ratio:.2f}",
+            f"{r.played:.2f}",
+        )
+    console.print(t)
 
 
 if __name__ == "__main__":
