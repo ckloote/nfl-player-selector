@@ -12,6 +12,13 @@ SQLite, `scipy` (assignment solver), `numpy`/`pandas`, `typer` + `rich` (CLI),
 CLI commands are written below as `pool <cmd>`; run them as `uv run pool <cmd>`,
 or activate `.venv` first. See the README for setup.
 
+The [2026-09-04 project review](REVIEW.md) records open correctness and validation
+findings, including issues in phases marked implemented below. Its recommended
+sequence is workflow reliability, evaluation repairs, calibration checks, then
+leaderboard strategy. The original phase breakdown and research history remain
+below; pending proposals and stronger research claims need the reconciliation
+described in that review.
+
 | Phase | Status |
 |---|---|
 | 0 — Scaffolding & data | **Done** (see the schema note under Phase 0) |

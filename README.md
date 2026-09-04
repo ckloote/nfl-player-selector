@@ -13,8 +13,13 @@ appetite change with your position on the leaderboard?
 - [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — phased build plan and status
 - [`docs/BACKTEST.md`](docs/BACKTEST.md) — how the model performs against fifteen replayed seasons
 - [`docs/PROJECTION_BENCHMARK.md`](docs/PROJECTION_BENCHMARK.md) — the projection layer scored on every player-week forecast, against seven alternatives
+- [`docs/REVIEW.md`](docs/REVIEW.md) — September 2026 review: open defects, validation limitations, and recommended priorities
 
 ## Status
+
+The [September 4 review](docs/REVIEW.md) identified open deadline-eligibility and
+evaluation issues. Its findings qualify the research claims below and recommend
+fixing the weekly workflow and validation before prioritizing leaderboard strategy.
 
 Phases 0 and 1 are implemented: data import, a matchup-adjusted projection
 model, the season-long assignment optimizer, and a CLI that gives weekly picks.
@@ -29,10 +34,10 @@ tested and rejected, and how small an effect the harness can actually resolve.
 
 The projection layer has since been benchmarked on its own, scoring every
 player-week forecast rather than the 54 picks — 877,000 forecasts across eight
-models and fifteen seasons. The shipped model wins the bake-off; its contextual
-multipliers turn out to be worth ~2.5 TD/season (the season harness could not
-resolve them individually); and it is measurably over-confident about its best
-players, by an amount that provably cannot change a pick. See
+models and fifteen seasons. The shipped model leads the reported ranking
+comparison; the contextual multipliers' top-10 advantage does not establish a
+season-scoring gain. The model also over-projects its best players. A monotone
+calibration correction preserves greedy rankings but can change assignment picks. See
 [`docs/PROJECTION_BENCHMARK.md`](docs/PROJECTION_BENCHMARK.md).
 Leaderboard-aware strategy (Phase 3) is not built yet.
 
