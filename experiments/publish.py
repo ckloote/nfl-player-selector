@@ -62,7 +62,10 @@ metrics = {
 }
 era = metrics["replay_summary"]
 era = era[era.era.eq("all retrospective")]
-floor = 2 * era.paired_se[era.paired_se > 0].dropna().median()
+# A single-season run has no cross-season paired SE, so this median is NaN. There is
+# no band to draw from it; the figure is drawn without one rather than shading a NaN.
+median_se = era.paired_se[era.paired_se > 0].dropna().median()
+floor = 2 * median_se if pd.notna(median_se) else None
 figure_dir = published / "figures"
 figure_dir.mkdir(exist_ok=True)
 for name, svg in figures.render(metrics, spec["baseline"], floor).items():

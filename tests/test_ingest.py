@@ -152,6 +152,27 @@ def test_transform_depth_charts_reads_the_legacy_weekly_schema():
     assert out.loc["backup", "as_of"] == "2024-W18"
 
 
+def test_transform_depth_charts_keeps_a_team_on_its_bye():
+    """ "Latest snapshot per team" is what the docstring promises and what the
+    dated-snapshot reader does. The weekly reader took one league-wide latest
+    week, so a mid-season import dropped every team on its bye and left their
+    players on DEPTH_DEFAULT."""
+    raw = pd.DataFrame(
+        {
+            "season": [2024] * 3,
+            "club_code": ["AAA", "BBB", "AAA"],
+            "week": [4, 4, 5],
+            "game_type": ["REG"] * 3,
+            "depth_team": ["1", "1", "1"],
+            "gsis_id": ["a1", "b1", "a1"],
+            "position": ["QB"] * 3,
+        }
+    )
+    out = ingest.transform_depth_charts(raw, 2024, max_week=18).set_index("player_id")
+    assert out.loc["b1", "as_of"] == "2024-W4"  # BBB was on its bye in week 5
+    assert out.loc["a1", "as_of"] == "2024-W5"
+
+
 def test_transform_depth_charts_trusts_the_schedule_over_a_mislabelled_week():
     """The 2024 file labels 1821 week-19 rows "REG"; the regular season is 18."""
     raw = pd.DataFrame(

@@ -164,7 +164,7 @@ def available_weeks(conn: sqlite3.Connection, season: int) -> list[int]:
 
 # --- player pool ------------------------------------------------------------
 def active_snapshot(rosters: pd.DataFrame) -> pd.DataFrame:
-    """The most recent weekly roster in the frame.
+    """Each team's most recent weekly roster in the frame.
 
     Weekly rosters are snapshots, not a cumulative record: a released player
     stops appearing rather than being marked CUT. So the roster to read is the
@@ -181,11 +181,24 @@ def active_snapshot(rosters: pd.DataFrame) -> pd.DataFrame:
     snap that season); under the union that one snapshot inflated the candidate
     universe for all seventeen weeks of 2016.
 
-    A week whose roster has not published yet reads the previous week, which is
-    what a live picker would be looking at.
+    Latest *per team*, because from 2016 on the feed publishes no roster at all
+    for a team on its bye. One league-wide latest week therefore deletes those
+    teams from the pool, and with them from every remaining week of the plan the
+    optimizer is choosing over — four to six whole teams in the worst decision
+    weeks of 2016-2025, as few as 26 of 32 and up to 99 candidates short. The
+    current week does not miss them (a bye team has no game, so no row either);
+    the forward surface does, which is the half that decides who to save.
+
+    A team whose week has not published yet reads its previous one, which is what
+    a live picker would be looking at, and never reaches further: across 2011-2025
+    no team's fallback is more than one week old. Deduplicating by latest week
+    keeps a player traded off a bye team out of his old team's stale snapshot.
     """
     active = rosters[rosters["status"].isin(config.ACTIVE_ROSTER_STATUSES)]
-    return active[active.week == active.week.max()] if len(active) else active
+    if not len(active):
+        return active
+    latest = active[active.week == active.groupby("team")["week"].transform("max")]
+    return latest.sort_values("week").drop_duplicates("player_id", keep="last")
 
 
 def player_pool(
@@ -193,9 +206,9 @@ def player_pool(
 ) -> pd.DataFrame:
     """Active players at pool positions with their current team.
 
-    Prefers the latest current-season roster snapshot (handles in-season moves
-    as well as offseason ones); falls back to the most recent stats row when no
-    roster is loaded.
+    Prefers each team's latest current-season roster snapshot (handles in-season
+    moves as well as offseason ones); falls back to the most recent stats row
+    when no roster is loaded.
     """
     cols = ["player_id", "player_name", "position", "team"]
     snapshot = active_snapshot(rosters) if len(rosters) else rosters

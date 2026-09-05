@@ -1,7 +1,9 @@
 # Rerun of the phase2-validation specification after the candidate-pool repair.
 # Identical configuration and the identical frozen dataset; the only difference is
-# `projections.player_pool`, which now reads the latest weekly roster snapshot
-# instead of the union of every week to date. Compare against
+# `projections.active_snapshot`, which now reads each team's latest weekly roster
+# snapshot instead of the union of every week to date. Per team because the feed
+# publishes no roster for a team on its bye, and one league-wide latest week drops
+# those teams from every remaining week of the plan. Compare against
 # experiments/results/phase2-validation.
 schema_version = 1
 workers = 4

@@ -370,3 +370,49 @@ def test_an_unpublished_roster_week_reads_the_previous_one(seeded):
     with seeded:
         seeded.execute("DELETE FROM rosters WHERE season=? AND week=4", (SEASON,))
     assert set(_pool(seeded, 4).index) == set(_pool(seeded, 3).index)
+
+
+def _bye(conn, teams, week=4):
+    """A team on its bye: the weekly roster feed publishes no row for it at all."""
+    with conn:
+        conn.executemany(
+            "DELETE FROM rosters WHERE season=? AND week=? AND team=?",
+            [(SEASON, week, team) for team in teams],
+        )
+
+
+def test_a_team_on_its_bye_keeps_its_players(seeded):
+    """The feed publishes no roster for a team on its bye, so one league-wide
+    latest week deletes it from the pool. In 2024 week 5 that removed DET, PHI,
+    LAC and TEN; the worst decision weeks of 2016-2025 kept 26 of 32 teams."""
+    _bye(seeded, ["CCC", "DDD"])
+    pool = _pool(seeded, 4)
+    assert set(pool.team) == set(TEAMS)
+    for team in ("CCC", "DDD"):
+        assert pool.loc[f"{team}-QB1", "team"] == team
+
+
+def test_a_bye_team_stays_in_the_remaining_season_plan(seeded):
+    """The current week never misses them — a bye team has no game, so no row.
+    The forward surface does, and that is the half the optimizer chooses over:
+    at decision week 5 of 2024 the four bye teams had no row at any week 6-18."""
+    _bye(seeded, ["CCC", "DDD"])
+    frames = P.load_frames(seeded, SEASON, as_of_week=4)
+    proj = P.build_projections(frames, from_week=4)
+    assert set(proj[proj.week == 4].team) == set(TEAMS)
+
+
+def test_a_player_traded_off_a_bye_team_appears_once():
+    """Reading each team's own latest week can offer the same player twice: his
+    old team's snapshot is a week behind and still lists him. `load_frames` keeps
+    only his latest row, but the snapshot rule has to hold on its own."""
+    rosters = pd.DataFrame(
+        [
+            dict(week=3, player_id="p1", team="CCC", status="ACT"),
+            dict(week=4, player_id="p1", team="AAA", status="ACT"),
+            dict(week=4, player_id="p2", team="AAA", status="ACT"),
+        ]
+    )
+    snapshot = P.active_snapshot(rosters).set_index("player_id")
+    assert sorted(snapshot.index) == ["p1", "p2"]
+    assert snapshot.loc["p1", "team"] == "AAA"

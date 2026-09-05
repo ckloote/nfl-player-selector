@@ -27,6 +27,13 @@ def _scale(lo, hi, out_lo, out_hi):
     return lambda v: out_lo + (v - lo) * (out_hi - out_lo) / span
 
 
+def _ticks(lo, hi, step):
+    """Gridline values strictly inside (lo, hi): a tick on the axis edge is noise."""
+    first = np.ceil(lo / step) * step
+    values = np.arange(first, hi + step / 1000, step)
+    return [v for v in values if lo + step / 1000 < v < hi - step / 1000]
+
+
 def _text(x, y, s, size=11, anchor="middle", fill=INK, weight="normal"):
     return (
         f'<text x="{x:.1f}" y="{y:.1f}" font-family="{FONT}" font-size="{size}" '
@@ -120,8 +127,12 @@ def slope_by_season(data, baseline):
     cal = cal[cal.model.eq(baseline)].sort_values("season")
     w, h = 720, 320
     left, right, top, bottom = 62, 24, 66, 44
+    # Both bounds follow the plotted intervals. A hardcoded top clipped every
+    # supported baseline above it: `vegas-environment` reaches a slope of 1.137
+    # and an upper bound of 1.234, outside a viewport that stopped at 1.03.
     lo = min(0.75, (cal.slope - 1.96 * cal.se_slope).min() - 0.02)
-    y = _scale(lo, 1.03, h - bottom, top)
+    hi = max(1.03, (cal.slope + 1.96 * cal.se_slope).max() + 0.02)
+    y = _scale(lo, hi, h - bottom, top)
     step = (w - left - right) / len(cal)
     xs = [left + step * (i + 0.5) for i in range(len(cal))]
     mean = cal.slope.mean()
@@ -135,7 +146,7 @@ def slope_by_season(data, baseline):
             f"below 1 the forecasts are too extreme. Dotted: mean {cal.slope.mean():.3f}.",
         ],
     )
-    for tick in np.arange(0.8, 1.001, 0.05):
+    for tick in _ticks(lo, hi, 0.05):
         out.append(
             f'<line x1="{left}" y1="{y(tick):.1f}" x2="{w - right}" y2="{y(tick):.1f}" '
             f'stroke="{GRID}" stroke-opacity="0.25" stroke-width="1"/>'
@@ -162,8 +173,15 @@ def slope_by_season(data, baseline):
     return "\n".join(out)
 
 
-def bakeoff(data, baseline, floor):
-    """Paired season deltas with their standard errors, against the resolution floor."""
+def bakeoff(data, baseline, floor=None):
+    """Paired season deltas with their own standard errors.
+
+    `floor` is twice the median paired SE across every comparison in the run. It is
+    a typical scale, not a threshold each comparison must clear: shading it as the
+    band "these replays cannot resolve" put `within-player` inside it at -3.14 when
+    its own SE is 1.46, which the report's own two-SE criterion resolves. A run with
+    one season has no cross-season SE at all, so it is drawn without a band.
+    """
     wide = data["replays"]
     wide = wide[wide.strategy.eq("greedy")].pivot_table(
         index="season", columns="model", values="total", aggfunc="mean"
@@ -174,52 +192,63 @@ def bakeoff(data, baseline, floor):
     stats = pd.DataFrame(
         {
             "mean": delta.mean(),
-            "se": delta.std(ddof=1) / np.sqrt(len(delta)),
+            "se": delta.std(ddof=1) / np.sqrt(len(delta)) if len(delta) > 1 else np.nan,
             "won": (delta > 0).sum(),
         }
     ).sort_values("mean")
+    banded = floor is not None and np.isfinite(floor)
+    spread = stats.se.fillna(0.0)
 
     row_h = 26
     w = 720
     left, right, top, bottom = 168, 132, 92, 52
     h = top + row_h * len(stats) + bottom
-    lo = min(-floor, (stats["mean"] - stats.se).min()) - 1.0
-    hi = max(floor, (stats["mean"] + stats.se).max()) + 1.0
+    lo = min(stats["mean"] - spread) - 1.0
+    hi = max(stats["mean"] + spread) + 1.0
+    if banded:
+        lo, hi = min(lo, -floor - 1.0), max(hi, floor + 1.0)
     x = _scale(lo, hi, left, w - right)
 
     note = f" `random` omitted at {aside.mean():+.1f}." if aside is not None else ""
-    out = _frame(
-        w,
-        h,
-        f"Season score vs `{baseline}`, greedy replay",
-        [
-            f"Mean and standard error over {len(delta)} seasons; seasons better at right.",
-            f"Shaded: the \u00b1{floor:.1f} TD band these replays cannot resolve.{note}",
-        ],
-    )
-    out.append(
-        f'<rect x="{x(-floor):.1f}" y="{top - 10:.1f}" width="{x(floor) - x(-floor):.1f}" '
-        f'height="{row_h * len(stats) + 12:.1f}" fill="{GRID}" fill-opacity="0.12"/>'
-    )
+    seasons = f"{len(delta)} season" + ("s" if len(delta) != 1 else "")
+    measured = "Mean and standard error over" if len(delta) > 1 else "Season score over"
+    subtitle = [f"{measured} {seasons}; seasons better at right.{note}"]
+    if banded:
+        subtitle.append(
+            f"Shaded: \u00b1{floor:.1f} TDs \u2014 twice the median paired SE, a typical scale"
+        )
+        subtitle.append("rather than a threshold each comparison must clear.")
+    out = _frame(w, h, f"Season score vs `{baseline}`, greedy replay", subtitle)
+    if banded:
+        out.append(
+            f'<rect x="{x(-floor):.1f}" y="{top - 10:.1f}" width="{x(floor) - x(-floor):.1f}" '
+            f'height="{row_h * len(stats) + 12:.1f}" fill="{GRID}" fill-opacity="0.12"/>'
+        )
     out.append(
         f'<line x1="{x(0):.1f}" y1="{top - 10:.1f}" x2="{x(0):.1f}" '
         f'y2="{top + row_h * len(stats) + 2:.1f}" stroke="{GRID}" stroke-width="1.5"/>'
     )
     for i, row in enumerate(stats.itertuples()):
         cy = top + row_h * i + 8
-        lo_x, hi_x = x(row.mean - row.se), x(row.mean + row.se)
-        colour = OVER if row.mean < -floor else INK
-        out.append(
-            f'<line x1="{lo_x:.1f}" y1="{cy:.1f}" x2="{hi_x:.1f}" y2="{cy:.1f}" '
-            f'stroke="{colour}" stroke-width="1.5" stroke-opacity="0.6"/>'
-        )
+        # Each comparison against its own uncertainty, the same two-SE bar the report uses.
+        resolved = np.isfinite(row.se) and row.se > 0 and abs(row.mean) >= 2 * row.se
+        colour = OVER if resolved and row.mean < 0 else INK
+        if np.isfinite(row.se):
+            lo_x, hi_x = x(row.mean - row.se), x(row.mean + row.se)
+            out.append(
+                f'<line x1="{lo_x:.1f}" y1="{cy:.1f}" x2="{hi_x:.1f}" y2="{cy:.1f}" '
+                f'stroke="{colour}" stroke-width="1.5" stroke-opacity="0.6"/>'
+            )
         out.append(f'<circle cx="{x(row.mean):.1f}" cy="{cy:.1f}" r="4" fill="{colour}"/>')
         out.append(_text(left - 12, cy + 4, row.Index, size=11, anchor="end"))
+        readout = (
+            f"{row.mean:+.2f}\u00b1{row.se:.2f}" if np.isfinite(row.se) else f"{row.mean:+.2f}"
+        )
         out.append(
             _text(
                 w - right + 8,
                 cy + 4,
-                f"{row.mean:+.2f}\u00b1{row.se:.2f} {row.won}/{len(delta)}",
+                f"{readout} {row.won}/{len(delta)}",
                 size=10,
                 anchor="start",
             )
@@ -247,7 +276,7 @@ def optimizer_by_season(data, baseline):
     piv = rows.pivot_table(index="season", columns="strategy", values="total", aggfunc="mean")
     diff = (piv.optimizer - piv.greedy).sort_index()
     mean = diff.mean()
-    se = diff.std(ddof=1) / np.sqrt(len(diff))
+    se = diff.std(ddof=1) / np.sqrt(len(diff)) if len(diff) > 1 else np.nan
 
     w, h = 720, 330
     left, right, top, bottom = 56, 24, 74, 52
@@ -260,8 +289,9 @@ def optimizer_by_season(data, baseline):
         h,
         "Rolling assignment minus greedy, by season",
         [
-            f"`{baseline}`. Dashed: mean {mean:+.2f} ({se:.2f} SE), better in "
-            f"{int((diff > 0).sum())} of {len(diff)}.",
+            f"`{baseline}`. Dashed: mean {mean:+.2f}"
+            + (f" ({se:.2f} SE)" if np.isfinite(se) else "")
+            + f", better in {int((diff > 0).sum())} of {len(diff)}.",
             "The spread, not the mean, is the finding.",
         ],
     )
@@ -293,7 +323,7 @@ def optimizer_by_season(data, baseline):
     return "\n".join(out)
 
 
-def render(data, baseline, floor):
+def render(data, baseline, floor=None):
     """Every figure, keyed by the file stem it is written to."""
     return {
         "reliability": reliability(data, baseline),

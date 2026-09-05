@@ -35,9 +35,9 @@ ASSUMPTIONS = [
     "current-week kickoffs are hard exclusions; future planning estimates remain usable.",
     "Snapshot observations represent import availability, not backdated source publication. "
     "Finalized outcome scoring is separate from archived projection inputs.",
-    "Ranking population: pool-position players listed active on the latest weekly roster "
-    "snapshot at or before the decision week, before assignment pruning; hard exclusions "
-    "unranked. Zero estimates eligible. Ties use player ID.",
+    "Ranking population: pool-position players listed active on their own team's latest "
+    "weekly roster snapshot at or before the decision week, before assignment pruning; hard "
+    "exclusions unranked. Zero estimates eligible. Ties use player ID.",
     "Common-pool depletion uses the selected deterministic baseline greedy history. Top-k "
     "diagnostics are TDs per ranked candidate, never achieved season scores.",
     "Slot-week means are averaged within season. Seeds are averaged within season before "
@@ -507,8 +507,15 @@ def replay_findings(data, spec):
             # contradict the floor sentence below, which is a median across all comparisons.
             detail = (
                 f" So about {100 * (1 - w_mean / r_mean):.0f}% of the measured advantage over "
-                "random is in telling players apart, and the remainder in timing them. That "
-                f"timing component sits {abs(w_mean) / w_se:.1f} standard errors from zero."
+                "random is in telling players apart, and the remainder in timing them."
+            )
+            # Seasons that lose the same amount every time have no paired spread at all, so
+            # there is no standard error to divide by and none to quote.
+            detail += (
+                f" That timing component sits {abs(w_mean) / w_se:.1f} standard errors from zero."
+                if np.isfinite(w_se) and w_se > 0
+                else " These seasons differ by the same amount every time, so they carry no "
+                "paired spread to measure that component against."
             )
         lines.append(
             f"`within-player` keeps each player's own forecasts and destroys only their order "
@@ -590,13 +597,30 @@ def diagnostic_findings(data, spec):
     if len(both) > 2 and abs(both.season.sum()) > 1e-9:
         rho = float(stats.spearmanr(both["rank"], both.season).statistic)
         ratio = float((both["rank"] * picks).sum() / both.season.sum())
+        # The reading has to follow the correlation. On these fifteen seasons it is +0.86,
+        # but the same models over 2011-2012 give -0.20 and over 2020-2021 -0.02: a sentence
+        # that recommends ranking by the diagnostic whatever rho came out is not a finding.
+        if rho >= 0.5:
+            agreement = (
+                f"orders models much as their achieved season scores do (Spearman {rho:.2f}), "
+                "but it does not convert into them"
+            )
+            advice = "Use it to rank candidates, never to quote a season gain."
+        elif rho <= -0.5:
+            agreement = f"orders models against their achieved season scores (Spearman {rho:.2f})"
+            advice = "On these seasons it does not rank candidates, let alone quote a season gain."
+        else:
+            agreement = (
+                f"does not order models as their achieved season scores do (Spearman {rho:.2f})"
+            )
+            advice = (
+                "These seasons do not support ranking candidates by it, and never a season gain."
+            )
         lines.append(
             f"Across the {len(both)} candidate models, excluding the shuffled nulls, the "
-            f"common-pool top-{int(paired.k.max())} diagnostic orders models much as their "
-            f"achieved season scores do (Spearman {rho:.2f}), but it does not convert into "
-            f"them: scaled by the {picks:.0f} picks in a season it recovers about "
-            f"{100 * ratio:.0f}% of the season difference. Use it to rank candidates, never "
-            "to quote a season gain."
+            f"common-pool top-{int(paired.k.max())} diagnostic {agreement}: scaled by the "
+            f"{picks:.0f} picks in a season it recovers about {100 * ratio:.0f}% of the "
+            f"season difference. {advice}"
         )
     return "## What the diagnostics show\n\n" + "\n\n".join(lines) + "\n\n"
 

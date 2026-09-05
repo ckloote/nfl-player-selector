@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 from typer.testing import CliRunner
 
+from experiments import figures
 from pool import backtest, benchmark, db, models, snapshots
 from pool import evaluate as ev
 from pool import projections as P
@@ -443,3 +444,135 @@ def test_invalid_backtest_policy_does_not_open_a_database(monkeypatch):
     result = CliRunner().invoke(app, ["backtest", "--input-policy", "snapshots"])
     assert result.exit_code != 0
     assert "decision-times" in result.output
+
+
+# --- generated findings and figures -----------------------------------------
+def _replay_rows(scores):
+    """`replays` rows for {(season, model): total} under both strategies."""
+    return pd.DataFrame(
+        [
+            dict(season=season, model=model, seed=-1, strategy=strategy, total=total)
+            for (season, model), total in scores.items()
+            for strategy in ("greedy", "optimizer")
+        ]
+    )
+
+
+def _findings_data(scores, ranks):
+    replays = _replay_rows(scores)
+    seasons = sorted({season for season, _ in scores})
+    summary = pd.DataFrame(
+        [dict(era="all retrospective", model=m, paired_se=1.5) for m in ranks],
+    )
+    paired = pd.DataFrame(
+        [
+            dict(era="all retrospective", rank="rank_available", k=10, model=m, mean=v)
+            for m, v in ranks.items()
+        ]
+    )
+    ranking = pd.DataFrame([dict(season=s, covered_cells=40) for s in seasons])
+    return {
+        "replays": replays,
+        "replay_summary": summary,
+        "paired_ranking_summary": paired,
+        "ranking": ranking,
+    }, {"baseline": "shipped", "seasons": seasons}
+
+
+def test_a_comparison_with_no_paired_spread_still_reports():
+    """Seasons that lose the same amount every time have zero paired variance.
+    Saved results for 2012 and 2018 at seed 0 give `within-player` exactly -8 in
+    both, and dividing the mean by that standard error ended the whole report."""
+    scores = {}
+    for season in (2012, 2018):
+        scores[(season, "shipped")] = 50.0
+        scores[(season, "within-player")] = 42.0
+        scores[(season, "random")] = 20.0
+    data, spec = _findings_data(scores, {"within-player": -0.1, "random": -0.9})
+    text = benchmark.replay_findings(data, spec)
+    assert "-8.00" in text
+    assert "no paired spread" in text
+    assert "nan" not in text.lower()
+
+
+@pytest.mark.parametrize(
+    ("ranks", "expected", "forbidden"),
+    [
+        ({"a": -0.1, "b": -0.2, "c": -0.3, "d": -0.4}, "much as their", "against their"),
+        ({"a": -0.4, "b": -0.3, "c": -0.2, "d": -0.1}, "against their", "Use it to rank"),
+    ],
+)
+def test_the_ranking_conclusion_follows_the_correlation(ranks, expected, forbidden):
+    """The conclusion asserted agreement whatever the correlation came out. The
+    same models give Spearman +0.86 over fifteen seasons, -0.20 over 2011-2012
+    and -0.02 over 2020-2021; only the first of those supports the sentence."""
+    scores = {}
+    for i, season in enumerate((2011, 2012)):
+        scores[(season, "shipped")] = 50.0
+        for j, model in enumerate(ranks):
+            scores[(season, model)] = 50.0 - (j + 1) - i
+    data, spec = _findings_data(scores, ranks)
+    data["calibration"] = pd.DataFrame(
+        [dict(season=s, model="shipped", slope=0.86, se_slope=0.02) for s in (2011, 2012)]
+    )
+    text = benchmark.diagnostic_findings(data, spec)
+    assert expected in text
+    assert forbidden not in text
+    assert "never" in text or "not" in text
+
+
+def _calibration(slopes, se=0.05):
+    return pd.DataFrame(
+        [dict(season=2011 + i, model="m", slope=s, se_slope=se) for i, s in enumerate(slopes)]
+    )
+
+
+def _viewbox_ys(svg):
+    height = float(svg.split('viewBox="0 0 ')[1].split('"')[0].split()[1])
+    values = []
+    for attr in ("cy=", "y1=", "y2="):
+        for chunk in svg.split(attr)[1:]:
+            values.append(float(chunk.split('"')[1]))
+    return height, values
+
+
+def test_calibration_figure_holds_every_plotted_interval():
+    """`vegas-environment` reaches a slope of 1.137 and an upper bound of 1.234.
+    Against a hardcoded top of 1.03 its points fell outside the viewport."""
+    svg = figures.slope_by_season({"calibration": _calibration([0.9, 1.137], se=0.05)}, "m")
+    height, ys = _viewbox_ys(svg)
+    assert ys and all(0 <= y <= height for y in ys)
+
+
+def test_the_shipped_calibration_range_is_unchanged():
+    """The adaptive bounds must not redraw a figure the data already fitted."""
+    svg = figures.slope_by_season({"calibration": _calibration([0.82, 0.89])}, "m")
+    assert ">1.00<" in svg and ">0.80<" in svg and ">1.05<" not in svg
+
+
+def test_a_single_season_publishes_without_a_resolution_band():
+    """One season has no cross-season paired SE, so the median floor is NaN and
+    the bake-off tick loop raised `cannot convert float NaN to integer`."""
+    scores = {(2024, "shipped"): 50.0, (2024, "within-player"): 42.0}
+    data, _ = _findings_data(scores, {"within-player": -0.1})
+    svg = figures.bakeoff(data, "shipped", None)
+    assert "nan" not in svg.lower()
+    assert "Shaded" not in svg
+    height, ys = _viewbox_ys(svg)
+    assert all(0 <= y <= height for y in ys)
+
+
+def test_the_shaded_band_is_a_typical_scale_not_a_threshold():
+    """`within-player` is -3.14 with its own SE of 1.46 — 2.16 SE from zero, and
+    resolved by the report's criterion — yet sits inside a +/-4.35 median band."""
+    scores = {}
+    for i, season in enumerate((2011, 2012, 2013)):
+        scores[(season, "shipped")] = 50.0
+        scores[(season, "within-player")] = 46.9 + 0.1 * i
+    data, _ = _findings_data(scores, {"within-player": -0.1})
+    svg = figures.bakeoff(data, "shipped", 4.35)
+    assert "cannot resolve" not in svg
+    assert "typical scale" in svg
+    # Resolved against its own SE, so it is coloured as a real difference even
+    # though the median-SE band would swallow it.
+    assert f'fill="{figures.OVER}"' in svg
