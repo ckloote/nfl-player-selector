@@ -11,3 +11,4 @@ data/*.db-journal
 .uv-cache/
 
 # uv.lock is intentionally committed — it pins the exact environment.
+data/experiments/
