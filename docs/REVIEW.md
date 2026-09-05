@@ -1,9 +1,9 @@
 # Project review — 2026-09-04
 
 Reviewed revision: `53e8c83` (`Benchmark the projection layer on every player-week forecast`).
-The working tree was clean when the review began. All findings below are open
-at that revision; this document records findings and proposed work, not implemented
-fixes. The accompanying README wording changes address two summary claims only.
+The working tree was clean when the review began. All findings were open at that
+revision. The original evidence below is retained; the status notes distinguish
+subsequent implementation from the original review.
 
 The project has a sound separation between import, projections, assignment,
 recommendation, and evaluation, with useful tests. Keeping the assignment solver
@@ -32,6 +32,8 @@ ran outside it. That tooling failure is not a project defect.
 ## Findings
 
 ### F01 — High: recommendations do not enforce elapsed pick deadlines
+
+**Current status:** Resolved in the weekly reliability phase: one Eastern decision time, forbidden deadline cells before assignment, unconfirmed kickoff handling, preserved locks/future weeks, and boundary/CLI tests.
 
 **Evidence:** [`advise_slot`](../src/pool/recommend.py) defines playable candidates
 using matrix value alone. Neither that function nor the recommendation CLI
@@ -140,6 +142,8 @@ masks across all models in a comparison, including when `shipped` is absent.
 
 ### F05 — Medium: scoring omits touchdowns covered by the written rules
 
+**Current status:** Resolved in the weekly reliability phase: compact scorer/passer credits from play-by-play, conservative game coverage, shared complete scoring for projections/replay/hindsight and `pool score`, with return/recovery and pending-result tests. Published benchmarks retain the previous definition until separately rerun.
+
 **Evidence:** [`transform_player_stats`](../src/pool/ingest.py), the database
 schema, and [`actual_tds`](../src/pool/backtest.py) retain and sum only passing,
 rushing, and receiving touchdowns. The written rule credits every touchdown a
@@ -223,6 +227,8 @@ Verify that null models cannot restore ruled-out cells.
 
 ### F09 — Medium: out-of-range recorded weeks consume players
 
+**Current status:** Resolved in the weekly reliability phase: shared schedule-based week validation, historical player lookup, atomic multi-slot recording, and score invalidation on replacement.
+
 **Evidence:** [`record_pick`](../src/pool/state.py) validates position and reuse
 but not whether the week belongs to the season. A fixture accepted week 99,
 after which `used_ids` treated that player as spent for the season. The `record`
@@ -248,9 +254,16 @@ so its seed count and reported uncertainty can be reproduced.
 ## Current status and recommended sequence
 
 The implementation status is broadly accurate: imports, projections, assignment,
-the recommendation CLI, season replay, and forecast evaluation exist. `pool score`,
-opponent tracking, standings, and win-probability strategy remain unfinished.
-Phase 1's completion does not mean the live deadline workflow is correct.
+the recommendation CLI, season replay, and forecast evaluation exist. The weekly
+reliability phase now also implements `pool score`, feed freshness/coverage status,
+and the live deadline workflow. F01, F05, and F09 are resolved. Opponent tracking,
+standings, and win-probability strategy remain unfinished. F02–F04, F06–F08, and
+F10 remain open for the later evaluation/calibration phases.
+
+Verification includes mocked refresh → recommend → record → score integration,
+migration rollback/idempotence, failed-feed preservation, and a temporary 2025
+historical import: 272 complete regular-season games, 2,206 throwing/scoring
+credits, and correct passing and return-TD pick scores. No benchmark was rerun.
 
 The roadmap also needs reconciliation: Phase 2 still lists per-type rates and
 negative-binomial dispersion as pending implementation, while later research

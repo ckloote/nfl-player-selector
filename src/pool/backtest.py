@@ -31,7 +31,7 @@ from statistics import pstdev
 import numpy as np
 import pandas as pd
 
-from . import config, projections
+from . import config, projections, scoring
 from .optimizer import FORBIDDEN, build_matrix, plan_slot, solve
 
 # Tunables that only affect the assignment, not the projection frame. Changing
@@ -129,21 +129,29 @@ class Summary:
 
 # --- inputs -----------------------------------------------------------------
 def actual_tds(conn: sqlite3.Connection, season: int) -> dict[tuple[int, str], float]:
-    """(week, player_id) -> touchdowns thrown or scored. Missing means zero."""
-    rows = conn.execute(
-        "SELECT week, player_id, pass_td + rush_td + rec_td FROM player_weeks WHERE season = ?",
-        (season,),
-    ).fetchall()
-    return {(int(w), pid): float(td) for w, pid, td in rows}
+    """Complete weeks only; callers validate weeks before interpreting missing as zero."""
+    weeks = scored_weeks(conn, season)
+    totals = scoring.touchdown_totals(conn, season)
+    out = {
+        (int(w), pid): 0.0
+        for w, pid in conn.execute(
+            "SELECT week, player_id FROM player_weeks WHERE season = ?", (season,)
+        )
+        if w in weeks
+    }
+    out.update(
+        {
+            (int(r.week), r.player_id): float(r.pool_td)
+            for r in totals.itertuples()
+            if r.week in weeks
+        }
+    )
+    return out
 
 
 def scored_weeks(conn: sqlite3.Connection, season: int) -> list[int]:
-    """Scheduled REG weeks that actually have results to score against."""
-    played = {
-        int(r[0])
-        for r in conn.execute("SELECT DISTINCT week FROM player_weeks WHERE season = ?", (season,))
-    }
-    return [w for w in projections.available_weeks(conn, season) if w in played]
+    """Only weeks with complete scoring coverage for every scheduled game."""
+    return scoring.complete_weeks(conn, season)
 
 
 def weekly_projections(
@@ -166,6 +174,7 @@ def weekly_projections(
     shipped one on identical frozen data is the whole point of the harness — see
     the experiment branches referenced in `docs/BACKTEST.md`.
     """
+    scoring.require_complete(conn, season - 1, projections.available_weeks(conn, season - 1))
     build = projections.build_projections if builder is None else builder
     frames: dict[int, pd.DataFrame] = {}
     for week in weeks:
@@ -281,12 +290,8 @@ def hindsight(
     zero, since you could not have fielded them.
     """
     actuals = actual_tds(conn, season) if actuals is None else actuals
-    pw = pd.read_sql_query(
-        "SELECT week, player_id, player_name, position, team, "
-        "pass_td + rush_td + rec_td AS tds FROM player_weeks WHERE season = ?",
-        conn,
-        params=(season,),
-    )
+    scoring.require_complete(conn, season, list(weeks))
+    pw = scoring.pool_history(conn, season).rename(columns={"pool_td": "tds"})
     pw["slot"] = pw.position.map(config.slot_for_position)
     out = Replay(season=season, strategy="hindsight")
     weeks = list(weeks)
@@ -340,6 +345,7 @@ def run_season(
     """Replay one season under each named strategy, sharing frozen projections."""
     strategies = list(strategies)
     weeks = list(weeks) if weeks is not None else scored_weeks(conn, season)
+    scoring.require_complete(conn, season, weeks)
     actuals = actual_tds(conn, season)
     if frames is None:
         frames = weekly_projections(

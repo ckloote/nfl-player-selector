@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from . import config
+from . import config, state
 from .optimizer import SlotPlan, forced_total, plan_slot
 
 
@@ -95,9 +95,13 @@ def advise_slot(
     used_ids: set[str],
     locked: dict[int, str],
     n_alternatives: int | None = None,
+    now: datetime | None = None,
 ) -> SlotAdvice:
     n_alternatives = config.ALTERNATIVES_SHOWN if n_alternatives is None else n_alternatives
-    plan = plan_slot(proj, slot, week, used_ids, locked)
+    now = state.eastern_now(now)
+    plan = plan_slot(
+        proj, slot, week, used_ids, locked, unavailable=state.unavailable_cells(proj, week, now)
+    )
     if week in locked:
         name = proj.loc[proj.player_id == locked[week], "player_name"]
         return SlotAdvice(
@@ -106,6 +110,8 @@ def advise_slot(
 
     proj_week = proj[(proj.week == week) & (proj.slot == slot)]
     slate = main_slate_start(proj, week)
+    if week not in plan.weeks:
+        return SlotAdvice(slot, week, None, None, [], False, None, plan)
     col = plan.weeks.index(week)
     playable = [r for r in range(len(plan.players)) if plan.values[r, col] > -1e5]
     # Evaluate the plan's pick plus the top-N by this-week lambda.
@@ -137,9 +143,14 @@ def advise_slot(
 
 
 def advise_week(
-    proj: pd.DataFrame, week: int, used_ids: set[str], locked_by_slot: dict[str, dict[int, str]]
+    proj: pd.DataFrame,
+    week: int,
+    used_ids: set[str],
+    locked_by_slot: dict[str, dict[int, str]],
+    now: datetime | None = None,
 ) -> list[SlotAdvice]:
+    now = state.eastern_now(now)
     return [
-        advise_slot(proj, slot, week, used_ids, locked_by_slot.get(slot, {}))
+        advise_slot(proj, slot, week, used_ids, locked_by_slot.get(slot, {}), now=now)
         for slot in config.SLOTS
     ]

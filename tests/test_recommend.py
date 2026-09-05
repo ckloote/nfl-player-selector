@@ -1,8 +1,13 @@
+from datetime import datetime
+from functools import partial
+
 import pytest
 
 from pool import config
 from pool.recommend import advise_slot, main_slate_start
 from tests.conftest import proj_row
+
+advise_slot = partial(advise_slot, now=datetime(2026, 9, 1))
 
 THU = "2026-09-10T20:15"
 SUN = "2026-09-13T13:00"

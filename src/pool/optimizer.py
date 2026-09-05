@@ -44,6 +44,7 @@ def build_matrix(
     used_ids: set[str],
     discount: float | None = None,
     max_players: int | None = None,
+    unavailable: set[tuple[str, int]] | None = None,
 ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
     # Resolved here, not in the signature: a default argument binds at import,
     # so `config.override(FUTURE_DISCOUNT=...)` would never reach this and a
@@ -55,7 +56,17 @@ def build_matrix(
         empty = pd.DataFrame(columns=["player_id", "player_name", "team", "position"])
         return empty, np.zeros((0, len(weeks))), np.zeros((0, len(weeks)))
     # Rank candidates by their best available week (keeps matchup plays in the pool).
-    rank = sub.groupby("player_id").lam.max().sort_values(ascending=False)
+    feasible = sub
+    if unavailable:
+        blocked = pd.Series(
+            [
+                (pid, int(week)) in unavailable
+                for pid, week in zip(sub.player_id, sub.week, strict=True)
+            ],
+            index=sub.index,
+        )
+        feasible = sub[~blocked]
+    rank = feasible.groupby("player_id").lam.max().sort_values(ascending=False)
     keep = list(rank.index[:max_players])
     sub = sub[sub.player_id.isin(keep)]
     players = (
@@ -71,6 +82,10 @@ def build_matrix(
     disc = np.array([discount ** max(w - current_week, 0) for w in weeks])
     values = np.where(np.isnan(raw_arr), FORBIDDEN, raw_arr * disc)
     values = np.where(raw_arr <= 0, FORBIDDEN, values)  # ruled out this week
+    for r, pid in enumerate(keep):
+        for c, week in enumerate(weeks):
+            if unavailable and (pid, week) in unavailable:
+                values[r, c] = FORBIDDEN
     return players, values, raw_arr
 
 
@@ -102,7 +117,7 @@ def plan_slot(
     weeks are removed from the problem and those players count as used.
     """
     locked = locked or {}
-    last_week = last_week or int(proj.week.max())
+    last_week = last_week or (int(proj.week.max()) if len(proj) else current_week)
     weeks = [w for w in range(current_week, last_week + 1) if w not in locked]
     used = set(used_ids) | set(locked.values())
     players, values, raw = build_matrix(proj, slot, weeks, current_week, used, **kwargs)

@@ -23,11 +23,28 @@ described in that review.
 |---|---|
 | 0 — Scaffolding & data | **Done** (see the schema note under Phase 0) |
 | 1 — Projections + optimizer + CLI | **Done** (see notes under Phase 1) |
-| 2 — In-season learning | Partly started: the prior/current shrinkage blend and depth-chart roles shipped with Phase 1; per-type rates, dispersion, and `score` remain |
+| 2 — In-season learning | Partly started: the prior/current shrinkage blend and depth-chart roles shipped with Phase 1; `score` shipped in the weekly reliability follow-up; per-type rates and dispersion remain research proposals |
 | 3 — Leaderboard-aware strategy | Not started |
 | 4 — Validation & polish | Backtesting harness **done**; projection benchmark and calibration report **done** (see Phase 4); the optional niceties remain |
 
 ---
+
+## Weekly reliability follow-up — implemented
+
+The review's first recommended step is complete (F01, F05, F09): deadline
+eligibility, atomic validated historical recording, complete play-by-play TD
+credits and game coverage, local `pool score` with optional refresh, per-feed
+UTC import status, cache bypass and failure preservation, and configurable
+freshness warnings. See [README.md](../README.md#weekly-workflow) for the workflow.
+The database uses versioned transactional migrations; old scoring history stays
+unverified until refreshed. Mocked integration tests cover the full workflow,
+and a temporary historical import verified all 272 regular-season games in 2025.
+
+All published benchmark results use the previous offensive-only scoring definition
+until separately rerun. Evaluation repairs, calibration, model tuning, and
+leaderboard strategy are subsequent work. The phase notes below retain the
+original delivery/research history; old timing and coverage measurements are not
+measurements of this follow-up.
 
 ## Phase 0 — Scaffolding & data foundation
 
@@ -109,8 +126,8 @@ described in that review.
   surfaced in the CLI.
 - Injury-status ingestion into availability; weekly `refresh` fully automates
   the data → projection pipeline.
-- Scoring: `pool score --week N` pulls actual TDs for my picks and updates my
-  running total.
+- Scoring: **shipped in the weekly reliability follow-up**. `pool score --week N`
+  reads local complete game results and updates pick totals; `--refresh` imports first.
 - **Done when:** projections demonstrably shift with in-season data (test with
   synthetic updates), and weekly workflow is refresh → recommend → record →
   score with no manual data edits.

@@ -8,26 +8,54 @@ Transform functions are pure and unit-tested. `refresh` wires them together.
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 
 import pandas as pd
 
-from . import config, db
+from . import config, db, freshness, scoring, state
 
 NFLVERSE_REPO = "nflverse-data"
 
 
 # --- fetch ------------------------------------------------------------------
-def _download(path: str) -> pd.DataFrame | None:
+def _download(path: str, columns: set[str] | None = None) -> pd.DataFrame | None:
     """Download a parquet release asset; None if it doesn't exist (404)."""
     from nflreadpy.downloader import get_downloader
 
     try:
-        return get_downloader().download(NFLVERSE_REPO, path).to_pandas()
+        downloader = get_downloader()
+        stamps = []
+
+        def capture(response, *args, **kwargs):
+            stamps.append(response.headers.get("Last-Modified"))
+
+        downloader.session.hooks.setdefault("response", []).append(capture)
+        try:
+            frame = downloader.download(NFLVERSE_REPO, path)
+            if columns is not None:
+                frame = frame.select([c for c in frame.columns if c in columns])
+            out = frame.to_pandas()
+            out.attrs["source_timestamp"] = stamps[-1] if stamps else None
+            return out
+        finally:
+            downloader.session.hooks["response"].remove(capture)
     except Exception as exc:  # nflreadpy wraps HTTP errors in ConnectionError
         if "404" in str(exc):
             return None
         raise
+
+
+def fetch_touchdowns(season: int) -> pd.DataFrame | None:
+    columns = scoring.PBP_REQUIRED | {
+        "no_play",
+        "game_end",
+        "td_team",
+        "td_player_name",
+        "passer_player_name",
+        "posteam",
+    }
+    return _download(f"pbp/play_by_play_{season}", columns)
 
 
 def fetch_player_stats(season: int) -> pd.DataFrame | None:
@@ -35,9 +63,10 @@ def fetch_player_stats(season: int) -> pd.DataFrame | None:
 
 
 def fetch_schedules() -> pd.DataFrame:
-    import nflreadpy as nfl
-
-    return nfl.load_schedules().to_pandas()
+    raw = _download("schedules/games")
+    if raw is None:
+        raise FileNotFoundError("schedule source returned 404")
+    return raw
 
 
 def fetch_weekly_rosters(season: int) -> pd.DataFrame | None:
@@ -59,7 +88,8 @@ def fetch_injuries(season: int) -> pd.DataFrame | None:
 # --- transform --------------------------------------------------------------
 def transform_schedule(raw: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
     df = raw[raw["season"].isin(seasons)].copy()
-    time = df["gametime"].fillna("13:00")
+    df["kickoff_known"] = df["gametime"].fillna("").str.fullmatch(r"\d{2}:\d{2}").astype(int)
+    time = df["gametime"].where(df.kickoff_known.eq(1), "13:00")
     df["kickoff"] = pd.to_datetime(df["gameday"] + " " + time).dt.strftime("%Y-%m-%dT%H:%M")
     out = df[
         [
@@ -68,6 +98,7 @@ def transform_schedule(raw: pd.DataFrame, seasons: list[int]) -> pd.DataFrame:
             "week",
             "game_type",
             "kickoff",
+            "kickoff_known",
             "weekday",
             "home_team",
             "away_team",
@@ -93,6 +124,7 @@ def transform_player_stats(raw: pd.DataFrame) -> pd.DataFrame:
             "position": df["position"],
             "team": df["team"],
             "opponent": df["opponent_team"],
+            "game_id": df.get("game_id"),
             "pass_td": df["passing_tds"].fillna(0).astype(int),
             "rush_td": df["rushing_tds"].fillna(0).astype(int),
             "rec_td": df["receiving_tds"].fillna(0).astype(int),
@@ -115,7 +147,7 @@ def transform_rosters(raw: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame(
         {
             "season": df["season"],
-            "week": df["week"],
+            "week": df["week"] if "week" in df else 1,
             "player_id": df["gsis_id"],
             "player_name": df["full_name"],
             "position": df["position"],
@@ -229,61 +261,130 @@ def _depth_from_weeks(raw: pd.DataFrame, season: int, max_week: int | None = Non
 
 
 # --- refresh ----------------------------------------------------------------
-def refresh(conn: sqlite3.Connection, season: int, log=print) -> dict[str, int]:
-    """Import prior-season and current-season data. Idempotent."""
-    prior = season - 1
-    counts: dict[str, int] = {}
+class RefreshResult(dict):
+    """Successful row counts plus independent failed/unpublished feed outcomes."""
 
-    sched = transform_schedule(fetch_schedules(), [prior, season])
-    for s in (prior, season):
-        counts[f"games_{s}"] = db.replace_season(conn, "games", s, sched[sched.season == s])
+    def __init__(self):
+        super().__init__()
+        self.failures: list[str] = []
 
-    for s in (prior, season):
-        raw = fetch_player_stats(s)
-        if raw is None:
-            log(f"  player stats {s}: not published yet")
-            counts[f"player_weeks_{s}"] = db.replace_season(
-                conn, "player_weeks", s, _empty("player_weeks", conn)
+
+@contextmanager
+def uncached_downloads():
+    from nflreadpy.config import CacheMode, get_config, update_config
+
+    previous = get_config().cache_mode
+    update_config(cache_mode=CacheMode.OFF)
+    try:
+        yield
+    finally:
+        update_config(cache_mode=previous)
+
+
+def _unpublished(conn, season: int, feed: str) -> bool:
+    if feed not in ("player_stats", "touchdowns", "injuries"):
+        return False
+    first = conn.execute(
+        "SELECT MIN(kickoff) FROM games WHERE season = ? AND game_type = 'REG'", (season,)
+    ).fetchone()[0]
+    return bool(first and state.eastern_now() < datetime.fromisoformat(first))
+
+
+def refresh(conn: sqlite3.Connection, season: int, log=print) -> RefreshResult:
+    """Try independent feeds uncached; retain the last dataset on fetch/parse failures."""
+    result = RefreshResult()
+
+    def attempt(s, feed, fetch, transform=None, table=None, stamp=None):
+        stamp = stamp or freshness.utc_now().isoformat(timespec="seconds")
+        freshness.record_status(conn, s, feed, "attempting", stamp)
+        try:
+            raw = fetch()
+            if raw is None:
+                expected = _unpublished(conn, s, feed)
+                outcome = "unpublished" if expected else "missing"
+                detail = "not published yet" if expected else "source returned 404 / missing file"
+                freshness.record_status(conn, s, feed, outcome, stamp, detail)
+                log(f"  {feed} {s}: {detail}; previous data retained")
+                if not expected:
+                    result.failures.append(f"{feed} {s}: {detail}")
+                return
+            if feed == "touchdowns":
+                count = scoring.import_touchdowns(conn, s, raw)
+            else:
+                frame = transform(raw)
+                if frame.empty and feed != "injuries":
+                    raise ValueError("no matching rows in feed")
+                if "season" in frame and not frame.season.eq(s).all():
+                    raise ValueError("feed contains a different season")
+                count = db.replace_season(conn, table, s, frame)
+                with conn:
+                    db.backfill_game_ids(conn)
+            result[f"{table or 'touchdown_credits'}_{s}"] = count
+            freshness.record_status(
+                conn, s, feed, "success", stamp, source_timestamp=raw.attrs.get("source_timestamp")
             )
-            continue
-        counts[f"player_weeks_{s}"] = db.replace_season(
-            conn, "player_weeks", s, transform_player_stats(raw)
-        )
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+            freshness.record_status(conn, s, feed, "failed", stamp, detail)
+            result.failures.append(f"{feed} {s}: {detail}")
+            log(f"  {feed} {s}: FAILED: {detail}; previous data retained")
 
-    for s in (prior, season):
+    def roster(s):
         raw = fetch_weekly_rosters(s)
         if raw is None:
+            if conn.execute("SELECT 1 FROM rosters WHERE season = ? LIMIT 1", (s,)).fetchone():
+                log(f"  rosters {s}: weekly file missing; retaining imported roster history")
+                return None
             raw = fetch_season_roster(s)
-        if raw is None:
-            log(f"  rosters {s}: not available")
-            continue
-        counts[f"rosters_{s}"] = db.replace_season(conn, "rosters", s, transform_rosters(raw))
+            if raw is not None:
+                log(f"  rosters {s}: using season roster fallback")
+        return raw
 
-    for s in (prior, season):
-        raw = fetch_injuries(s)
-        if raw is None:
-            log(f"  injuries {s}: not published yet")
-            continue
-        counts[f"injuries_{s}"] = db.replace_season(conn, "injuries", s, transform_injuries(raw))
+    with uncached_downloads():
+        # Fetch once, but record schedule outcomes for each season independently.
+        schedule_stamp = freshness.utc_now().isoformat(timespec="seconds")
+        for s in (season - 1, season):
+            freshness.record_status(conn, s, "schedule", "attempting", schedule_stamp)
+        try:
+            schedule = fetch_schedules()
+            schedule_error = None
+        except Exception as exc:
+            schedule, schedule_error = None, exc
 
-    raw = fetch_depth_charts(season)
-    if raw is None:
-        log(f"  depth charts {season}: not available")
-    else:
-        reg = sched[(sched.season == season) & (sched.game_type == "REG")]
-        max_week = int(reg.week.max()) if len(reg) else None
-        counts[f"depth_charts_{season}"] = db.replace_season(
-            conn, "depth_charts", season, transform_depth_charts(raw, season, max_week)
-        )
+        def schedules():
+            if schedule_error:
+                raise schedule_error
+            return schedule
 
-    stamp = datetime.now().isoformat(timespec="seconds")
-    # Per-season as well as global: backfilling an old season for a backtest
-    # must not make the live season's pick sheet claim it was just refreshed.
-    db.set_meta(conn, f"last_refresh_{season}", stamp)
-    db.set_meta(conn, "last_refresh", stamp)
-    return counts
-
-
-def _empty(table: str, conn: sqlite3.Connection) -> pd.DataFrame:
-    cols = [c[1] for c in conn.execute(f"PRAGMA table_info({table})")]
-    return pd.DataFrame(columns=cols)
+        for s in (season - 1, season):
+            attempt(
+                s,
+                "schedule",
+                schedules,
+                lambda raw, s=s: transform_schedule(raw, [s]),
+                "games",
+                stamp=schedule_stamp,
+            )
+        for s in (season - 1, season):
+            attempt(
+                s,
+                "player_stats",
+                lambda s=s: fetch_player_stats(s),
+                transform_player_stats,
+                "player_weeks",
+            )
+            attempt(s, "rosters", lambda s=s: roster(s), transform_rosters, "rosters")
+            attempt(s, "injuries", lambda s=s: fetch_injuries(s), transform_injuries, "injuries")
+            weeks = conn.execute(
+                "SELECT MAX(week) FROM games WHERE season = ? AND game_type = 'REG'", (s,)
+            ).fetchone()[0]
+            attempt(
+                s,
+                "depth_charts",
+                lambda s=s: fetch_depth_charts(s),
+                lambda raw, s=s, weeks=weeks: transform_depth_charts(raw, s, weeks),
+                "depth_charts",
+            )
+            attempt(s, "touchdowns", lambda s=s: fetch_touchdowns(s))
+    log("Refresh partially succeeded." if result.failures else "Refresh complete.")
+    return result

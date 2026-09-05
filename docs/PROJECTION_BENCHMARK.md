@@ -1,5 +1,12 @@
 # Projection benchmark: how good is the forecast, and where does it come from?
 
+> Historical report: all published numbers below use the previous scoring
+> definition (passing + rushing + receiving TDs). They have not been rerun with
+> the complete throwing/scoring credits now used by the application. Refresh
+> each prior/replay season before new comparisons. The evaluation limitations
+> in [REVIEW.md](REVIEW.md) remain open; this workflow change makes no model
+> performance claim.
+
 `BACKTEST.md` scores 54 picks a season and gets one number out. That resolves
 effects larger than about ±3 TD/season and nothing smaller, which is every model
 refinement anyone has tried. The same frozen projections contain **7,600 player-week

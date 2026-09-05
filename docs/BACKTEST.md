@@ -1,5 +1,12 @@
 # Backtest: does the optimizer actually work?
 
+> Historical report: all published numbers below use the previous scoring
+> definition (passing + rushing + receiving TDs). They have not been rerun with
+> the complete throwing/scoring credits now used by the application. Refresh
+> each prior/replay season before new comparisons. The evaluation limitations
+> in [REVIEW.md](REVIEW.md) remain open; this workflow change makes no model
+> performance claim.
+
 The tool has always been able to produce a confident pick sheet. This is the
 harness that checks whether those picks are any good, by replaying finished
 seasons with data frozen at each pick deadline and scoring the result against

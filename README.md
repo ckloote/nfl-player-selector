@@ -17,9 +17,14 @@ appetite change with your position on the leaderboard?
 
 ## Status
 
-The [September 4 review](docs/REVIEW.md) identified open deadline-eligibility and
-evaluation issues. Its findings qualify the research claims below and recommend
-fixing the weekly workflow and validation before prioritizing leaderboard strategy.
+The weekly reliability work from the [September 4 review](docs/REVIEW.md) is
+implemented: enforced deadlines, validated pick history, complete touchdown
+accounting, local scoring, and feed freshness reporting. Evaluation repairs,
+calibration changes, and leaderboard strategy remain later work.
+
+**Published benchmark numbers below and in both research reports use the previous
+passing/rushing/receiving scoring definition. They have not been rerun with
+complete touchdown accounting.**
 
 Phases 0 and 1 are implemented: data import, a matchup-adjusted projection
 model, the season-long assignment optimizer, and a CLI that gives weekly picks.
@@ -70,15 +75,66 @@ season is always used for the start-of-season prior.
 ## Weekly workflow
 
 ```bash
-uv run pool refresh             # latest stats, lines, rosters, depth charts, injuries
+uv run pool refresh             # latest feeds, including compact play-by-play scoring credits
 uv run pool recommend           # picks for every open slot this week
-uv run pool record --rb "Saquon Barkley"        # lock a slot (others stay open)
+uv run pool record --rb "Saquon Barkley"        # log a submitted pick
 uv run pool record --qb "Herbert" --flex "Goedert"
 uv run pool recommend           # re-optimizes the still-open slots
 uv run pool plan                # rest-of-season assignment
 uv run pool players --pos RB    # projection table for a slot
-uv run pool picks / uv run pool unrecord 3 QB
+uv run pool score --season 2026          # recompute all recorded picks from local data
+uv run pool score --week 3 --season 2026  # recompute one week, including corrections
+uv run pool score --week 3 --season 2026 --refresh  # refresh first
+uv run pool picks                       # scores, pending reasons, and subtotals
+uv run pool status --season 2026 --week 3 # feed attempts, coverage, freshness, fallbacks
+uv run pool unrecord 3 QB               # remove an incorrect entry
 ```
+
+Each invocation uses one Eastern decision time. A player becomes unavailable
+exactly 60 minutes before confirmed kickoff. Re-running after Thursday's lock
+re-solves the remaining choices while preserving recorded picks and future-week
+eligibility. Games with unconfirmed kickoff times are excluded from current-week
+advice; their future planning estimates remain visible. `players` identifies used,
+expired, unavailable, and unconfirmed players.
+
+`record` logs picks submitted elsewhere. Historical entries and corrections are
+allowed, with warnings for elapsed deadlines or apparent unavailability. Names
+are resolved against the requested season/week's stats and roster history,
+including inactive players. Every supplied slot is validated before one atomic
+write. Replacing a player clears the slot's score; re-recording the same player
+preserves it. Removing a pick removes its contribution to totals.
+
+Scoring counts every touchdown thrown or scored, including returns and recoveries.
+The importer uses nflverse's explicit scorer identifier and separately credits the
+passer on a credited passing touchdown, excluding negated plays and conversions.
+See the [official play-by-play field definitions](https://nflfastr.com/reference/fast_scraper.html).
+A game is complete only with an end-of-game marker, terminal scores matching the
+schedule, and resolved touchdown identities. A complete game with no credits for
+a pick scores **0**, including a player who did not play. Missing/incomplete feeds
+or unresolved games remain **pending**. Completed picks score independently;
+weekly and season subtotals are labeled incomplete while any picks remain pending.
+Stored scores survive missing results and appear as “last scored” while pending.
+If `score --refresh` partially fails, it retains existing scores, scores completed
+unscored picks from available local results, and exits nonzero. Use plain `score`
+to explicitly recompute existing scores from the retained local data.
+
+Explicit refreshes bypass nflreadpy's cache, attempt independent feeds, and retain
+the previous dataset on download, parsing, or missing-file failures. Partial
+failures exit nonzero; expected unpublished preseason results are informational.
+Advice continues with warnings when usable schedule and player history exist.
+`status`, `recommend`, and `plan` distinguish missing coverage/model fallbacks from
+fetch age. Default age limits are 1 hour for schedule/lines and 24 hours for stats,
+rosters, injuries, depth charts, and touchdown feeds. Configure these through
+`POOL_FRESHNESS_SCHEDULE_HOURS`, `POOL_FRESHNESS_PLAYER_STATS_HOURS`,
+`POOL_FRESHNESS_ROSTERS_HOURS`, `POOL_FRESHNESS_INJURIES_HOURS`,
+`POOL_FRESHNESS_DEPTH_CHARTS_HOURS`, and `POOL_FRESHNESS_TOUCHDOWNS_HOURS`.
+Completed historical seasons are exempt from age warnings.
+
+SQLite upgrades run transactionally on open, preserving imported history and
+picks. Legacy timestamps retain an unspecified-timezone label. New import metadata
+uses UTC; kickoff display remains Eastern. Existing databases lack complete TD
+coverage until refreshed. Live projections may use legacy offensive-TD estimates
+with a warning; finalized scoring and replay comparisons require complete coverage.
 
 ## Backtesting
 
@@ -124,7 +180,8 @@ depth-chart role multipliers, future discount, information premium).
 
 ```bash
 uv run pytest
-uv run ruff check src tests && uv run ruff format src tests
+uv run ruff check src tests
+uv run ruff format --check src tests
 ```
 
 `pytest` and `ruff` live in the `dev` dependency group, which `uv sync` installs

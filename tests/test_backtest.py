@@ -106,6 +106,30 @@ def _seed(conn, *, season_tds=None):
             " depth_chart_position) VALUES (?,?,?,?,?,?,?,?)",
             rosters,
         )
+    # This synthetic fixture explicitly supplies complete scoring results. Legacy
+    # databases in production must obtain these from the play-by-play importer.
+    with conn:
+        conn.execute("UPDATE games SET home_score = 21, away_score = 21, kickoff_known = 1")
+        db.backfill_game_ids(conn)
+        conn.execute(
+            "INSERT INTO game_results SELECT game_id, season, week, 1, 'complete', "
+            "home_score, away_score, '2026-09-01T00:00:00+00:00' FROM games"
+        )
+        credits = []
+        for i, r in enumerate(conn.execute("SELECT * FROM player_weeks")):
+            for j in range(r["pass_td"] + r["rush_td"] + r["rec_td"]):
+                credits.append(
+                    (
+                        r["game_id"],
+                        i * 100 + j,
+                        r["player_id"],
+                        "throwing" if r["position"] == "QB" else "scoring",
+                    )
+                )
+        conn.executemany(
+            "INSERT INTO touchdown_credits(game_id, play_id, player_id, kind) VALUES (?, ?, ?, ?)",
+            credits,
+        )
     return conn
 
 

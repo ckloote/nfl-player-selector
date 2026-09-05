@@ -27,6 +27,7 @@ def proj_row(
         opponent=opp,
         home=home,
         kickoff=kickoff,
+        kickoff_known=1,
         game_id=f"g{week}",
         base_rate=lam,
         def_mult=1.0,

@@ -12,9 +12,10 @@ def conn():
 
 
 def test_record_pick_rejects_reuse_and_wrong_slot(conn):
+    _load_two_weeks(conn)
     state.record_pick(conn, 2026, 1, "QB", "q1", "Josh Allen", "QB")
     with pytest.raises(state.PickError):
-        state.record_pick(conn, 2026, 5, "QB", "q1", "Josh Allen", "QB")
+        state.record_pick(conn, 2026, 2, "QB", "q1", "Josh Allen", "QB")
     with pytest.raises(state.PickError):
         state.record_pick(conn, 2026, 1, "RB", "q1", "Josh Allen", "QB")
     # re-recording the same slot/week replaces

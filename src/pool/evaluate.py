@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from . import backtest
+from . import backtest, scoring
 
 FORECAST_COLUMNS = [
     "model",
@@ -91,7 +91,10 @@ def played_pairs(conn: sqlite3.Connection, season: int) -> set[tuple[int, str]]:
     return {
         (int(w), p)
         for w, p in conn.execute(
-            "SELECT week, player_id FROM player_weeks WHERE season = ?", (season,)
+            "SELECT week, player_id FROM player_weeks WHERE season = ? "
+            "UNION SELECT g.week, t.player_id FROM touchdown_credits t "
+            "JOIN games g ON g.game_id = t.game_id WHERE g.season = ? AND g.game_type = 'REG'",
+            (season, season),
         )
     }
 
@@ -133,6 +136,7 @@ def forecasts(
     anyone actually makes.
     """
     weeks = list(weeks) if weeks is not None else backtest.scored_weeks(conn, season)
+    scoring.require_complete(conn, season, weeks)
     if frames is None:
         frames = backtest.weekly_projections(
             conn,

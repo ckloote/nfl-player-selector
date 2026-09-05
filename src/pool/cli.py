@@ -5,12 +5,13 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from . import backtest as bt
-from . import config, db, ingest, models, projections, state
+from . import config, db, freshness, ingest, models, projections, scoring, state
 from . import evaluate as ev
 from .optimizer import plan_slot
 from .recommend import Candidate, SlotAdvice, advise_week
@@ -38,31 +39,69 @@ def _conn(path: Path | None):
     return db.connect(path)
 
 
-def _week(conn, season: int, week: int | None) -> int:
-    return week if week is not None else state.current_week(conn, season)
+def _week(conn, season: int, week: int | None, now: datetime | None = None) -> int:
+    try:
+        wk = week if week is not None else state.current_week(conn, season, now)
+        return state.validate_week(conn, season, wk)
+    except state.PickError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
 
 
 def _projections(conn, season: int, wk: int):
-    """Projections from `wk` onward, or a message saying why there are none.
-
-    The week is checked against the loaded schedule first: an out-of-range week
-    still yields rows when it is *below* the season (everything is "onward"),
-    so emptiness alone doesn't identify the problem.
-    """
-    lo, hi = conn.execute(
-        "SELECT MIN(week), MAX(week) FROM games WHERE season = ? AND game_type = 'REG'", (season,)
-    ).fetchone()
-    if lo is None:
-        msg = f"No {season} schedule loaded; run `pool refresh` first."
-    elif not lo <= wk <= hi:
-        msg = f"Week {wk} is outside the {season} season (weeks {lo}-{hi})."
-    else:
-        proj = projections.projections_for(conn, season, from_week=wk)
-        if len(proj):
-            return proj
-        msg = f"No projections for week {wk}; run `pool refresh` first."
-    console.print(f"[red]{msg}[/red]")
+    _week(conn, season, wk)
+    history = conn.execute(
+        "SELECT COUNT(*) FROM player_weeks WHERE season IN (?, ?)", (season - 1, season)
+    ).fetchone()[0]
+    if not history:
+        console.print(
+            f"[red]No projections for week {wk}: player history is missing; "
+            f"run `pool refresh --season {season}` first.[/red]"
+        )
+        raise typer.Exit(1)
+    proj = projections.projections_for(conn, season, from_week=wk)
+    if len(proj):
+        return proj
+    console.print(f"[red]No projections for week {wk}; check rosters and run `pool refresh`.[/red]")
     raise typer.Exit(1)
+
+
+def _status(conn, season: int, week: int, now: datetime, detail: bool = False):
+    rows, warnings = freshness.report(conn, season, week, now)
+    if detail:
+        t = Table(
+            "Feed",
+            "Outcome",
+            "Last attempt (UTC)",
+            "Last success (UTC)",
+            "Age",
+            "Coverage",
+            "Source timestamp",
+        )
+        for row in rows:
+            cov = row["coverage"]
+            coverage = f"{cov['rows']} rows"
+            if "weeks" in cov:
+                coverage += f"; weeks {','.join(map(str, cov['weeks'])) or 'none'}"
+            if "complete_games" in cov:
+                coverage += f"; {cov['complete_games']}/{cov['scheduled_games']} games complete"
+            if cov.get("as_of"):
+                coverage += f"; as of {cov['as_of']}"
+            t.add_row(
+                row["feed"],
+                row["outcome"],
+                row["last_attempt"] or "unknown",
+                row["last_success"] or "unknown",
+                row["age"],
+                coverage,
+                row["source_timestamp"] or "unavailable",
+            )
+        console.print(t)
+    else:
+        summary = "; ".join(f"{r['feed']}: {r['age']} ({r['outcome']})" for r in rows)
+        console.print(f"[dim]Local data — {summary}[/dim]")
+    for warning in warnings:
+        console.print(f"[yellow]Warning: {warning}[/yellow]")
 
 
 def _fmt_dt(dt: datetime) -> str:
@@ -78,18 +117,26 @@ def refresh(season: int = SeasonOpt, db_path: Path | None = DbOpt):
     counts = ingest.refresh(conn, season, log=console.print)
     for k, v in counts.items():
         console.print(f"  {k}: {v} rows")
+    if counts.failures:
+        raise typer.Exit(1)
 
 
 @app.command()
 def recommend(week: int | None = WeekOpt, season: int = SeasonOpt, db_path: Path | None = DbOpt):
     """Recommend picks for every open slot this week."""
     conn = _conn(db_path)
-    wk = _week(conn, season, week)
+    now = state.eastern_now()
+    wk = _week(conn, season, week, now)
     proj = _projections(conn, season, wk)
-    advice = advise_week(proj, wk, state.used_ids(conn, season), state.locked_by_slot(conn, season))
-    stamp = db.get_meta(conn, f"last_refresh_{season}") or db.get_meta(conn, "last_refresh")
-    console.print(f"[bold]Week {wk} — {season}[/bold]  (data refreshed {stamp})")
+    advice = advise_week(
+        proj, wk, state.used_ids(conn, season), state.locked_by_slot(conn, season), now=now
+    )
+    console.print(f"[bold]Week {wk} — {season}[/bold]")
+    _status(conn, season, wk, now)
+    recorded_names = state.picks(conn, season).set_index("player_id").player_name.to_dict()
     for a in advice:
+        if a.locked_player in recorded_names:
+            a.locked_player = recorded_names[a.locked_player]
         _render_slot(a)
 
 
@@ -100,6 +147,10 @@ def _render_slot(a: SlotAdvice) -> None:
         return
     if a.recommended is None:
         console.print("  [red]No playable candidates.[/red]")
+        for week in a.plan.weeks:
+            pick = a.plan.pick_for(week)
+            if week > a.week and pick is not None:
+                console.print(f"  Future plan: week {week} — {pick.player_name}")
         return
     r = a.recommended
     console.print(
@@ -159,19 +210,20 @@ def record(
     season: int = SeasonOpt,
     db_path: Path | None = DbOpt,
 ):
-    """Lock one or more slots for a week. Slots can be recorded separately."""
+    """Log submitted picks, including historical entries and corrections."""
     conn = _conn(db_path)
-    wk = _week(conn, season, week)
-    frames = projections.load_frames(conn, season)
-    pool = projections.player_pool(frames.rosters, frames.pw_prior, frames.pw_cur)
+    now = state.eastern_now()
+    wk = _week(conn, season, week, now)
+    pool = state.historical_pool(conn, season, wk)
     given = {"QB": qb, "RB": rb, "FLEX": flex}
     if not any(given.values()):
         console.print("[red]Give at least one of --qb, --rb, --flex.[/red]")
         raise typer.Exit(1)
+    entries = []
     for slot, name in given.items():
         if not name:
             continue
-        matches = state.find_player(pool, name, config.SLOTS[slot])
+        matches = state.find_player(pool, name)
         if len(matches) != 1:
             console.print(
                 f"[red]{slot}: {'no match' if not len(matches) else 'ambiguous'} for {name!r}[/red]"
@@ -180,19 +232,36 @@ def record(
                 console.print(f"    {m.player_name} ({m.team} {m.position})")
             raise typer.Exit(1)
         m = matches.iloc[0]
-        try:
-            state.record_pick(conn, season, wk, slot, m.player_id, m.player_name, m.position)
-        except state.PickError as e:
-            console.print(f"[red]{slot}: {e}[/red]")
-            raise typer.Exit(1) from e
-        console.print(f"[green]Week {wk} {slot}: {m.player_name} ({m.team})[/green]")
+        entries.append(
+            dict(
+                slot=slot,
+                player_id=m.player_id,
+                player_name=m.player_name,
+                position=m.position,
+                team=m.team,
+            )
+        )
+    try:
+        warnings = state.record_picks(conn, season, wk, entries, now=now)
+    except state.PickError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from e
+    for warning in warnings:
+        console.print(f"[yellow]Warning: {warning}[/yellow]")
+    for e in entries:
+        console.print(f"[green]Week {wk} {e['slot']}: {e['player_name']} ({e['team']})[/green]")
 
 
 @app.command()
 def unrecord(week: int, slot: str, season: int = SeasonOpt, db_path: Path | None = DbOpt):
     """Remove a recorded pick (slot: QB, RB, FLEX)."""
     conn = _conn(db_path)
-    ok = state.remove_pick(conn, season, week, slot.upper())
+    _week(conn, season, week)
+    try:
+        ok = state.remove_pick(conn, season, week, slot.upper())
+    except state.PickError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from e
     console.print("removed" if ok else "[yellow]nothing to remove[/yellow]")
 
 
@@ -200,27 +269,113 @@ def unrecord(week: int, slot: str, season: int = SeasonOpt, db_path: Path | None
 def picks(season: int = SeasonOpt, db_path: Path | None = DbOpt):
     """Show recorded picks."""
     conn = _conn(db_path)
-    df = state.picks(conn, season)
-    t = Table("Week", "Slot", "Player", "TDs", "Recorded")
-    for _, r in df.iterrows():
-        t.add_row(
-            str(r.week), r.slot, r.player_name, "" if r.tds is None else str(r.tds), r.recorded_at
-        )
+    _render_scores(conn, season)
+
+
+def _pick_results(
+    conn,
+    season: int,
+    week: int | None = None,
+    recompute: bool = False,
+    preserve_existing: bool = False,
+):
+    try:
+        return scoring.pick_results(conn, season, week, recompute, preserve_existing)
+    except state.PickError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from e
+
+
+def _render_scores(conn, season: int, week: int | None = None):
+    all_picks = _pick_results(conn, season)
+    shown = all_picks if week is None else all_picks[all_picks.week == week]
+    t = Table("Week", "Slot", "Player", "TDs / pending reason", "Recorded")
+    for r in shown.itertuples():
+        value = str(int(r.tds)) if pd.notna(r.tds) else ""
+        if r.pending_reason:
+            value = f"pending: {r.pending_reason}" + (f" (last scored {value})" if value else "")
+        recorded = r.recorded_at
+        if "+" not in recorded and not recorded.endswith("Z"):
+            recorded += " (legacy; timezone unknown)"
+        t.add_row(str(r.week), r.slot, r.player_name, value, recorded)
     console.print(t)
+
+    def subtotal(label, frame):
+        pending = int(frame.pending_reason.ne("").sum())
+        suffix = " (incomplete)" if pending else ""
+        console.print(f"{label} subtotal: {int(frame.tds.sum())} TDs{suffix}; {pending} pending")
+
+    for wk, rows in shown.groupby("week"):
+        subtotal(f"Week {wk}", rows)
+    subtotal(f"Season {season}", all_picks)
+
+
+@app.command()
+def score(
+    week: int | None = typer.Option(None, "--week", "-w", help="Week (default: all picks)"),
+    season: int = SeasonOpt,
+    refresh: bool = typer.Option(False, "--refresh", help="Refresh all feeds before scoring"),
+    db_path: Path | None = DbOpt,
+):
+    """Recompute recorded picks with complete game results; defaults to local data."""
+    conn = _conn(db_path)
+    if week is not None:
+        _week(conn, season, week)
+    failed = False
+    if refresh:
+        result = ingest.refresh(conn, season, log=console.print)
+        failed = bool(result.failures)
+    if failed:
+        console.print(
+            "[yellow]Refresh partially failed; stored scores retained. "
+            "Scoring completed unscored picks from available local results. "
+            "Run pool score without --refresh to recompute existing scores.[/yellow]"
+        )
+    _pick_results(conn, season, week, recompute=True, preserve_existing=failed)
+    _render_scores(conn, season, week)
+    if failed:
+        raise typer.Exit(1)
+
+
+@app.command()
+def status(week: int | None = WeekOpt, season: int = SeasonOpt, db_path: Path | None = DbOpt):
+    """Show feed attempts, successful imports, coverage and model fallbacks."""
+    conn = _conn(db_path)
+    now = state.eastern_now()
+    # Status remains useful even with no schedule (unlike advice or recording).
+    has_schedule = projections.available_weeks(conn, season)
+    wk = _week(conn, season, week, now) if has_schedule else (week if week is not None else 1)
+    console.print(f"[bold]Data status — {season}, week {wk}[/bold]")
+    _status(conn, season, wk, now, detail=True)
 
 
 @app.command()
 def plan(week: int | None = WeekOpt, season: int = SeasonOpt, db_path: Path | None = DbOpt):
     """Show the current rest-of-season assignment per slot."""
     conn = _conn(db_path)
-    wk = _week(conn, season, week)
+    now = state.eastern_now()
+    wk = _week(conn, season, week, now)
     proj = _projections(conn, season, wk)
     used = state.used_ids(conn, season)
     locked = state.locked_by_slot(conn, season)
-    names = proj.drop_duplicates("player_id").set_index("player_id").player_name
-    plans = {slot: plan_slot(proj, slot, wk, used, locked[slot]) for slot in config.SLOTS}
+    names = proj.drop_duplicates("player_id").set_index("player_id").player_name.to_dict()
+    names.update(state.picks(conn, season).set_index("player_id").player_name.to_dict())
+    _status(conn, season, wk, now)
+    unavailable = state.unavailable_cells(proj, wk, now)
+    plans = {
+        slot: plan_slot(
+            proj,
+            slot,
+            wk,
+            used,
+            locked[slot],
+            unavailable=unavailable,
+            last_week=max(projections.available_weeks(conn, season)),
+        )
+        for slot in config.SLOTS
+    }
     t = Table("Week", *config.SLOTS, title=f"Remaining-season plan from week {wk}")
-    for w in range(wk, int(proj.week.max()) + 1):
+    for w in [w for w in projections.available_weeks(conn, season) if w >= wk]:
         cells = []
         for slot, p in plans.items():
             if w in locked[slot]:
@@ -245,8 +400,13 @@ def players(
 ):
     """Projected TDs for a slot in a given week."""
     conn = _conn(db_path)
-    wk = _week(conn, season, week)
+    now = state.eastern_now()
+    wk = _week(conn, season, week, now)
     proj = _projections(conn, season, wk)
+    if pos.upper() not in config.SLOTS:
+        console.print("[red]Position must be QB, RB, or FLEX.[/red]")
+        raise typer.Exit(1)
+    used = state.used_ids(conn, season)
     sub = proj[(proj.week == wk) & (proj.slot == pos.upper())].head(top)
     t = Table(
         "Player",
@@ -259,6 +419,7 @@ def players(
         "Role",
         "Avail",
         "xTD",
+        "Status",
         title=f"{pos.upper()} week {wk}",
     )
     for _, r in sub.iterrows():
@@ -266,13 +427,14 @@ def players(
             r.player_name,
             r.team,
             ("vs " if r.home else "@ ") + r.opponent,
-            _fmt_dt(datetime.fromisoformat(r.kickoff)),
+            _fmt_dt(datetime.fromisoformat(r.kickoff)) if r.kickoff_known else "unconfirmed",
             f"{r.base_rate:.2f}",
             f"{r.def_mult:.2f}",
             f"{r.vegas_mult:.2f}",
             f"{r.role_mult:.2f}",
             f"{r.avail_mult:.2f}",
             f"{r.lam:.2f}",
+            state.availability(r, wk, now, used),
         )
     console.print(t)
 
@@ -326,9 +488,18 @@ def _backtest_ready(conn, season: int) -> list[int]:
             f"prior. Run `pool refresh --season {season}`, which imports both."
         )
     elif not weeks:
-        msg = f"No {season} results loaded; there is nothing to score against."
+        msg = (
+            f"No complete {season} touchdown coverage; run `pool refresh --season {season}` "
+            "before replay comparisons."
+        )
     else:
-        return weeks
+        try:
+            scoring.require_complete(
+                conn, season - 1, projections.available_weeks(conn, season - 1)
+            )
+            return weeks
+        except ValueError as exc:
+            msg = str(exc)
     console.print(f"[red]{msg}[/red]")
     raise typer.Exit(1)
 

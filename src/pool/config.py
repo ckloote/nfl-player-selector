@@ -119,3 +119,17 @@ def override(**values: object):
         yield
     finally:
         globals().update(previous)
+
+
+# Maximum live-feed ages in hours; historical completed seasons are exempt.
+FRESHNESS_HOURS = {
+    feed: float(os.environ.get(f"POOL_FRESHNESS_{feed.upper()}_HOURS", default))
+    for feed, default in {
+        "schedule": "1",
+        "player_stats": "24",
+        "rosters": "24",
+        "injuries": "24",
+        "depth_charts": "24",
+        "touchdowns": "24",
+    }.items()
+}

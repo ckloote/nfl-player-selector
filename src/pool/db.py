@@ -105,6 +105,7 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(str(target))
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    migrate(conn)
     return conn
 
 
@@ -147,3 +148,74 @@ def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
 def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
     row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
     return row[0] if row else None
+
+
+# Migrations deliberately do not infer scoring completeness from legacy totals.
+MIGRATIONS = {
+    1: [
+        "ALTER TABLE games ADD COLUMN kickoff_known INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE player_weeks ADD COLUMN game_id TEXT",
+        "ALTER TABLE my_picks ADD COLUMN game_id TEXT",
+        """CREATE TABLE touchdown_credits (
+            game_id TEXT NOT NULL, play_id INTEGER NOT NULL, player_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('throwing', 'scoring')),
+            player_name TEXT, team TEXT,
+            PRIMARY KEY(game_id, play_id, player_id, kind))""",
+        """CREATE TABLE game_results (
+            game_id TEXT PRIMARY KEY, season INTEGER NOT NULL, week INTEGER NOT NULL,
+            complete INTEGER NOT NULL, reason TEXT NOT NULL,
+            home_score INTEGER, away_score INTEGER, imported_at TEXT NOT NULL)""",
+        """CREATE TABLE feed_status (
+            season INTEGER NOT NULL, feed TEXT NOT NULL,
+            last_attempt TEXT NOT NULL, last_success TEXT, outcome TEXT NOT NULL,
+            coverage TEXT, source_timestamp TEXT, failure TEXT,
+            PRIMARY KEY(season, feed))""",
+    ],
+}
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    for target, statements in MIGRATIONS.items():
+        if version < target:
+            with conn:
+                conn.execute("BEGIN")
+                for statement in statements:
+                    conn.execute(statement)
+                backfill_game_ids(conn)
+                conn.execute(f"PRAGMA user_version = {target}")
+
+
+def resolve_game(conn: sqlite3.Connection, season: int, week: int, team: str | None):
+    rows = conn.execute(
+        "SELECT * FROM games WHERE season = ? AND week = ? AND game_type = 'REG' "
+        "AND (home_team = ? OR away_team = ?)",
+        (season, week, team, team),
+    ).fetchall()
+    return rows[0] if len(rows) == 1 else None
+
+
+def backfill_game_ids(conn: sqlite3.Connection) -> None:
+    """Associate only unique regular-season matches; never guess a team/game."""
+    conn.execute("""UPDATE player_weeks SET game_id = (
+        SELECT g.game_id FROM games g WHERE g.season = player_weeks.season
+        AND g.week = player_weeks.week AND g.game_type = 'REG'
+        AND player_weeks.team IN (g.home_team, g.away_team))
+        WHERE game_id IS NULL AND 1 = (
+        SELECT COUNT(*) FROM games g WHERE g.season = player_weeks.season
+        AND g.week = player_weeks.week AND g.game_type = 'REG'
+        AND player_weeks.team IN (g.home_team, g.away_team))""")
+    conn.execute("""UPDATE my_picks SET game_id = (
+        SELECT game_id FROM player_weeks p WHERE p.season = my_picks.season
+        AND p.week = my_picks.week AND p.player_id = my_picks.player_id)
+        WHERE game_id IS NULL""")
+    conn.execute("""UPDATE my_picks SET game_id = (
+        SELECT g.game_id FROM rosters r JOIN games g ON g.season = r.season
+        AND g.week = r.week AND r.team IN (g.home_team, g.away_team)
+        AND g.game_type = 'REG' WHERE r.season = my_picks.season
+        AND r.week = my_picks.week AND r.player_id = my_picks.player_id)
+        WHERE game_id IS NULL AND 1 = (
+        SELECT COUNT(*) FROM rosters r JOIN games g ON g.season = r.season
+        AND g.week = r.week AND r.team IN (g.home_team, g.away_team)
+        AND g.game_type = 'REG' WHERE r.season = my_picks.season
+        AND r.week = my_picks.week AND r.player_id = my_picks.player_id)""")

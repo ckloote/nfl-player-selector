@@ -5,7 +5,7 @@ from __future__ import annotations
 import difflib
 import re
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -44,35 +44,135 @@ def record_pick(
     player_name: str,
     position: str,
 ) -> None:
-    if slot not in config.SLOTS:
-        raise PickError(f"unknown slot {slot!r}; expected one of {list(config.SLOTS)}")
-    if position not in config.SLOTS[slot]:
-        raise PickError(f"{player_name} is a {position}; slot {slot} takes {config.SLOTS[slot]}")
-    prior = conn.execute(
-        "SELECT week, slot FROM my_picks WHERE season = ? AND player_id = ? "
-        "AND NOT (week = ? AND slot = ?)",
-        (season, player_id, week, slot),
-    ).fetchone()
-    if prior:
-        raise PickError(f"{player_name} was already used in week {prior['week']} ({prior['slot']})")
-    with conn:
-        conn.execute(
-            "INSERT INTO my_picks(season, week, slot, player_id, player_name, recorded_at) "
-            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(season, week, slot) DO UPDATE SET "
-            "player_id = excluded.player_id, player_name = excluded.player_name, "
-            "recorded_at = excluded.recorded_at",
+    record_picks(
+        conn,
+        season,
+        week,
+        [
+            {
+                "slot": slot,
+                "player_id": player_id,
+                "player_name": player_name,
+                "position": position,
+            }
+        ],
+    )
+
+
+def historical_pool(conn: sqlite3.Connection, season: int, week: int) -> pd.DataFrame:
+    """Prefer the requested week's stats, then roster history as of that week.
+
+    Inactive players are retained. Later roster changes cannot move a historical pick.
+    """
+    stats = db.read_df(
+        conn, "SELECT * FROM player_weeks WHERE season = ? AND week <= ?", (season, week)
+    )
+    roster = db.read_df(
+        conn, "SELECT * FROM rosters WHERE season = ? AND week <= ?", (season, week)
+    )
+    stats["priority"] = (stats.week == week).astype(int) + 1
+    roster["priority"] = 1
+    both = pd.concat([roster, stats], ignore_index=True)
+    return (
+        both.sort_values(["week", "priority"])
+        .drop_duplicates("player_id", keep="last")
+        .reset_index(drop=True)
+    )
+
+
+def record_picks(
+    conn: sqlite3.Connection,
+    season: int,
+    week: int,
+    entries: list[dict],
+    now: datetime | None = None,
+) -> list[str]:
+    """Validate the whole submission before atomically replacing any slots."""
+    validate_week(conn, season, week)
+    decision = eastern_now(now)
+    warnings = []
+    slots = [e["slot"] for e in entries]
+    if len(set(slots)) != len(slots):
+        raise PickError("each slot may only be supplied once")
+    ids = set()
+    prepared = []
+    history = historical_pool(conn, season, week).set_index("player_id")
+    for e in entries:
+        slot, pid, name, position = (e[k] for k in ("slot", "player_id", "player_name", "position"))
+        if pid in history.index:
+            position = history.loc[pid, "position"]
+        if slot not in config.SLOTS:
+            raise PickError(f"unknown slot {slot!r}; expected one of {list(config.SLOTS)}")
+        if position not in config.SLOTS[slot]:
+            raise PickError(f"{name} is a {position}; slot {slot} takes {config.SLOTS[slot]}")
+        prior = conn.execute(
+            "SELECT week, slot FROM my_picks WHERE season = ? AND player_id = ? "
+            "AND NOT (week = ? AND slot = ?)",
+            (season, pid, week, slot),
+        ).fetchone()
+        if prior or pid in ids:
+            where = f"week {prior['week']} ({prior['slot']})" if prior else "this submission"
+            raise PickError(f"{name} was already used in {where}")
+        ids.add(pid)
+        info = history.loc[pid] if pid in history.index else e
+        team = info.get("team")
+        game = db.resolve_game(conn, season, week, team)
+        stat_game = conn.execute(
+            "SELECT g.* FROM player_weeks p JOIN games g ON g.game_id = p.game_id "
+            "WHERE p.season = ? AND p.week = ? AND p.player_id = ? "
+            "AND g.season = p.season AND g.week = p.week AND g.game_type = 'REG'",
+            (season, week, pid),
+        ).fetchone()
+        game = stat_game or game
+        if game is None:
+            warnings.append(f"{name}: game unresolved; apparent unavailability (bye or no team).")
+        elif not game["kickoff_known"]:
+            warnings.append(f"{name}: kickoff unconfirmed; deadline cannot be verified.")
+        elif decision >= datetime.fromisoformat(game["kickoff"]) - timedelta(
+            minutes=config.PICK_DEADLINE_MINUTES
+        ):
+            warnings.append(
+                f"{name}: deadline has passed; recording a historical entry/correction."
+            )
+        status = info.get("status")
+        injury = conn.execute(
+            "SELECT report_status FROM injuries WHERE season = ? AND week = ? AND player_id = ?",
+            (season, week, pid),
+        ).fetchone()
+        if (pd.notna(status) and status not in config.ACTIVE_ROSTER_STATUSES) or (
+            injury and injury[0] in ("Out", "Doubtful")
+        ):
+            warnings.append(f"{name}: apparent unavailability; entry retained as submitted.")
+        prepared.append(
             (
                 season,
                 week,
                 slot,
-                player_id,
-                player_name,
-                datetime.now().isoformat(timespec="seconds"),
-            ),
+                pid,
+                name,
+                datetime.now(UTC).isoformat(timespec="seconds"),
+                game["game_id"] if game else None,
+            )
         )
+    with conn:
+        conn.executemany(
+            "INSERT INTO my_picks(season, week, slot, player_id, player_name, "
+            "recorded_at, game_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(season, week, slot) DO UPDATE SET "
+            "tds = CASE WHEN my_picks.player_id = excluded.player_id THEN my_picks.tds END, "
+            "game_id = CASE WHEN my_picks.player_id = excluded.player_id "
+            "THEN COALESCE(excluded.game_id, my_picks.game_id) ELSE excluded.game_id END, "
+            "player_id = excluded.player_id, player_name = excluded.player_name, "
+            "recorded_at = excluded.recorded_at",
+            prepared,
+        )
+    return warnings
 
 
 def remove_pick(conn: sqlite3.Connection, season: int, week: int, slot: str) -> bool:
+    validate_week(conn, season, week)
+    if slot not in config.SLOTS:
+        raise PickError(f"unknown slot {slot!r}")
     with conn:
         cur = conn.execute(
             "DELETE FROM my_picks WHERE season = ? AND week = ? AND slot = ?", (season, week, slot)
@@ -135,3 +235,44 @@ def current_week(conn: sqlite3.Connection, season: int, now: datetime | None = N
         if datetime.fromisoformat(r["last"]) + timedelta(hours=4) > now:
             return int(r["week"])
     return int(rows[-1]["week"])
+
+
+def validate_week(conn: sqlite3.Connection, season: int, week: int) -> int:
+    weeks = [
+        r[0]
+        for r in conn.execute(
+            "SELECT DISTINCT week FROM games WHERE season = ? AND game_type = 'REG' ORDER BY week",
+            (season,),
+        )
+    ]
+    if not weeks:
+        raise PickError(f"No {season} schedule loaded; run `pool refresh --season {season}` first.")
+    if week not in weeks:
+        raise PickError(
+            f"Week {week} is outside the {season} season (weeks {weeks[0]}-{weeks[-1]})."
+        )
+    return week
+
+
+def availability(row, week: int, now: datetime, used: set[str] | None = None) -> str:
+    if used and row.player_id in used:
+        return "already used"
+    known = row.get("kickoff_known", 0)
+    if pd.isna(known) or not known:
+        if int(row.week) == week:
+            return "kickoff unconfirmed"
+    elif eastern_now(now) >= datetime.fromisoformat(row.kickoff) - timedelta(
+        minutes=config.PICK_DEADLINE_MINUTES
+    ):
+        return "deadline passed"
+    if row.get("avail_mult", 1) <= 0:
+        return "unavailable"
+    return "available"
+
+
+def unavailable_cells(proj: pd.DataFrame, week: int, now: datetime) -> set[tuple[str, int]]:
+    return {
+        (r.player_id, int(r.week))
+        for _, r in proj.iterrows()
+        if availability(r, week, now) != "available"
+    }

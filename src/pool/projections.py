@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from . import config, db
+from . import config, db, scoring
 from .config import slot_for_position
 
 
@@ -67,14 +67,11 @@ def load_frames(
         beyond = (games.season == season) & (games.week > as_of_week + horizon)
         games.loc[beyond, ["spread_line", "total_line"]] = np.nan
 
-    if as_of_week is None:
-        pw = db.read_df(conn, "SELECT * FROM player_weeks WHERE season IN (?, ?)", (prior, season))
-    else:
-        pw = db.read_df(
-            conn,
-            "SELECT * FROM player_weeks WHERE season = ? OR (season = ? AND week < ?)",
-            (prior, season, as_of_week),
-        )
+    pw = pd.concat(
+        [scoring.pool_history(conn, prior), scoring.pool_history(conn, season)], ignore_index=True
+    )
+    if as_of_week is not None:
+        pw = pw[(pw.season == prior) | (pw.week < as_of_week)].copy()
 
     rosters = _as_of(
         db.read_df(conn, "SELECT * FROM rosters WHERE season = ?", (season,)), as_of_week
@@ -149,7 +146,7 @@ def per_player_totals(pw: pd.DataFrame) -> pd.DataFrame:
             "player_id"
         )
     df = pw.copy()
-    df["tds"] = df["pass_td"] + df["rush_td"] + df["rec_td"]
+    df["tds"] = scoring.estimated_tds(df)
     df["usage"] = _usage_per_game(df)
     agg = df.groupby("player_id").agg(
         position=("position", "last"),
@@ -204,7 +201,7 @@ def _allowed_by_group(pw: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["team", "group", "allowed", "games"])
     df = pw[pw.opponent.notna()].copy()
     df["group"] = df.position.map(slot_for_position)
-    df["tds"] = df.pass_td + df.rush_td + df.rec_td
+    df["tds"] = scoring.estimated_tds(df)
     allowed = df.groupby(["opponent", "group"]).tds.sum().rename("allowed")
     games = df.groupby("opponent").week.nunique().rename("games")
     out = allowed.reset_index().rename(columns={"opponent": "team"})
@@ -253,7 +250,9 @@ def game_context(games: pd.DataFrame, season: int) -> pd.DataFrame:
             "implied_total": half_total - half_spread,
         }
     )
-    common = g[["game_id", "week", "kickoff"]]
+    if "kickoff_known" not in g:
+        g["kickoff_known"] = 0
+    common = g[["game_id", "week", "kickoff", "kickoff_known"]]
     ctx = pd.concat(
         [pd.concat([common, home], axis=1), pd.concat([common, away], axis=1)], ignore_index=True
     )
@@ -339,6 +338,7 @@ PROJECTION_COLUMNS = [
     "opponent",
     "home",
     "kickoff",
+    "kickoff_known",
     "game_id",
     "base_rate",
     "def_mult",
