@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 352" width="720" height="352" role="img" aria-label="Season score vs `shipped`, greedy replay">
+<text x="16.0" y="22.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#6e7781" text-anchor="start" font-weight="bold">Season score vs `shipped`, greedy replay</text>
+<text x="16.0" y="40.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="start" font-weight="normal">Mean and standard error over 15 seasons; seasons better at right. `random` omitted at -34.4.</text>
+<text x="16.0" y="55.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="start" font-weight="normal">Shaded: ±4.1 TDs — twice the median paired SE, a typical scale</text>
+<text x="16.0" y="70.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="start" font-weight="normal">rather than a threshold each comparison must clear.</text>
+<rect x="408.0" y="82.0" width="160.4" height="220.0" fill="#8b949e" fill-opacity="0.12"/>
+<line x1="488.2" y1="82.0" x2="488.2" y2="302.0" stroke="#8b949e" stroke-width="1.5"/>
+<line x1="187.6" y1="100.0" x2="292.3" y2="100.0" stroke="#c4842a" stroke-width="1.5" stroke-opacity="0.6"/>
+<circle cx="239.9" cy="100.0" r="4" fill="#c4842a"/>
+<text x="156.0" y="104.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="end" font-weight="normal">historical-rate</text>
+<text x="596.0" y="104.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="start" font-weight="normal">-12.67±2.67 1/15</text>
+<line x1="234.2" y1="126.0" x2="324.1" y2="126.0" stroke="#c4842a" stroke-width="1.5" stroke-opacity="0.6"/>
+<circle cx="279.1" cy="126.0" r="4" fill="#c4842a"/>
+<text x="156.0" y="130.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="end" font-weight="normal">regressed-rate</text>
+<text x="596.0" y="130.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="start" font-weight="normal">-10.67±2.29 1/15</text>
+<line x1="290.2" y1="152.0" x2="380.4" y2="152.0" stroke="#c4842a" stroke-width="1.5" stroke-opacity="0.6"/>
+<circle cx="335.3" cy="152.0" r="4" fill="#c4842a"/>
+<text x="156.0" y="156.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="end" font-weight="normal">current-season-rate</text>
+<text x="596.0" y="156.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="start" font-weight="normal">-7.80±2.30 3/15</text>
+<line x1="301.4" y1="178.0" x2="395.3" y2="178.0" stroke="#c4842a" stroke-width="1.5" stroke-opacity="0.6"/>
+<circle cx="348.4" cy="178.0" r="4" fill="#c4842a"/>
+<text x="156.0" y="182.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="end" font-weight="normal">vegas-environment</text>
+<text x="596.0" y="182.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="start" font-weight="normal">-7.13±2.40 3/15</text>
+<line x1="319.9" y1="204.0" x2="405.6" y2="204.0" stroke="#c4842a" stroke-width="1.5" stroke-opacity="0.6"/>
+<circle cx="362.8" cy="204.0" r="4" fill="#c4842a"/>
+<text x="156.0" y="208.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="end" font-weight="normal">base-rate-only</text>
+<text x="596.0" y="208.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="start" font-weight="normal">-6.40±2.19 1/15</text>
+<line x1="337.1" y1="230.0" x2="409.3" y2="230.0" stroke="#c4842a" stroke-width="1.5" stroke-opacity="0.6"/>
+<circle cx="373.2" cy="230.0" r="4" fill="#c4842a"/>
+<text x="156.0" y="234.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="end" font-weight="normal">player-vegas</text>
+<text x="596.0" y="234.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="start" font-weight="normal">-5.87±1.84 5/15</text>
+<line x1="393.6" y1="256.0" x2="452.0" y2="256.0" stroke="#c4842a" stroke-width="1.5" stroke-opacity="0.6"/>
+<circle cx="422.8" cy="256.0" r="4" fill="#c4842a"/>
+<text x="156.0" y="260.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="end" font-weight="normal">within-player</text>
+<text x="596.0" y="260.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="start" font-weight="normal">-3.34±1.49 6/15</text>
+<line x1="408.8" y1="282.0" x2="460.4" y2="282.0" stroke="#c4842a" stroke-width="1.5" stroke-opacity="0.6"/>
+<circle cx="434.6" cy="282.0" r="4" fill="#c4842a"/>
+<text x="156.0" y="286.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="end" font-weight="normal">no-vegas</text>
+<text x="596.0" y="286.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="start" font-weight="normal">-2.73±1.31 4/15</text>
+<text x="174.6" y="320.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">-16</text>
+<text x="253.0" y="320.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">-12</text>
+<text x="331.4" y="320.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">-8</text>
+<text x="409.8" y="320.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">-4</text>
+<text x="488.2" y="320.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">0</text>
+<text x="566.6" y="320.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">4</text>
+<text x="168.0" y="338.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="start" font-weight="normal">TDs per season vs baseline (mean, SE, seasons better)</text>
+</svg>

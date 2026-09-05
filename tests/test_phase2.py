@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 from typer.testing import CliRunner
 
+from experiments import appendix, figures
 from pool import backtest, benchmark, db, models, snapshots
 from pool import evaluate as ev
 from pool import projections as P
@@ -297,7 +298,23 @@ def test_benchmark_resume_and_fingerprint_rejection(seeded, tmp_path, monkeypatc
     destination.close()
     monkeypatch.setattr(benchmark, "evaluate_season", original)
     independent = benchmark.run("unused", other, log=lambda x: None)
-    assert before == {p.name: benchmark.digest(p) for p in independent.iterdir()}
+    # Saved metrics must match byte for byte. The two reports differ only where they
+    # name their own experiment, which is the point of naming it: a generated report
+    # that cites another run's config sends its reader to the wrong numbers.
+    docs = {"BACKTEST.md", "PROJECTION_BENCHMARK.md"}
+    after = {p.name: benchmark.digest(p) for p in independent.iterdir()}
+    assert {k: v for k, v in before.items() if k not in docs} == {
+        k: v for k, v in after.items() if k not in docs
+    }
+
+    def anonymise(path, run, name):
+        text = (path / name).read_text()
+        return text.replace(str(run), "<run>").replace(
+            f"experiments/results/{run.name}", "<results>"
+        )
+
+    for name in docs:
+        assert anonymise(compact, out, name) == anonymise(independent, other, name)
     assert benchmark.digest(out / str(SEASON) / "forecasts.parquet") == benchmark.digest(
         other / str(SEASON) / "forecasts.parquet"
     )
@@ -427,3 +444,246 @@ def test_invalid_backtest_policy_does_not_open_a_database(monkeypatch):
     result = CliRunner().invoke(app, ["backtest", "--input-policy", "snapshots"])
     assert result.exit_code != 0
     assert "decision-times" in result.output
+
+
+# --- generated findings and figures -----------------------------------------
+def _replay_rows(scores):
+    """`replays` rows for {(season, model): total} under both strategies."""
+    return pd.DataFrame(
+        [
+            dict(season=season, model=model, seed=-1, strategy=strategy, total=total)
+            for (season, model), total in scores.items()
+            for strategy in ("greedy", "optimizer")
+        ]
+    )
+
+
+def _findings_data(scores, ranks):
+    replays = _replay_rows(scores)
+    seasons = sorted({season for season, _ in scores})
+    summary = pd.DataFrame(
+        [dict(era="all retrospective", model=m, paired_se=1.5) for m in ranks],
+    )
+    paired = pd.DataFrame(
+        [
+            dict(era="all retrospective", rank="rank_available", k=10, model=m, mean=v)
+            for m, v in ranks.items()
+        ]
+    )
+    ranking = pd.DataFrame([dict(season=s, covered_cells=40) for s in seasons])
+    return {
+        "replays": replays,
+        "replay_summary": summary,
+        "paired_ranking_summary": paired,
+        "ranking": ranking,
+    }, {"baseline": "shipped", "seasons": seasons}
+
+
+def test_a_comparison_with_no_paired_spread_still_reports():
+    """Seasons that lose the same amount every time have zero paired variance.
+    Saved results for 2012 and 2018 at seed 0 give `within-player` exactly -8 in
+    both, and dividing the mean by that standard error ended the whole report."""
+    scores = {}
+    for season in (2012, 2018):
+        scores[(season, "shipped")] = 50.0
+        scores[(season, "within-player")] = 42.0
+        scores[(season, "random")] = 20.0
+    data, spec = _findings_data(scores, {"within-player": -0.1, "random": -0.9})
+    text = benchmark.replay_findings(data, spec)
+    assert "-8.00" in text
+    assert "no paired spread" in text
+    assert "nan" not in text.lower()
+
+
+@pytest.mark.parametrize(
+    ("ranks", "expected", "forbidden"),
+    [
+        ({"a": -0.1, "b": -0.2, "c": -0.3, "d": -0.4}, "much as their", "against their"),
+        ({"a": -0.4, "b": -0.3, "c": -0.2, "d": -0.1}, "against their", "Use it to rank"),
+    ],
+)
+def test_the_ranking_conclusion_follows_the_correlation(ranks, expected, forbidden):
+    """The conclusion asserted agreement whatever the correlation came out. The
+    same models give Spearman +0.86 over fifteen seasons, -0.20 over 2011-2012
+    and -0.02 over 2020-2021; only the first of those supports the sentence."""
+    scores = {}
+    for i, season in enumerate((2011, 2012)):
+        scores[(season, "shipped")] = 50.0
+        for j, model in enumerate(ranks):
+            scores[(season, model)] = 50.0 - (j + 1) - i
+    data, spec = _findings_data(scores, ranks)
+    data["calibration"] = pd.DataFrame(
+        [dict(season=s, model="shipped", slope=0.86, se_slope=0.02) for s in (2011, 2012)]
+    )
+    text = benchmark.diagnostic_findings(data, spec)
+    assert expected in text
+    assert forbidden not in text
+    assert "never" in text or "not" in text
+
+
+def _calibration(slopes, se=0.05):
+    return pd.DataFrame(
+        [dict(season=2011 + i, model="m", slope=s, se_slope=se) for i, s in enumerate(slopes)]
+    )
+
+
+def _viewbox(svg, axis):
+    """Every plotted coordinate on one axis, with the viewBox extent it must fit."""
+    box = svg.split('viewBox="0 0 ')[1].split('"')[0].split()
+    extent = float(box[0 if axis == "x" else 1])
+    values = []
+    for attr in (f"c{axis}=", f"{axis}1=", f"{axis}2="):
+        for chunk in svg.split(attr)[1:]:
+            values.append(float(chunk.split('"')[1]))
+    return extent, values
+
+
+def _viewbox_ys(svg):
+    return _viewbox(svg, "y")
+
+
+def test_calibration_figure_holds_every_plotted_interval():
+    """`vegas-environment` reaches a slope of 1.137 and an upper bound of 1.234.
+    Against a hardcoded top of 1.03 its points fell outside the viewport."""
+    svg = figures.slope_by_season({"calibration": _calibration([0.9, 1.137], se=0.05)}, "m")
+    height, ys = _viewbox_ys(svg)
+    assert ys and all(0 <= y <= height for y in ys)
+
+
+def test_the_shipped_calibration_range_is_unchanged():
+    """The adaptive bounds must not redraw a figure the data already fitted."""
+    svg = figures.slope_by_season({"calibration": _calibration([0.82, 0.89])}, "m")
+    assert ">1.00<" in svg and ">0.80<" in svg and ">1.05<" not in svg
+
+
+def test_a_single_season_publishes_without_a_resolution_band():
+    """One season has no cross-season paired SE, so the median floor is NaN and
+    the bake-off tick loop raised `cannot convert float NaN to integer`."""
+    scores = {(2024, "shipped"): 50.0, (2024, "within-player"): 42.0}
+    data, _ = _findings_data(scores, {"within-player": -0.1})
+    svg = figures.bakeoff(data, "shipped", None)
+    assert "nan" not in svg.lower()
+    assert "Shaded" not in svg
+    height, ys = _viewbox_ys(svg)
+    assert all(0 <= y <= height for y in ys)
+
+
+def test_a_single_season_bakeoff_keeps_its_zero_reference():
+    """The zero line is always drawn, so zero must always be in the domain. Saved 2025
+    results, whose comparisons all lose, put it at x=819.9 on a 720-wide canvas."""
+    scores = {(2025, "shipped"): 50.0, (2025, "within-player"): 42.0, (2025, "no-vegas"): 44.0}
+    data, _ = _findings_data(scores, {"within-player": -0.1, "no-vegas": -0.2})
+    svg = figures.bakeoff(data, "shipped", None)
+    width, xs = _viewbox(svg, "x")
+    assert xs and all(0 <= x <= width for x in xs)
+
+
+def test_random_alone_is_still_a_comparison():
+    """`random` is set aside because it would squash the real comparisons. With
+    `models = ["shipped", "random"]` there are none to squash, and dropping it anyway
+    left `min()` an empty argument."""
+    scores = {}
+    for season in (2011, 2012):
+        scores[(season, "shipped")] = 50.0
+        scores[(season, "random")] = 20.0
+    data, _ = _findings_data(scores, {"random": -0.9})
+    svg = figures.bakeoff(data, "shipped", 4.35)
+    assert ">random<" in svg and "omitted" not in svg
+    height, ys = _viewbox_ys(svg)
+    assert all(0 <= y <= height for y in ys)
+
+
+def test_a_bakeoff_without_a_challenger_says_so():
+    """A baseline-only run has nothing to compare; the report still references the file."""
+    data, _ = _findings_data({(2011, "shipped"): 50.0}, {})
+    svg = figures.bakeoff(data, "shipped", None)
+    assert "nothing to compare" in svg and svg.rstrip().endswith("</svg>")
+
+
+def _reliability(bins):
+    return pd.DataFrame(
+        [
+            dict(model="m", season=2025, bin=name, n=n, proj=proj, actual=actual)
+            for name, n, proj, actual in bins
+        ]
+    )
+
+
+def test_a_bin_that_scored_nothing_has_no_ratio():
+    """The saved 2025 `vegas-environment` bin holds one candidate projected at 0.0483
+    with no touchdowns. Dividing by zero made its ratio the axis bound, and the tick
+    loop raised `Maximum allowed size exceeded` — in 17 of 150 season/model runs."""
+    data = {
+        "reliability": _reliability(
+            [
+                ("(-0.001, 0.05]", 40, 0.04, 0.06),
+                ("(0.05, 0.1]", 20, 0.08, 0.09),
+                ("(0.8, 1.0]", 1, 0.0483, 0.0),
+                ("(1.0, 1.5]", 25, 1.2, 1.1),
+                ("(1.5, inf]", 30, 1.7, 1.5),
+            ]
+        )
+    }
+    svg = figures.reliability(data, "m")
+    assert "inf" not in svg and "nan" not in svg.lower()
+    assert "no TDs" in svg and "have no ratio" in svg
+    height, ys = _viewbox_ys(svg)
+    assert ys and all(0 <= y <= height for y in ys)
+    # The defined bins still plot, and no line is drawn across the undefined one.
+    assert ">0.67<" in svg and ">1.13<" in svg
+    assert svg.count("<polyline") == 2
+
+
+def _record(seasons, scheduled, complete):
+    return dict(
+        implementation_commit="abc1234",
+        pytest_passed=229,
+        scheduled_games=scheduled,
+        complete_games=complete,
+        seasons=[
+            dict(
+                season=season,
+                forecast_rows=1000,
+                model_seed_runs=48,
+                season_scores=117,
+                picks=5967,
+            )
+            for season in seasons
+        ],
+    )
+
+
+def test_the_appendix_counts_come_from_the_record():
+    """It announced "All 15 seasons completed" and "All 4,175 required games" beside
+    counts summed from the run, so a one-season publication claimed fourteen it never
+    ran. The 2022 canceled game is only remarked on when 2022 was replayed."""
+    solo = appendix.run_verification(_record([2025], 272, 272))
+    assert "15 seasons" not in solo and "4,175" not in solo
+    assert "The 2025 season completed" in solo and "All 272 required games" in solo
+    assert "Bills" not in solo
+
+    full = appendix.run_verification(_record(range(2011, 2026), 4175, 4175))
+    assert "All 15 seasons completed" in full and "All 4,175 required games" in full
+    assert "Bills" in full
+
+
+def test_the_appendix_does_not_claim_coverage_it_lacks():
+    """The completeness sentence is generated too: a short run must not inherit it."""
+    text = appendix.run_verification(_record([2024, 2025], 544, 543))
+    assert "543 of 544 required games" in text and "All 544" not in text
+
+
+def test_the_shaded_band_is_a_typical_scale_not_a_threshold():
+    """`within-player` is -3.14 with its own SE of 1.46 — 2.16 SE from zero, and
+    resolved by the report's criterion — yet sits inside a +/-4.35 median band."""
+    scores = {}
+    for i, season in enumerate((2011, 2012, 2013)):
+        scores[(season, "shipped")] = 50.0
+        scores[(season, "within-player")] = 46.9 + 0.1 * i
+    data, _ = _findings_data(scores, {"within-player": -0.1})
+    svg = figures.bakeoff(data, "shipped", 4.35)
+    assert "cannot resolve" not in svg
+    assert "typical scale" in svg
+    # Resolved against its own SE, so it is coloured as a real difference even
+    # though the median-SE band would swallow it.
+    assert f'fill="{figures.OVER}"' in svg

@@ -1,5 +1,8 @@
+"""Independently verify a completed benchmark run: `verify.py <experiment> [tests-passed]`."""
+
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -7,8 +10,10 @@ import pandas as pd
 from pool import benchmark, models
 from pool import evaluate as ev
 
-out = Path("data/experiments/phase2-validation")
-spec = benchmark.resolve("experiments/phase2-validation.toml")
+experiment = sys.argv[1] if len(sys.argv) > 1 else "phase2-validation"
+tests_passed = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+out = Path("data/experiments") / experiment
+spec = benchmark.resolve(f"experiments/{experiment}.toml")
 manifest = json.loads((out / "manifest.json").read_text())
 assert manifest["code"]["code_hash"] == benchmark.code_identity()["code_hash"]
 expected = {
@@ -16,6 +21,15 @@ expected = {
     for name in spec["models"]
     for seed in (spec["seeds"] if name in models.NULLS else [-1])
 }
+# The run's own shape rather than the fifteen-season one this script was written against:
+# every (model, seed) under both strategies, the baseline's random trials, and hindsight.
+replay_rows = (
+    len(expected) * len(spec["strategies"]) + spec["random_trials"] + int(spec["hindsight"])
+)
+# `audit` walks the history season too, so the schedule is wider than the replayed seasons:
+# 4,175 games over 2010-2025 against 3,919 over 2011-2025.
+audited = range(spec["history_start"], max(spec["seasons"]) + 1)
+scheduled = sum(spec["expected_games"][str(season)] for season in audited)
 counts = []
 for season in spec["seasons"]:
     d = out / str(season)
@@ -31,7 +45,7 @@ for season in spec["seasons"]:
     assert df.groupby(["week", "slot", "player_id"]).actual_tds.nunique().eq(1).all()
     scores = pd.read_csv(d / "replays.csv")
     picks = pd.read_csv(d / "picks.csv")
-    assert len(scores) == 117
+    assert len(scores) == replay_rows
     selected = picks[picks.player_id.notna()]
     assert not selected.duplicated(["model", "seed", "strategy", "player_id"]).any()
     sums = picks.groupby(["model", "seed", "strategy"]).actual.sum()
@@ -70,11 +84,14 @@ for season in spec["seasons"]:
     )
     print(season, "verified", flush=True)
 coverage = pd.read_csv(out / "coverage.csv")
-assert len(coverage) == 4175 and coverage.complete.eq(1).all()
+assert len(coverage) == scheduled and coverage.complete.eq(1).all()
 c = sqlite3.connect(f"file:{out}/dataset.sqlite?mode=ro", uri=True)
-gaps = c.execute("""SELECT g.game_id FROM games g LEFT JOIN player_weeks p ON p.game_id=g.game_id
- WHERE g.game_type='REG' AND g.season BETWEEN 2010 AND 2025
- GROUP BY g.game_id HAVING COUNT(DISTINCT p.team) != 2""").fetchall()
+gaps = c.execute(
+    """SELECT g.game_id FROM games g LEFT JOIN player_weeks p ON p.game_id=g.game_id
+ WHERE g.game_type='REG' AND g.season BETWEEN ? AND ?
+ GROUP BY g.game_id HAVING COUNT(DISTINCT p.team) != 2""",
+    (min(audited), max(audited)),
+).fetchall()
 assert not gaps
 c.close()
 validation = dict(
@@ -83,10 +100,10 @@ validation = dict(
     source_hash=manifest["code"]["code_hash"],
     dataset_hash=manifest["dataset_hash"],
     seasons=counts,
-    scheduled_games=4175,
-    complete_games=4175,
+    scheduled_games=scheduled,
+    complete_games=int(coverage.complete.eq(1).sum()),
     player_stat_game_gaps=0,
-    pytest_passed=214,
+    pytest_passed=tests_passed,
     lint="Ruff check passed",
     format="Ruff format --check passed",
     checks=[

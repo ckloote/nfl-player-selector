@@ -1,4 +1,4 @@
-# Corrected season replays
+# Corrected projection benchmark
 
 Specification: 2026-09-04. Artifact schema 1; scoring version 2; database schema 2.
 
@@ -20,48 +20,62 @@ Reproduce: `pool benchmark --config experiments/roster-snapshot-repair.toml --ou
 - All seasons and era summaries are retrospective; neither era is an untouched holdout. Production constants are fixed; no calibration correction or tuning is applied.
 - Research scoring includes the checked correction in experiments/scoring-corrections.json: duplicate rushing touchdowns in 2011_13_DET_NO reconciled to the official Saints game report.
 
-## What the replays show
+## What the diagnostics show
 
-`shipped` scores 53.7 TDs per season under greedy, ahead of every alternative forecast. The nearest is `no-vegas` at -2.73 (1.31 SE), better in 4 of 15 seasons.
+`shipped`'s Poisson calibration slope is 0.817-0.892 in all 15 seasons (mean 0.867, SD 0.022). A slope below 1 means the forecasts are too extreme: the spread between high and low estimates is wider than the outcomes justify. The season-to-season spread is small next to the gap from 1, so this is a standing property of the model rather than a season effect.
 
-Replaying the rolling assignment against its own no-reuse history scores +2.87 TDs per season (1.80 SE) versus greedy, better in 11 of 15 seasons. That does not clear two standard errors, so these seasons cannot separate the two policies. Exact optimality on a fixed pruned matrix is a property of the solver, not evidence about the rolling policy, and this comparison is sensitive to the input policy the replay is run under.
+No challenger ranks better than `shipped` at any reported k: every paired common-pool difference is negative. The bake-off does not identify a better functional form among the alternatives tried, which is not the same as showing the available inputs are exhausted.
 
-`within-player` keeps each player's own forecasts and destroys only their order across weeks. It costs -3.34 TDs per season (1.49 SE), better in 6 of 15, against -34.42 for the fully shuffled null. So about 90% of the measured advantage over random is in telling players apart, and the remainder in timing them. That timing component sits 2.2 standard errors from zero.
+Across the 7 candidate models, excluding the shuffled nulls, the common-pool top-10 diagnostic orders models much as their achieved season scores do (Spearman 0.86), but it does not convert into them: scaled by the 52 picks in a season it recovers about 59% of the season difference. Use it to rank candidates, never to quote a season gain.
 
-Paired standard errors on these 15-season comparisons run 1.31-2.67 TDs per season, median 2.05. A typical comparison therefore needs roughly 4 TDs per season before these replays can tell it from zero. That floor, not the length of the model list, is what limits every season-level claim here.
+![Forecast over outcome by projection bin](figures/reliability.svg)
 
-![Season score against the baseline, with standard errors](../experiments/results/roster-snapshot-repair/figures/bakeoff.svg)
+![Poisson calibration slope by season](figures/calibration-slope.svg)
 
-![Rolling assignment minus greedy, by season](../experiments/results/roster-snapshot-repair/figures/optimizer-by-season.svg)
+## Common-pool paired ranking diagnostics
 
-## Achieved season scores
+Challenger minus baseline, TDs per ranked candidate; SE across seasons.
 
-| model | strategy | tds_per_season | se | shuffle_sd | delta_vs_baseline_greedy | paired_se |
-| --- | --- | --- | --- | --- | --- | --- |
-| base-rate-only | greedy | 47.3333 | 1.9314 | 0.0000 | -6.4000 | 2.1883 |
-| base-rate-only | optimizer | 47.0667 | 1.9456 | 0.0000 | -6.6667 | 2.2332 |
-| current-season-rate | greedy | 45.9333 | 1.7388 | 0.0000 | -7.8000 | 2.2995 |
-| current-season-rate | optimizer | 46.6000 | 1.7776 | 0.0000 | -7.1333 | 1.9392 |
-| hindsight | hindsight | 157.8000 | 1.6071 | 0.0000 | 104.0667 | 2.0412 |
-| historical-rate | greedy | 41.0667 | 1.5871 | 0.0000 | -12.6667 | 2.6702 |
-| historical-rate | optimizer | 40.9333 | 1.3955 | 0.0000 | -12.8000 | 2.3365 |
-| no-vegas | greedy | 51.0000 | 2.1224 | 0.0000 | -2.7333 | 1.3146 |
-| no-vegas | optimizer | 54.3333 | 2.2587 | 0.0000 | 0.6000 | 1.8944 |
-| player-vegas | greedy | 47.8667 | 1.5083 | 0.0000 | -5.8667 | 1.8410 |
-| player-vegas | optimizer | 47.8667 | 1.6786 | 0.0000 | -5.8667 | 1.8995 |
-| random | greedy | 19.3133 | 0.5891 | 7.9100 | -34.4200 | 1.9876 |
-| random | optimizer | 19.2067 | 0.5759 | 7.7321 | -34.5267 | 2.0465 |
-| regressed-rate | greedy | 43.0667 | 1.9868 | 0.0000 | -10.6667 | 2.2922 |
-| regressed-rate | optimizer | 42.7333 | 1.8758 | 0.0000 | -11.0000 | 2.1112 |
-| shipped | greedy | 53.7333 | 2.3227 | 0.0000 | 0.0000 | 0.0000 |
-| shipped | optimizer | 56.6000 | 2.4178 | 0.0000 | 2.8667 | 1.8044 |
-| shipped | random | 46.7433 | 1.0796 | 6.9501 | -6.9900 | 2.1784 |
-| vegas-environment | greedy | 46.6000 | 2.1620 | 0.0000 | -7.1333 | 2.3962 |
-| vegas-environment | optimizer | 45.8667 | 2.2905 | 0.0000 | -7.8667 | 2.4453 |
-| within-player | greedy | 50.3967 | 1.5679 | 5.0373 | -3.3367 | 1.4895 |
-| within-player | optimizer | 50.1667 | 0.9766 | 5.9968 | -3.5667 | 1.8778 |
+| model | k | mean | se | shuffle_sd | seasons |
+| --- | --- | --- | --- | --- | --- |
+| base-rate-only | 1 | -0.0629 | 0.0435 | 0.0000 | 15 |
+| base-rate-only | 3 | -0.0609 | 0.0216 | 0.0000 | 15 |
+| base-rate-only | 5 | -0.0403 | 0.0185 | 0.0000 | 15 |
+| base-rate-only | 10 | -0.0360 | 0.0089 | 0.0000 | 15 |
+| current-season-rate | 1 | -0.0736 | 0.0416 | 0.0000 | 15 |
+| current-season-rate | 3 | -0.1011 | 0.0222 | 0.0000 | 15 |
+| current-season-rate | 5 | -0.1084 | 0.0190 | 0.0000 | 15 |
+| current-season-rate | 10 | -0.1589 | 0.0150 | 0.0000 | 15 |
+| historical-rate | 1 | -0.2956 | 0.0627 | 0.0000 | 15 |
+| historical-rate | 3 | -0.2508 | 0.0331 | 0.0000 | 15 |
+| historical-rate | 5 | -0.2050 | 0.0251 | 0.0000 | 15 |
+| historical-rate | 10 | -0.1404 | 0.0147 | 0.0000 | 15 |
+| no-vegas | 1 | -0.0368 | 0.0217 | 0.0000 | 15 |
+| no-vegas | 3 | -0.0113 | 0.0153 | 0.0000 | 15 |
+| no-vegas | 5 | -0.0116 | 0.0098 | 0.0000 | 15 |
+| no-vegas | 10 | -0.0103 | 0.0042 | 0.0000 | 15 |
+| player-vegas | 1 | -0.0293 | 0.0468 | 0.0000 | 15 |
+| player-vegas | 3 | -0.0712 | 0.0282 | 0.0000 | 15 |
+| player-vegas | 5 | -0.0594 | 0.0179 | 0.0000 | 15 |
+| player-vegas | 10 | -0.0632 | 0.0111 | 0.0000 | 15 |
+| random | 1 | -0.7094 | 0.0371 | 0.1378 | 15 |
+| random | 3 | -0.6548 | 0.0221 | 0.0787 | 15 |
+| random | 5 | -0.6130 | 0.0149 | 0.0565 | 15 |
+| random | 10 | -0.5114 | 0.0120 | 0.0385 | 15 |
+| regressed-rate | 1 | -0.0975 | 0.0572 | 0.0000 | 15 |
+| regressed-rate | 3 | -0.1381 | 0.0199 | 0.0000 | 15 |
+| regressed-rate | 5 | -0.1253 | 0.0144 | 0.0000 | 15 |
+| regressed-rate | 10 | -0.1296 | 0.0120 | 0.0000 | 15 |
+| vegas-environment | 1 | -0.2394 | 0.0480 | 0.0000 | 15 |
+| vegas-environment | 3 | -0.1621 | 0.0223 | 0.0000 | 15 |
+| vegas-environment | 5 | -0.1387 | 0.0138 | 0.0000 | 15 |
+| vegas-environment | 10 | -0.0681 | 0.0085 | 0.0000 | 15 |
+| within-player | 1 | -0.0341 | 0.0230 | 0.0928 | 15 |
+| within-player | 3 | -0.0302 | 0.0117 | 0.0426 | 15 |
+| within-player | 5 | -0.0246 | 0.0071 | 0.0282 | 15 |
+| within-player | 10 | -0.0093 | 0.0050 | 0.0146 | 15 |
 
-`replays.csv` records actual TDs, empty slots and unique players for every seed/trial and season; `picks.csv` records every choice. Era summaries remain retrospective. Hindsight uses actual scorer identities and the full feasible scoring history; it is a reference ceiling with a different candidate population. The solver is exact for the pruned fixed matrix, which does not establish an advantage for its rolling policy. No production parameter was changed.
+Per-seed coverage, jointly empty cells and per-season diagnostics are saved in `ranking.csv` and `paired_ranking.csv`. Across exported ranking metric rows: 0 empty cells (repeated across k, pools and seeds; not independent observations). Calibration slopes/intercepts, reliability bins, tail deviance and within-slot Spearman results are saved separately by seed and season. They are diagnostics, not evidence of an achieved season gain or simulation readiness.
 
 
 ## Run verification
@@ -74,4 +88,4 @@ All 15 seasons completed: 720 model/seed/season runs, 5,045,952 forecast rows, 1
 
 Verification: 229 pytest tests passed; Ruff lint and formatting passed. Saved forecasts were checked for identical candidate/mask populations, hard exclusions, timestamps and outcomes. Pick histories contain no player reuse; pick sums equal reported scores; selected-player flags and unique-player counts reconcile. A full `--resume` verified all checkpoint hashes. Synthetic interrupted/resumed and uninterrupted runs produced identical artifacts.
 
-This run used `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1`; keep these environment variables when resuming. The pinned dependencies and exact environment are recorded in the manifest. See [experiment instructions](../experiments/README.md) for the full command and schema. Reports are generated from saved metrics and this verification record.
+This run used `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1`; keep these environment variables when resuming. The pinned dependencies and exact environment are recorded in the manifest. See [experiment instructions](../../README.md) for the full command and schema. Reports are generated from saved metrics and this verification record.

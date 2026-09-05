@@ -94,6 +94,22 @@ uv run pool backtest --season 2024-2025 --strategy optimizer,greedy --input-poli
 uv run pool backtest --season 2024-2025 --strategy optimizer,greedy --input-policy legacy-closing --vegas-horizon 0
 ```
 
+**What the repair changed.** Two conclusions the archived reports carried do not survive the
+masking, and in both cases what the leak was supporting was the claim, not the uncertainty.
+
+- Dropping the Vegas multiplier was sized at −8.56 TDs per season (SE 1.72, better in 0 of 9) in
+  the archived backtest. On the identical nine seasons under the corrected policy it is −3.11
+  (SE 2.18, better in 4 of 9). `base-rate-only`, which removes the whole context stack rather than
+  the Vegas term alone, barely moves over those seasons (−8.11 to −7.67), so the collapse is
+  specific to the leaked term.
+- The archived headline was that the assignment optimizer is not worth its complexity: −0.73 TDs
+  per season (SE 2.39, better in 8 of 15). Under the corrected policy the same comparison is
+  +2.87 (SE 1.68, better in 10 of 15). Running the current code under the old policy
+  (`--input-policy legacy-closing --vegas-horizon 6`) reproduces −1.27 (SE 2.48, better in 8 of
+  15), so the eligibility and scoring repairs account for almost none of that swing and the
+  closing-line masking accounts for nearly all of it. Neither figure clears two standard errors:
+  the optimizer is not established as better, but the evidence for calling it useless was leakage.
+
 ### F03 — High: a common-pool ranking metric is presented as season scoring
 
 **Phase 2 status:** Addressed in Phase 2: common-pool top-k is labeled TDs per ranked candidate with season-level uncertainty. Actual greedy/optimizer replays use separate no-reuse histories. The synthetic repeated-leader test demonstrates why rankings are not season scores. Evidence: corrected reports and saved ranking/replay artifacts.
@@ -265,6 +281,71 @@ evaluation, including its aggregation, or describe the shipped single-seed
 benchmark accurately. Store a runnable configuration for the reported analysis
 so its seed count and reported uncertainty can be reproduced.
 
+### F11 — Medium: a mislabelled roster snapshot stayed in the candidate pool all season
+
+**Status:** Resolved by the candidate-pool repair. `projections.active_snapshot` reads each
+team's most recent weekly roster at or before the decision week.
+`experiments/roster-snapshot-repair.toml` reruns the identical frozen dataset under the
+corrected pool, so the only difference between that result set and Phase 2 is this change.
+The first version of the repair read one league-wide latest week and had to be corrected;
+see *The bye-week regression* below.
+
+**Evidence:** [`load_frames`](../src/pool/projections.py) reduces rosters to the latest row per
+player, and [`player_pool`](../src/pool/projections.py) then kept everyone whose latest row said
+`ACT`. From 2017 on the weekly feed marks departures explicitly, so that rule prunes correctly:
+at week 18 of 2024 it admitted 444 players against the 439 on the week-18 roster, and no player
+carried a stale team.
+
+It fails when a player's latest active row belongs to a snapshot that does not describe a game
+week. The nflverse feed labels one cutdown-era roster as regular-season 2016 week 1: 24.3
+pool-position actives per team, against 11.9-16.5 in every other season-week from 2010 on, naming
+roughly 275 players who never took a snap that season. Because those players never appeared again,
+that snapshot stayed their latest row, and they stayed in the candidate pool for all seventeen
+weeks. 2016 was evaluated over 12,446 forecast rows covering 844 players, against 8,211 rows and
+645 players in 2017 and 8,028 rows and 653 players in 2018.
+
+**Impact:** the inflation reached every statistic computed over the candidate population. 2016 was
+the only season whose calibration slope was 1.00 (0.9982) rather than 0.82-0.90, and its 0.10-0.15
+reliability bin reported a projected/actual ratio of 1.75 against roughly 0.9 in both neighbouring
+seasons, with 32% of those candidates on the field against 63% in 2015 and 65% in 2017. The pool
+also feeds `usage_roles`, so the phantom entries padded each (team, position) usage ranking and
+pushed real players down the depth chart: 6.9% of 2016 week-9 candidates take a different role
+multiplier under the repair, every one of them a promotion.
+
+**Resolution:** read the latest weekly snapshot rather than every player whose last seen status was
+active, so a bad snapshot is confined to the week it claims to describe. Rerunning the frozen
+dataset moves 2016 to 8,537 forecast rows and a 0.8615 slope; across the fifteen seasons the
+shipped calibration slope goes from mean 0.8786, SD 0.0398 to mean 0.8670, SD 0.0219, with every
+season other than 2016 moving by at most 0.011. Achieved season scores and common-pool ranking
+diagnostics are unchanged within their standard errors — the phantom candidates carried low
+forecasts and were never selected — and touchdowns scored by players absent from the pool are
+identical before and after in every season, so the repair costs no coverage.
+
+**The bye-week regression:** the first version of this repair read one league-wide latest week.
+From 2016 on the weekly feed publishes no roster at all for a team on its bye, so that rule
+deleted those teams from the pool outright — as few as 26 of 32 teams, and up to 99 candidates
+short, in the worst decision weeks of 2016-2025. The current week never missed them, because a
+bye team has no game and therefore no row; the forward surface did, and that is the half the
+assignment optimizer chooses over. At decision week 5 of 2024, DET, PHI, LAC and TEN had no row
+at any week from 6 to 18, returning only at decision week 6.
+
+Reading each team's own latest week restores all 32 teams in every decision week of 2011-2025
+and reaches back no further than it must: no team's fallback is more than one week old. The one
+remaining gap is MIA and TB at 2017 week 1, whose game Hurricane Irma postponed to week 11 — the
+feed carries no week-1 roster for them, before or after.
+
+Its measured effect is confined to what the diagnosis predicts. Every deterministic model's
+current-week forecasts, and so every calibration, reliability, deviance, Spearman and ranking
+figure quoted above, are identical before and after, and so is every one of their fifteen greedy
+season scores. 2011-2015 are byte-identical throughout, the feed having published all 32 teams
+every week then.
+What moves is the optimizer's forward plan, in seven of fifteen seasons for `shipped`, and the
+`within-player` null, whose shuffle consumes one RNG stream across players and so shifts when new
+players enter the surface. The rolling-assignment comparison goes from +2.87 (1.68 SE, better in
+10 of 15) to +2.87 (1.80 SE, better in 11 of 15): the same mean, a wider spread, and still short
+of two standard errors. The defect was real and the plan it corrupted was real; the season-level
+conclusion it supports is unchanged.
+
 ## Current status and recommended sequence
 
 The implementation status is broadly accurate: imports, projections, assignment,
@@ -272,7 +353,9 @@ the recommendation CLI, season replay, and forecast evaluation exist. The weekly
 reliability phase now also implements `pool score`, feed freshness/coverage status,
 and the live deadline workflow. F01, F05, and F09 are resolved. Opponent tracking,
 standings, and win-probability strategy remain unfinished. F02–F04, F06, F08 and F10 are addressed in Phase 2. F07 documentation corrections are
-complete; its empirical calibration validation remains Phase 3 work.
+complete; its empirical calibration validation remains Phase 3 work. F11 was found while
+reviewing the Phase 2 results and is resolved by the candidate-pool repair, which reruns
+the identical frozen dataset.
 
 Verification includes mocked refresh → recommend → record → score integration,
 migration rollback/idempotence, failed-feed preservation, and a temporary 2025

@@ -57,12 +57,19 @@ or shipped random-strategy trials; the `model` and `strategy` columns distinguis
 Shuffled seeds do not multiply the number of independent seasons. An empty common comparison
 cell is excluded from the mean and reported, not silently turned into a zero observation.
 
-The candidate pool is active-roster QB/RB/WR/TE players (latest visible stat teams are the
-fallback when the optional roster feed is absent), before assignment pruning. Out/Doubtful
-and expired/unconfirmed current-week cells are hard exclusions. Questionable scales forecasts
-by 0.85; zero forecasts can still be eligible. Player ID breaks ties. Each actual strategy
-replay depletes its own pool. The hindsight population is historical eligible scorer identities,
-so it is a retrospective scoring ceiling rather than another forecast model.
+The candidate pool is the QB/RB/WR/TE players listed active on their own team's most recent
+weekly roster snapshot at or before the decision week (latest visible stat teams are the
+fallback when no roster feed is available), before assignment pruning. Reading the latest
+snapshot rather than the union of every week to date keeps released players out and gives
+moved players their current team; it also confines the one cutdown-era snapshot the feed
+mislabels as a game week (2016 week 1) to that week. Per team rather than league-wide, because
+from 2016 on the feed publishes no roster for a team on its bye, and one league-wide latest
+week would drop those teams from every remaining week of the plan. A team's fallback is never
+more than one week old. Out/Doubtful and expired/unconfirmed current-week cells are hard
+exclusions. Questionable scales forecasts by 0.85; zero forecasts can still be eligible.
+Player ID breaks ties. Each actual strategy replay depletes its own pool. The hindsight
+population is historical eligible scorer identities, so it is a retrospective scoring ceiling
+rather than another forecast model.
 
 Mean ranking differences never become purported season gains. Actual-score summary differences
 are explicitly against the deterministic baseline's greedy season replay. Raw per-season
@@ -72,11 +79,11 @@ validation work; no favorable result or parameter adjustment was required for co
 After a completed run, independently verify and publish the saved artifacts:
 
 ```bash
-uv run python experiments/verify_phase2.py
+uv run python experiments/verify.py <experiment> <tests-passed>
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 uv run pool benchmark \
-  --config experiments/phase2-validation.toml \
-  --output data/experiments/phase2-validation --resume
-uv run python experiments/publish_phase2.py
+  --config experiments/<experiment>.toml \
+  --output data/experiments/<experiment> --resume
+uv run python experiments/publish.py <experiment>
 ```
 
 The verification script reconciles every configured seed, candidate/mask population, pick

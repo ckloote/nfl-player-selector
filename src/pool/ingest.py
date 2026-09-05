@@ -242,7 +242,13 @@ def _depth_from_weeks(raw: pd.DataFrame, season: int, max_week: int | None = Non
         df = df[df["week"] <= max_week]
     if not len(df):
         return pd.DataFrame(columns=DEPTH_COLUMNS)
-    df = df[df["week"] == df["week"].max()]
+    # Latest per team, as the docstring promises and `_depth_from_snapshots` does:
+    # the feed publishes nothing for a team on its bye, so one league-wide latest
+    # week drops those teams and every one of their players falls to DEPTH_DEFAULT.
+    df = df[df["week"] == df.groupby("club_code")["week"].transform("max")]
+    # A player who moved during another team's bye is listed on both snapshots; keep
+    # the later one, so the aggregation below cannot pin him to the team he left.
+    df = df[df["week"] == df.groupby("gsis_id")["week"].transform("max")]
     out = (
         df.sort_values("rank")
         .groupby("gsis_id", as_index=False)

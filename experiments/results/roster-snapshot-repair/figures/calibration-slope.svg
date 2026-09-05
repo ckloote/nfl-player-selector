@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 320" width="720" height="320" role="img" aria-label="Poisson calibration slope by season">
+<text x="16.0" y="22.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#6e7781" text-anchor="start" font-weight="bold">Poisson calibration slope by season</text>
+<text x="16.0" y="40.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="start" font-weight="normal">`shipped`, with 95% cluster-robust intervals. 1.0 is calibrated;</text>
+<text x="16.0" y="55.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="start" font-weight="normal">below 1 the forecasts are too extreme. Dotted: mean 0.867.</text>
+<line x1="62" y1="263.1" x2="696" y2="263.1" stroke="#8b949e" stroke-opacity="0.25" stroke-width="1"/>
+<text x="52.0" y="267.1" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="end" font-weight="normal">0.75</text>
+<line x1="62" y1="227.9" x2="696" y2="227.9" stroke="#8b949e" stroke-opacity="0.25" stroke-width="1"/>
+<text x="52.0" y="231.9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="end" font-weight="normal">0.80</text>
+<line x1="62" y1="192.7" x2="696" y2="192.7" stroke="#8b949e" stroke-opacity="0.25" stroke-width="1"/>
+<text x="52.0" y="196.7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="end" font-weight="normal">0.85</text>
+<line x1="62" y1="157.5" x2="696" y2="157.5" stroke="#8b949e" stroke-opacity="0.25" stroke-width="1"/>
+<text x="52.0" y="161.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="end" font-weight="normal">0.90</text>
+<line x1="62" y1="122.3" x2="696" y2="122.3" stroke="#8b949e" stroke-opacity="0.25" stroke-width="1"/>
+<text x="52.0" y="126.3" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="end" font-weight="normal">0.95</text>
+<line x1="62" y1="87.1" x2="696" y2="87.1" stroke="#8b949e" stroke-opacity="0.25" stroke-width="1"/>
+<text x="52.0" y="91.1" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="end" font-weight="normal">1.00</text>
+<line x1="62" y1="87.1" x2="696" y2="87.1" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="5 4"/>
+<line x1="62" y1="180.8" x2="696" y2="180.8" stroke="#1f9c8a" stroke-width="1" stroke-dasharray="2 3"/>
+<line x1="83.1" y1="115.2" x2="83.1" y2="240.4" stroke="#1f9c8a" stroke-width="1.5" stroke-opacity="0.55"/>
+<circle cx="83.1" cy="177.8" r="3.5" fill="#1f9c8a"/>
+<text x="83.1" y="294.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">11</text>
+<line x1="125.4" y1="121.3" x2="125.4" y2="211.5" stroke="#1f9c8a" stroke-width="1.5" stroke-opacity="0.55"/>
+<circle cx="125.4" cy="166.4" r="3.5" fill="#1f9c8a"/>
+<text x="125.4" y="294.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">12</text>
+<line x1="167.7" y1="135.4" x2="167.7" y2="213.9" stroke="#1f9c8a" stroke-width="1.5" stroke-opacity="0.55"/>
+<circle cx="167.7" cy="174.7" r="3.5" fill="#1f9c8a"/>
+<text x="167.7" y="294.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">13</text>
+<line x1="209.9" y1="145.6" x2="209.9" y2="249.9" stroke="#1f9c8a" stroke-width="1.5" stroke-opacity="0.55"/>
+<circle cx="209.9" cy="197.7" r="3.5" fill="#1f9c8a"/>
+<text x="209.9" y="294.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">14</text>
+<line x1="252.2" y1="113.1" x2="252.2" y2="221.7" stroke="#1f9c8a" stroke-width="1.5" stroke-opacity="0.55"/>
+<circle cx="252.2" cy="167.4" r="3.5" fill="#1f9c8a"/>
+<text x="252.2" y="294.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">15</text>
+<line x1="294.5" y1="144.3" x2="294.5" y2="224.9" stroke="#1f9c8a" stroke-width="1.5" stroke-opacity="0.55"/>
+<circle cx="294.5" cy="184.6" r="3.5" fill="#1f9c8a"/>
+<text x="294.5" y="294.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">16</text>
+<line x1="336.7" y1="125.4" x2="336.7" y2="202.0" stroke="#1f9c8a" stroke-width="1.5" stroke-opacity="0.55"/>
+<circle cx="336.7" cy="163.7" r="3.5" fill="#1f9c8a"/>
+<text x="336.7" y="294.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">17</text>
+<line x1="379.0" y1="170.2" x2="379.0" y2="261.9" stroke="#1f9c8a" stroke-width="1.5" stroke-opacity="0.55"/>
+<circle cx="379.0" cy="216.0" r="3.5" fill="#1f9c8a"/>
+<text x="379.0" y="294.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">18</text>
+<line x1="421.3" y1="136.5" x2="421.3" y2="212.7" stroke="#1f9c8a" stroke-width="1.5" stroke-opacity="0.55"/>
+<circle cx="421.3" cy="174.6" r="3.5" fill="#1f9c8a"/>
+<text x="421.3" y="294.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">19</text>
+<line x1="463.5" y1="134.2" x2="463.5" y2="204.8" stroke="#1f9c8a" stroke-width="1.5" stroke-opacity="0.55"/>
+<circle cx="463.5" cy="169.5" r="3.5" fill="#1f9c8a"/>
+<text x="463.5" y="294.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">20</text>
+<line x1="505.8" y1="152.0" x2="505.8" y2="222.1" stroke="#1f9c8a" stroke-width="1.5" stroke-opacity="0.55"/>
+<circle cx="505.8" cy="187.1" r="3.5" fill="#1f9c8a"/>
+<text x="505.8" y="294.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">21</text>
+<line x1="548.1" y1="143.1" x2="548.1" y2="211.8" stroke="#1f9c8a" stroke-width="1.5" stroke-opacity="0.55"/>
+<circle cx="548.1" cy="177.5" r="3.5" fill="#1f9c8a"/>
+<text x="548.1" y="294.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">22</text>
+<line x1="590.3" y1="150.1" x2="590.3" y2="227.3" stroke="#1f9c8a" stroke-width="1.5" stroke-opacity="0.55"/>
+<circle cx="590.3" cy="188.7" r="3.5" fill="#1f9c8a"/>
+<text x="590.3" y="294.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">23</text>
+<line x1="632.6" y1="160.0" x2="632.6" y2="245.1" stroke="#1f9c8a" stroke-width="1.5" stroke-opacity="0.55"/>
+<circle cx="632.6" cy="202.5" r="3.5" fill="#1f9c8a"/>
+<text x="632.6" y="294.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">24</text>
+<line x1="674.9" y1="128.7" x2="674.9" y2="198.3" stroke="#1f9c8a" stroke-width="1.5" stroke-opacity="0.55"/>
+<circle cx="674.9" cy="163.5" r="3.5" fill="#1f9c8a"/>
+<text x="674.9" y="294.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="middle" font-weight="normal">25</text>
+<text x="62.0" y="308.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#6e7781" text-anchor="start" font-weight="normal">season</text>
+</svg>
