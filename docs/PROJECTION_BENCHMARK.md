@@ -2,7 +2,7 @@
 
 Specification: 2026-09-04. Artifact schema 1; scoring version 2; database schema 2.
 
-Code revision `2546c23abb58eb8a3367dc07f020cb49813d3ba7`; source fingerprint `a90e7cda4582e9320bca5283a7e45b472f5fc5247d65ad9bb2e8f6bdee7418f2`; dirty tree: True. Frozen dataset SHA-256 `405df67ac6a2d73b1036ffdd483b56f1e9745934af110a1730c84d6e7e93fdf2`.
+Code revision `9b0525c86b59e15f9238a5fd01abe9f6ff824064`; source fingerprint `08886f8851956059ccb50dace43e2b8af4f0607f724ff8a5d14c04b6e82d5686`; dirty tree: True. Frozen dataset SHA-256 `405df67ac6a2d73b1036ffdd483b56f1e9745934af110a1730c84d6e7e93fdf2`.
 
 Models: random, within-player, historical-rate, regressed-rate, current-season-rate, vegas-environment, player-vegas, shipped, no-vegas, base-rate-only. Baseline: `shipped`; shuffled seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]; deterministic seed sentinel: -1. Policy: `historical`; roles: `usage`.
 
@@ -13,7 +13,7 @@ Reproduce: `pool benchmark --config experiments/roster-snapshot-repair.toml --ou
 - Stats through W-1; weekly roster and injury rows through W; usage roles. Final schedule revisions, report timing within a week and later stat corrections remain approximations.
 - One decision per week immediately before the first confirmed pick deadline. Unknown current-week kickoffs are hard exclusions; future planning estimates remain usable.
 - Snapshot observations represent import availability, not backdated source publication. Finalized outcome scoring is separate from archived projection inputs.
-- Ranking population: pool-position players listed active on the latest weekly roster snapshot at or before the decision week, before assignment pruning; hard exclusions unranked. Zero estimates eligible. Ties use player ID.
+- Ranking population: pool-position players listed active on their own team's latest weekly roster snapshot at or before the decision week, before assignment pruning; hard exclusions unranked. Zero estimates eligible. Ties use player ID.
 - Common-pool depletion uses the selected deterministic baseline greedy history. Top-k diagnostics are TDs per ranked candidate, never achieved season scores.
 - Slot-week means are averaged within season. Seeds are averaged within season before uncertainty across seasons; seed SD is reported separately. Empty cells are reported.
 - Each greedy/optimizer replay has its own no-reuse history. Random-top-10 strategy trials use shipped forecasts and differ from shuffled projection models. Hindsight is retrospective.
@@ -70,22 +70,22 @@ Challenger minus baseline, TDs per ranked candidate; SE across seasons.
 | vegas-environment | 3 | -0.1621 | 0.0223 | 0.0000 | 15 |
 | vegas-environment | 5 | -0.1387 | 0.0138 | 0.0000 | 15 |
 | vegas-environment | 10 | -0.0681 | 0.0085 | 0.0000 | 15 |
-| within-player | 1 | -0.0329 | 0.0213 | 0.0922 | 15 |
-| within-player | 3 | -0.0289 | 0.0114 | 0.0437 | 15 |
-| within-player | 5 | -0.0222 | 0.0071 | 0.0285 | 15 |
-| within-player | 10 | -0.0081 | 0.0049 | 0.0148 | 15 |
+| within-player | 1 | -0.0341 | 0.0230 | 0.0928 | 15 |
+| within-player | 3 | -0.0302 | 0.0117 | 0.0426 | 15 |
+| within-player | 5 | -0.0246 | 0.0071 | 0.0282 | 15 |
+| within-player | 10 | -0.0093 | 0.0050 | 0.0146 | 15 |
 
 Per-seed coverage, jointly empty cells and per-season diagnostics are saved in `ranking.csv` and `paired_ranking.csv`. Across exported ranking metric rows: 0 empty cells (repeated across k, pools and seeds; not independent observations). Calibration slopes/intercepts, reliability bins, tail deviance and within-slot Spearman results are saved separately by seed and season. They are diagnostics, not evidence of an achieved season gain or simulation readiness.
 
 
 ## Run verification
 
-Implementation commit matching every recorded source-file hash: `61f204903757b8655c7ba1818a2cd6be82c614d9`. The run began from that source tree before its implementation commit; the manifest preserves the original parent revision and dirty fingerprint.
+Implementation commit matching every recorded source-file hash: `7a98f03150193572515617f29f60e635f21aedb9`. The run began from that source tree before its implementation commit; the manifest preserves the original parent revision and dirty fingerprint.
 
 All 15 seasons completed: 720 model/seed/season runs, 5,045,952 forecast rows, 1,755 achieved season scores, and 91,260 individual replay picks. All 4,175 required games have complete scoring and player-stat coverage for both teams. No season was omitted.
 
 2022 includes 271 completed games; the [Bills–Bengals game was canceled](https://www.buffalobills.com/news/nfl-says-neutral-site-afc-championship-game-is-possible-bills-bengals-week-17-ga). Its absence from the final schedule is a historical-replay approximation.
 
-Verification: 218 pytest tests passed; Ruff lint and formatting passed. Saved forecasts were checked for identical candidate/mask populations, hard exclusions, timestamps and outcomes. Pick histories contain no player reuse; pick sums equal reported scores; selected-player flags and unique-player counts reconcile. A full `--resume` verified all checkpoint hashes. Synthetic interrupted/resumed and uninterrupted runs produced identical artifacts.
+Verification: 229 pytest tests passed; Ruff lint and formatting passed. Saved forecasts were checked for identical candidate/mask populations, hard exclusions, timestamps and outcomes. Pick histories contain no player reuse; pick sums equal reported scores; selected-player flags and unique-player counts reconcile. A full `--resume` verified all checkpoint hashes. Synthetic interrupted/resumed and uninterrupted runs produced identical artifacts.
 
 This run used `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1`; keep these environment variables when resuming. The pinned dependencies and exact environment are recorded in the manifest. See [experiment instructions](../experiments/README.md) for the full command and schema. Reports are generated from saved metrics and this verification record.

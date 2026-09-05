@@ -4,4 +4,4 @@ These compact metrics and generated reports correspond to the resolved configura
 
 Published with `uv run python experiments/publish.py roster-snapshot-repair` after `uv run python experiments/verify.py roster-snapshot-repair` and a benchmark resume check. See [schema and reproduction instructions](../../README.md).
 
-Matching source implementation: `61f204903757b8655c7ba1818a2cd6be82c614d9`. Historical input timing remains approximate; both eras are retrospective. No production parameter was tuned or calibrated in this phase.
+Matching source implementation: `7a98f03150193572515617f29f60e635f21aedb9`. Historical input timing remains approximate; both eras are retrospective. No production parameter was tuned or calibrated in this phase.

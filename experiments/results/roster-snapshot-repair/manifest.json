@@ -5,7 +5,7 @@
     "Stats through W-1; weekly roster and injury rows through W; usage roles. Final schedule revisions, report timing within a week and later stat corrections remain approximations.",
     "One decision per week immediately before the first confirmed pick deadline. Unknown current-week kickoffs are hard exclusions; future planning estimates remain usable.",
     "Snapshot observations represent import availability, not backdated source publication. Finalized outcome scoring is separate from archived projection inputs.",
-    "Ranking population: pool-position players listed active on the latest weekly roster snapshot at or before the decision week, before assignment pruning; hard exclusions unranked. Zero estimates eligible. Ties use player ID.",
+    "Ranking population: pool-position players listed active on their own team's latest weekly roster snapshot at or before the decision week, before assignment pruning; hard exclusions unranked. Zero estimates eligible. Ties use player ID.",
     "Common-pool depletion uses the selected deterministic baseline greedy history. Top-k diagnostics are TDs per ranked candidate, never achieved season scores.",
     "Slot-week means are averaged within season. Seeds are averaged within season before uncertainty across seasons; seed SD is reported separately. Empty cells are reported.",
     "Each greedy/optimizer replay has its own no-reuse history. Random-top-10 strategy trials use shipped forecasts and differ from shuffled projection models. Hindsight is retrospective.",
@@ -13,32 +13,32 @@
     "Research scoring includes the checked correction in experiments/scoring-corrections.json: duplicate rushing touchdowns in 2011_13_DET_NO reconciled to the official Saints game report."
   ],
   "code": {
-    "code_hash": "a90e7cda4582e9320bca5283a7e45b472f5fc5247d65ad9bb2e8f6bdee7418f2",
+    "code_hash": "08886f8851956059ccb50dace43e2b8af4f0607f724ff8a5d14c04b6e82d5686",
     "dirty": true,
-    "dirty_diff_hash": "e8460ae12316cc512bc33bf567b777aed22e50821d10a1571d43fe4cd26ffbf5",
-    "revision": "2546c23abb58eb8a3367dc07f020cb49813d3ba7",
+    "dirty_diff_hash": "07943cf7185c0ade7487421c03e769b19efbb36e9783379f6988697dba532bb3",
+    "revision": "9b0525c86b59e15f9238a5fd01abe9f6ff824064",
     "source_hashes": {
       "pyproject.toml": "26d7d21a3bbee9f3e87a7d82cd4745d77f29fd646853defeebf28bda9755f2d1",
       "src/pool/__init__.py": "91f51522fa9a410c5ef94b42aee1f1a7248ee4ce49df187268505c70c760a328",
       "src/pool/backtest.py": "a1e13e680fba94246867bb00f75df25c34a5b44f97fe7531b36fa2f3fe173462",
-      "src/pool/benchmark.py": "16c5d0a17c1e143de15386f922537ae8a9965f9a047d1d9a2dd4d7f443bdaad7",
+      "src/pool/benchmark.py": "e3a282d4e552a01654c4271fb6139c9cef1a03e1465497e286e59470c983dbfa",
       "src/pool/cli.py": "43c14f2de8314705d1f5bec6d86205b7301ad791364cee086c29c04b454aae56",
       "src/pool/config.py": "a036e6792da7783d0d9496604c7635ce47449c7ec275590236fdbbf6533c9b3d",
       "src/pool/db.py": "ccef17835f0837d54e9a73d2212d49d2bff8ea0403fca53319bd674b808e94fc",
       "src/pool/evaluate.py": "4b08389ab13f3bb42a7faea505b007b3d280266fbf5ba72a117f32c603643b0a",
       "src/pool/freshness.py": "e733c62176aeed6de52144dbb4be485e27e9a95c8b16923fdb82be54cdd3bf25",
-      "src/pool/ingest.py": "711febacd1e09068097f9d40f20df86fdcca9b05b0b584a0d782df46a0f720bb",
+      "src/pool/ingest.py": "87d20013e38cf4281d4bf2431e23098115be7bdb11f9315126c7783e8b4d5409",
       "src/pool/models/__init__.py": "fa141f17b00a684c0dd4387751c7125a19d9d746776d8c0e6d94e3309fe04382",
       "src/pool/models/baselines.py": "67943369d671bd9447a6e92667d000b2ed2108e7be9143784a8ee2c718dbda38",
       "src/pool/optimizer.py": "a9360915f45d1756323ca11cba241d06585f939ce3f997cfd983c3680692d7ec",
-      "src/pool/projections.py": "14a96dee997dc18d8cb2de32cf2674fea4700070ff019af20506ab40023f7821",
+      "src/pool/projections.py": "0435079e5196eb4c5df4f191ef03b9261ade9fa7064a7997e48b8a60b545fed1",
       "src/pool/recommend.py": "a98cf8bbc6a24346671a999b4a8281ff355b93b14b4efeec074c18514e163823",
       "src/pool/scoring.py": "dd7dee11ca320d66365b04b3d51c9f6bc7cbb37357a9f12e3a7f2e5849ee6aa5",
       "src/pool/snapshots.py": "625016e6e1fa03b940ad85b1dc5c417518313b8a7b18d53ecb692482dee3b9dd",
       "src/pool/state.py": "bf645ebd1b219aba14fe4bc583d504d3b2b831bae2a16b3f93e5e283bbf52b6d",
       "uv.lock": "24c6204a6c989f06b20d6ffe3ffb159142264392a7e0dee28e036c1d95a07a3d"
     },
-    "working_tree_status": " M README.md\n M docs/BACKTEST.md\n M docs/IMPLEMENTATION_PLAN.md\n M docs/PROJECTION_BENCHMARK.md\n M docs/REVIEW.md\n M docs/archive/BACKTEST.md\n M docs/archive/PROJECTION_BENCHMARK.md\n M experiments/README.md\nRM experiments/publish_phase2.py -> experiments/publish.py\nRM experiments/verify_phase2.py -> experiments/verify.py\n M src/pool/benchmark.py\n M src/pool/projections.py\n M tests/test_backtest.py\n M tests/test_phase2.py\n?? experiments/results/roster-snapshot-repair/\n?? experiments/roster-snapshot-repair.toml\n"
+    "working_tree_status": " M experiments/README.md\n M experiments/figures.py\n M experiments/publish.py\n M experiments/roster-snapshot-repair.toml\n M src/pool/benchmark.py\n M src/pool/ingest.py\n M src/pool/projections.py\n M tests/test_backtest.py\n M tests/test_ingest.py\n M tests/test_phase2.py\n"
   },
   "database_schema": 2,
   "dataset_hash": "405df67ac6a2d73b1036ffdd483b56f1e9745934af110a1730c84d6e7e93fdf2",
@@ -52,7 +52,7 @@
     "scipy": "1.18.1"
   },
   "identity": {
-    "code_hash": "a90e7cda4582e9320bca5283a7e45b472f5fc5247d65ad9bb2e8f6bdee7418f2",
+    "code_hash": "08886f8851956059ccb50dace43e2b8af4f0607f724ff8a5d14c04b6e82d5686",
     "config_hash": "beaf203930155ab8be928b2b09597f9c7db6fe479bf86aa6fbb054578730bfbb",
     "dataset_hash": "405df67ac6a2d73b1036ffdd483b56f1e9745934af110a1730c84d6e7e93fdf2",
     "dependencies": {

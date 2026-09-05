@@ -35,9 +35,9 @@ evaluation definitions.
 
 Both reports now state their own conclusions, generated from the saved metrics so a rerun
 restates them. In summary: the shipped model scores 53.7 TDs per season under greedy, ahead of
-every alternative tried and well clear of the 19.3 a shuffled null manages. About 91% of that
+every alternative tried and well clear of the 19.3 a shuffled null manages. About 90% of that
 advantage is in telling players apart rather than in timing them across weeks — destroying only
-the week-to-week ordering costs 3.1 TDs per season. Its forecasts are systematically too extreme:
+the week-to-week ordering costs 3.3 TDs per season. Its forecasts are systematically too extreme:
 the Poisson calibration slope is 0.817–0.892 in all fifteen seasons. And the binding constraint on
 everything else is resolution — a season-level difference needs roughly 4 TDs per season before
 fifteen replays can tell it from zero, which is larger than most of the effects worth chasing.

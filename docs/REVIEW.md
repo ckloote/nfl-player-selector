@@ -283,10 +283,12 @@ so its seed count and reported uncertainty can be reproduced.
 
 ### F11 — Medium: a mislabelled roster snapshot stayed in the candidate pool all season
 
-**Status:** Resolved by the candidate-pool repair. `projections.active_snapshot` reads the most
-recent weekly roster at or before the decision week. `experiments/roster-snapshot-repair.toml`
-reruns the identical frozen dataset under the corrected pool, so the only difference between
-that result set and Phase 2 is this change.
+**Status:** Resolved by the candidate-pool repair. `projections.active_snapshot` reads each
+team's most recent weekly roster at or before the decision week.
+`experiments/roster-snapshot-repair.toml` reruns the identical frozen dataset under the
+corrected pool, so the only difference between that result set and Phase 2 is this change.
+The first version of the repair read one league-wide latest week and had to be corrected;
+see *The bye-week regression* below.
 
 **Evidence:** [`load_frames`](../src/pool/projections.py) reduces rosters to the latest row per
 player, and [`player_pool`](../src/pool/projections.py) then kept everyone whose latest row said
@@ -318,6 +320,31 @@ season other than 2016 moving by at most 0.011. Achieved season scores and commo
 diagnostics are unchanged within their standard errors — the phantom candidates carried low
 forecasts and were never selected — and touchdowns scored by players absent from the pool are
 identical before and after in every season, so the repair costs no coverage.
+
+**The bye-week regression:** the first version of this repair read one league-wide latest week.
+From 2016 on the weekly feed publishes no roster at all for a team on its bye, so that rule
+deleted those teams from the pool outright — as few as 26 of 32 teams, and up to 99 candidates
+short, in the worst decision weeks of 2016-2025. The current week never missed them, because a
+bye team has no game and therefore no row; the forward surface did, and that is the half the
+assignment optimizer chooses over. At decision week 5 of 2024, DET, PHI, LAC and TEN had no row
+at any week from 6 to 18, returning only at decision week 6.
+
+Reading each team's own latest week restores all 32 teams in every decision week of 2011-2025
+and reaches back no further than it must: no team's fallback is more than one week old. The one
+remaining gap is MIA and TB at 2017 week 1, whose game Hurricane Irma postponed to week 11 — the
+feed carries no week-1 roster for them, before or after.
+
+Its measured effect is confined to what the diagnosis predicts. Every deterministic model's
+current-week forecasts, and so every calibration, reliability, deviance, Spearman and ranking
+figure quoted above, are identical before and after, and so is every one of their fifteen greedy
+season scores. 2011-2015 are byte-identical throughout, the feed having published all 32 teams
+every week then.
+What moves is the optimizer's forward plan, in seven of fifteen seasons for `shipped`, and the
+`within-player` null, whose shuffle consumes one RNG stream across players and so shifts when new
+players enter the surface. The rolling-assignment comparison goes from +2.87 (1.68 SE, better in
+10 of 15) to +2.87 (1.80 SE, better in 11 of 15): the same mean, a wider spread, and still short
+of two standard errors. The defect was real and the plan it corrupted was real; the season-level
+conclusion it supports is unchanged.
 
 ## Current status and recommended sequence
 

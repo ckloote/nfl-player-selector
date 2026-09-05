@@ -15,10 +15,10 @@
   "complete_games": 4175,
   "dataset_hash": "405df67ac6a2d73b1036ffdd483b56f1e9745934af110a1730c84d6e7e93fdf2",
   "format": "Ruff format --check passed",
-  "implementation_commit": "61f204903757b8655c7ba1818a2cd6be82c614d9",
+  "implementation_commit": "7a98f03150193572515617f29f60e635f21aedb9",
   "lint": "Ruff check passed",
   "player_stat_game_gaps": 0,
-  "pytest_passed": 218,
+  "pytest_passed": 229,
   "scheduled_games": 4175,
   "schema_version": 1,
   "seasons": [
@@ -143,5 +143,5 @@
       "season_scores": 117
     }
   ],
-  "source_hash": "a90e7cda4582e9320bca5283a7e45b472f5fc5247d65ad9bb2e8f6bdee7418f2"
+  "source_hash": "08886f8851956059ccb50dace43e2b8af4f0607f724ff8a5d14c04b6e82d5686"
 }
