@@ -1,4 +1,4 @@
-# Corrected projection benchmark
+# Corrected season replays
 
 Specification: 2026-09-04. Artifact schema 1; scoring version 2; database schema 2.
 
@@ -20,50 +20,32 @@ Reproduce: `pool benchmark --config experiments/phase2-validation.toml --output 
 - All seasons and era summaries are retrospective; neither era is an untouched holdout. Production constants are fixed; no calibration correction or tuning is applied.
 - Research scoring includes the checked correction in experiments/scoring-corrections.json: duplicate rushing touchdowns in 2011_13_DET_NO reconciled to the official Saints game report.
 
-## Common-pool paired ranking diagnostics
+| model | strategy | tds_per_season | se | shuffle_sd | delta_vs_baseline_greedy | paired_se |
+| --- | --- | --- | --- | --- | --- | --- |
+| base-rate-only | greedy | 46.8667 | 2.1221 | 0.0000 | -6.6667 | 2.2010 |
+| base-rate-only | optimizer | 46.7333 | 2.0574 | 0.0000 | -6.8000 | 2.2172 |
+| current-season-rate | greedy | 45.9333 | 1.7388 | 0.0000 | -7.6000 | 2.2271 |
+| current-season-rate | optimizer | 46.6000 | 1.7776 | 0.0000 | -6.9333 | 1.9060 |
+| hindsight | hindsight | 157.8000 | 1.6071 | 0.0000 | 104.2667 | 2.0644 |
+| historical-rate | greedy | 40.6667 | 1.5574 | 0.0000 | -12.8667 | 2.6581 |
+| historical-rate | optimizer | 40.6000 | 1.3898 | 0.0000 | -12.9333 | 2.3247 |
+| no-vegas | greedy | 50.9333 | 2.1480 | 0.0000 | -2.6000 | 1.3266 |
+| no-vegas | optimizer | 54.2667 | 2.2813 | 0.0000 | 0.7333 | 1.9940 |
+| player-vegas | greedy | 47.7333 | 1.5259 | 0.0000 | -5.8000 | 1.8132 |
+| player-vegas | optimizer | 47.6667 | 1.6894 | 0.0000 | -5.8667 | 1.8844 |
+| random | greedy | 19.3000 | 0.6790 | 8.2640 | -34.2333 | 1.9722 |
+| random | optimizer | 19.2300 | 0.6666 | 8.1709 | -34.3033 | 1.9859 |
+| regressed-rate | greedy | 42.2667 | 2.0964 | 0.0000 | -11.2667 | 2.1788 |
+| regressed-rate | optimizer | 42.0000 | 1.9615 | 0.0000 | -11.5333 | 1.9417 |
+| shipped | greedy | 53.5333 | 2.3009 | 0.0000 | 0.0000 | 0.0000 |
+| shipped | optimizer | 56.6000 | 2.4178 | 0.0000 | 3.0667 | 1.8860 |
+| shipped | random | 46.6667 | 1.0826 | 6.9672 | -6.8667 | 2.0999 |
+| vegas-environment | greedy | 46.6000 | 2.1730 | 0.0000 | -6.9333 | 2.4465 |
+| vegas-environment | optimizer | 45.8667 | 2.3009 | 0.0000 | -7.6667 | 2.5027 |
+| within-player | greedy | 50.4700 | 1.4879 | 5.5767 | -3.0633 | 1.4259 |
+| within-player | optimizer | 50.4767 | 1.1526 | 6.1439 | -3.0567 | 1.9511 |
 
-Challenger minus baseline, TDs per ranked candidate; SE across seasons.
-
-| model | k | mean | se | shuffle_sd | seasons |
-| --- | --- | --- | --- | --- | --- |
-| base-rate-only | 1 | -0.0590 | 0.0436 | 0.0000 | 15 |
-| base-rate-only | 3 | -0.0657 | 0.0208 | 0.0000 | 15 |
-| base-rate-only | 5 | -0.0432 | 0.0179 | 0.0000 | 15 |
-| base-rate-only | 10 | -0.0365 | 0.0091 | 0.0000 | 15 |
-| current-season-rate | 1 | -0.0696 | 0.0420 | 0.0000 | 15 |
-| current-season-rate | 3 | -0.1024 | 0.0216 | 0.0000 | 15 |
-| current-season-rate | 5 | -0.1071 | 0.0193 | 0.0000 | 15 |
-| current-season-rate | 10 | -0.1575 | 0.0149 | 0.0000 | 15 |
-| historical-rate | 1 | -0.3060 | 0.0530 | 0.0000 | 15 |
-| historical-rate | 3 | -0.2613 | 0.0284 | 0.0000 | 15 |
-| historical-rate | 5 | -0.2101 | 0.0243 | 0.0000 | 15 |
-| historical-rate | 10 | -0.1406 | 0.0147 | 0.0000 | 15 |
-| no-vegas | 1 | -0.0316 | 0.0214 | 0.0000 | 15 |
-| no-vegas | 3 | -0.0139 | 0.0144 | 0.0000 | 15 |
-| no-vegas | 5 | -0.0145 | 0.0102 | 0.0000 | 15 |
-| no-vegas | 10 | -0.0099 | 0.0040 | 0.0000 | 15 |
-| player-vegas | 1 | -0.0254 | 0.0477 | 0.0000 | 15 |
-| player-vegas | 3 | -0.0747 | 0.0274 | 0.0000 | 15 |
-| player-vegas | 5 | -0.0599 | 0.0179 | 0.0000 | 15 |
-| player-vegas | 10 | -0.0642 | 0.0111 | 0.0000 | 15 |
-| random | 1 | -0.7069 | 0.0343 | 0.1404 | 15 |
-| random | 3 | -0.6628 | 0.0213 | 0.0774 | 15 |
-| random | 5 | -0.6183 | 0.0165 | 0.0546 | 15 |
-| random | 10 | -0.5157 | 0.0139 | 0.0372 | 15 |
-| regressed-rate | 1 | -0.1132 | 0.0523 | 0.0000 | 15 |
-| regressed-rate | 3 | -0.1446 | 0.0171 | 0.0000 | 15 |
-| regressed-rate | 5 | -0.1300 | 0.0135 | 0.0000 | 15 |
-| regressed-rate | 10 | -0.1304 | 0.0120 | 0.0000 | 15 |
-| vegas-environment | 1 | -0.2381 | 0.0471 | 0.0000 | 15 |
-| vegas-environment | 3 | -0.1673 | 0.0229 | 0.0000 | 15 |
-| vegas-environment | 5 | -0.1403 | 0.0138 | 0.0000 | 15 |
-| vegas-environment | 10 | -0.0674 | 0.0079 | 0.0000 | 15 |
-| within-player | 1 | -0.0256 | 0.0223 | 0.0929 | 15 |
-| within-player | 3 | -0.0304 | 0.0114 | 0.0416 | 15 |
-| within-player | 5 | -0.0252 | 0.0074 | 0.0288 | 15 |
-| within-player | 10 | -0.0099 | 0.0052 | 0.0147 | 15 |
-
-Per-seed coverage, jointly empty cells and per-season diagnostics are saved in `ranking.csv` and `paired_ranking.csv`. Across exported ranking metric rows: 0 empty cells (repeated across k, pools and seeds; not independent observations). Calibration slopes/intercepts, reliability bins, tail deviance and within-slot Spearman results are saved separately by seed and season. They are diagnostics, not evidence of an achieved season gain or simulation readiness.
+`replays.csv` records actual TDs, empty slots and unique players for every seed/trial and season; `picks.csv` records every choice. Era summaries remain retrospective. Hindsight uses actual scorer identities and the full feasible scoring history; it is a reference ceiling with a different candidate population. The solver is exact for the pruned fixed matrix, which does not establish an advantage for its rolling policy. No production parameter was changed.
 
 
 ## Run verification
@@ -76,4 +58,4 @@ All 15 seasons completed: 720 model/seed/season runs, 5,262,384 forecast rows, 1
 
 Verification: 214 pytest tests passed; Ruff lint and formatting passed. Saved forecasts were checked for identical candidate/mask populations, hard exclusions, timestamps and outcomes. Pick histories contain no player reuse; pick sums equal reported scores; selected-player flags and unique-player counts reconcile. A full `--resume` verified all checkpoint hashes. Synthetic interrupted/resumed and uninterrupted runs produced identical artifacts.
 
-This run used `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1`; keep these environment variables when resuming. The pinned dependencies and exact environment are recorded in the manifest. See [experiment instructions](../experiments/README.md) for the full command and schema. Reports are generated from saved metrics and this verification record.
+This run used `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1`; keep these environment variables when resuming. The pinned dependencies and exact environment are recorded in the manifest. See [experiment instructions](../../README.md) for the full command and schema. Reports are generated from saved metrics and this verification record.

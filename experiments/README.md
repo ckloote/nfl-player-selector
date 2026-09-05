@@ -68,3 +68,19 @@ Mean ranking differences never become purported season gains. Actual-score summa
 are explicitly against the deterministic baseline's greedy season replay. Raw per-season
 artifacts permit other paired strategy comparisons. Calibration and simulation remain separate
 validation work; no favorable result or parameter adjustment was required for completion.
+
+After a completed run, independently verify and publish the saved artifacts:
+
+```bash
+uv run python experiments/verify_phase2.py
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 uv run pool benchmark \
+  --config experiments/phase2-validation.toml \
+  --output data/experiments/phase2-validation --resume
+uv run python experiments/publish_phase2.py
+```
+
+The verification script reconciles every configured seed, candidate/mask population, pick
+history and score total, then records the matching implementation commit. Publication copies
+compact metrics, compresses the exact individual-pick CSV with a deterministic gzip header,
+and generates report appendices from that verification record. Raw forecasts and databases
+remain in the ignored output directory.

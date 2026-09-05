@@ -289,7 +289,9 @@ artifacts. The research dataset audits all 4,175 scheduled regular-season games 
 before freezing. Explicit end-of-game score markers replace numeric play-ID ordering. One
 [guarded source correction](../experiments/scoring-corrections.json) removes duplicate rushing-TD
 records in the 2011 Detroit–New Orleans feed, reconciled to the official game report; original
-observations remain archived. The operational database is unchanged.
+observations remain archived. Operational picks and imported data were preserved. An empty
+schema migration triggered by a CLI error-path test was reverted; hashes of all ten existing
+tables matched, and the tests now use temporary databases.
 
 Recommended order:
 
