@@ -163,18 +163,44 @@ def available_weeks(conn: sqlite3.Connection, season: int) -> list[int]:
 
 
 # --- player pool ------------------------------------------------------------
+def active_snapshot(rosters: pd.DataFrame) -> pd.DataFrame:
+    """The most recent weekly roster in the frame.
+
+    Weekly rosters are snapshots, not a cumulative record: a released player
+    stops appearing rather than being marked CUT. So the roster to read is the
+    latest one, not the union of every week to date — that union keeps everyone
+    who was ever active (640 candidates at week 17 of 2024 against the 443 the
+    week-17 snapshot lists), and resolving the duplicates by first appearance
+    pins a traded player to his old team, and therefore to the wrong opponent,
+    defense and implied total, for the rest of the season.
+
+    Reading the latest week also confines a bad snapshot to the week it claims
+    to describe. The nflverse feed labels one cutdown-era roster as a game week
+    (2016 week 1 lists 24.3 pool-position actives per team, against 11.9-16.5 in
+    every other season-week from 2010 on, and names ~275 players who never took a
+    snap that season); under the union that one snapshot inflated the candidate
+    universe for all seventeen weeks of 2016.
+
+    A week whose roster has not published yet reads the previous week, which is
+    what a live picker would be looking at.
+    """
+    active = rosters[rosters["status"].isin(config.ACTIVE_ROSTER_STATUSES)]
+    return active[active.week == active.week.max()] if len(active) else active
+
+
 def player_pool(
     rosters: pd.DataFrame, pw_prior: pd.DataFrame, pw_cur: pd.DataFrame
 ) -> pd.DataFrame:
     """Active players at pool positions with their current team.
 
-    Prefers the current-season roster (handles offseason team changes); falls
-    back to the most recent stats row when no roster is loaded.
+    Prefers the latest current-season roster snapshot (handles in-season moves
+    as well as offseason ones); falls back to the most recent stats row when no
+    roster is loaded.
     """
     cols = ["player_id", "player_name", "position", "team"]
-    if len(rosters):
-        active = rosters[rosters["status"].isin(config.ACTIVE_ROSTER_STATUSES)]
-        return active[cols].drop_duplicates("player_id").reset_index(drop=True)
+    snapshot = active_snapshot(rosters) if len(rosters) else rosters
+    if len(snapshot):
+        return snapshot[cols].drop_duplicates("player_id").reset_index(drop=True)
     pw = pd.concat([pw_prior, pw_cur], ignore_index=True)
     latest = pw.sort_values(["season", "week"]).drop_duplicates("player_id", keep="last")
     return latest[cols].reset_index(drop=True)

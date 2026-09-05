@@ -317,3 +317,56 @@ def test_override_rejects_unknown_names():
 
 
 from tests.conftest import proj_row  # noqa: E402
+
+
+# --- the candidate pool -----------------------------------------------------
+def _pool(conn, week):
+    frames = P.load_frames(conn, SEASON, as_of_week=week)
+    return P.player_pool(frames.rosters, frames.pw_prior, frames.pw_cur).set_index("player_id")
+
+
+def test_a_released_player_leaves_the_pool(seeded):
+    """Weekly rosters are snapshots: a released player stops appearing rather
+    than being marked CUT, so the union of every week to date never forgets
+    anyone. Against the 2024 feed that union carried 640 candidates into week 17
+    where the week-17 roster listed 443."""
+    with seeded:
+        seeded.execute(
+            "DELETE FROM rosters WHERE season=? AND player_id='AAA-RB2' AND week > 2", (SEASON,)
+        )
+    assert "AAA-RB2" in _pool(seeded, 2).index
+    assert "AAA-RB2" not in _pool(seeded, 4).index
+
+
+def test_a_traded_player_carries_his_new_team(seeded):
+    """Resolving duplicates by first appearance pinned a moved player to his old
+    team, and so to the wrong opponent, defense and implied total, for the rest
+    of the season. Every one of the 25 players who changed teams during 2024 was
+    reported under the team they left."""
+    with seeded:
+        seeded.execute(
+            "UPDATE rosters SET team='CCC' WHERE season=? AND player_id='AAA-WR1' AND week >= 3",
+            (SEASON,),
+        )
+    assert _pool(seeded, 2).loc["AAA-WR1", "team"] == "AAA"
+    assert _pool(seeded, 4).loc["AAA-WR1", "team"] == "CCC"
+
+
+def test_one_inflated_snapshot_cannot_contaminate_later_weeks(seeded):
+    """The nflverse feed labels a cutdown-era roster as 2016 week 1 — 24.3 pool
+    actives per team against 11.9-16.5 in every other season-week from 2010 on,
+    naming ~275 players who never took a snap. Under the union it inflated the
+    candidate universe for all seventeen weeks of that season."""
+    ghosts = [(SEASON, 1, f"ghost{i}", f"Ghost {i}", "WR", "AAA", "ACT", "WR") for i in range(50)]
+    with seeded:
+        seeded.executemany("INSERT INTO rosters VALUES (?,?,?,?,?,?,?,?)", ghosts)
+    assert sum(p.startswith("ghost") for p in _pool(seeded, 1).index) == 50
+    assert not any(p.startswith("ghost") for p in _pool(seeded, 4).index)
+
+
+def test_an_unpublished_roster_week_reads_the_previous_one(seeded):
+    """Live, week W's roster may not have landed by the pick deadline. Falling
+    back to the latest week that did is what the picker is looking at anyway."""
+    with seeded:
+        seeded.execute("DELETE FROM rosters WHERE season=? AND week=4", (SEASON,))
+    assert set(_pool(seeded, 4).index) == set(_pool(seeded, 3).index)
