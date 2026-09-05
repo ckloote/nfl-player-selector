@@ -76,3 +76,32 @@ def get(name: str) -> Builder | None:
 
 
 __all__ = ["BAKEOFF", "BUILDERS", "NULLS", "Builder", "get"]
+
+
+def seeded(name: str, seed: int) -> Builder | None:
+    get(name)  # validate before dispatch
+    if name == "random":
+        return shuffle_within_slot_week(seed)
+    if name == "within-player":
+        return shuffle_within_player(seed)
+    return get(name)
+
+
+def parse_seeds(spec: str) -> list[int]:
+    out = []
+    try:
+        for part in spec.split(","):
+            ends = [int(v.strip()) for v in part.split("-")]
+            if len(ends) == 1:
+                out.append(ends[0])
+            elif len(ends) == 2 and ends[0] <= ends[1]:
+                out.extend(range(ends[0], ends[1] + 1))
+            else:
+                raise ValueError
+        if not out or min(out) < 0:
+            raise ValueError
+    except ValueError:
+        raise ValueError(
+            "seeds must be nonnegative integers or ranges, e.g. 0-19 or 1,3,5-8"
+        ) from None
+    return sorted(set(out))

@@ -61,7 +61,7 @@ def record_status(
     source_timestamp: str | None = None,
 ):
     success = utc_now().isoformat(timespec="seconds") if outcome == "success" else None
-    with conn:
+    with db.transaction(conn):
         conn.execute(
             """INSERT INTO feed_status
             (season, feed, last_attempt, last_success, outcome, coverage, source_timestamp, failure)

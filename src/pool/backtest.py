@@ -1,24 +1,10 @@
-"""Replay a finished season week by week with data frozen at each pick deadline.
+"""Replay seasons with explicit input policies and independent no-reuse histories.
 
-The point is to answer, honestly, whether the season-long assignment optimizer
-is worth anything against simpler rules. Each week the model sees only what was
-knowable an hour before kickoff (`projections.load_frames(..., as_of_week=W)`),
-picks one player per slot, and is scored against the touchdowns those players
-actually went on to score.
-
-Four strategies share the same frozen projections, so the comparison isolates
-the *decision rule* rather than the model:
-
-- `optimizer` — the shipped rule: solve the rest-of-season assignment, play the
-  player it assigns to this week.
-- `greedy`    — the obvious rule: the best available player this week, with no
-                thought for later weeks. This is the one to beat.
-- `random`    — uniform among the top few this week; the "throw darts" floor.
-- `hindsight` — one assignment over what actually happened. Unreachable, and
-                useful only as a scale reference.
-
-Pool state lives in memory here; `my_picks` is never read or written, so a
-backtest can never disturb real picks.
+Historical replay uses prior-week closing lines, stats through W-1, reports through
+W and usage roles. Final schedule revisions, report timing and stat corrections
+remain approximations; timestamped observations support stricter snapshot replay.
+Greedy, optimizer and random strategies consume model forecasts. Hindsight uses
+finalized actuals as a retrospective ceiling. Operational picks are never read or written.
 """
 
 from __future__ import annotations
@@ -110,6 +96,7 @@ class Summary:
     picks: list[Pick]
     sd: float | None = None
     trials: int = 1
+    input_provenance: list[dict] = field(default_factory=list)
 
     @classmethod
     def of(cls, replay: Replay, **kw) -> Summary:
@@ -159,8 +146,10 @@ def weekly_projections(
     season: int,
     weeks: Sequence[int],
     *,
-    role_source: str = "usage",
+    role_source: str | None = None,
     vegas_horizon: int | None = None,
+    input_policy: str = "historical",
+    decision_times: dict[tuple[int, int], str] | None = None,
     builder: Callable[..., pd.DataFrame] | None = None,
 ) -> dict[int, pd.DataFrame]:
     """One frozen projection frame per week — the expensive part of a replay.
@@ -174,13 +163,49 @@ def weekly_projections(
     shipped one on identical frozen data is the whole point of the harness — see
     the experiment branches referenced in `docs/BACKTEST.md`.
     """
-    scoring.require_complete(conn, season - 1, projections.available_weeks(conn, season - 1))
+    role_source = projections.validate_policy(input_policy, role_source, vegas_horizon)
+    loaded = weekly_inputs(
+        conn,
+        season,
+        weeks,
+        input_policy=input_policy,
+        decision_times=decision_times,
+        vegas_horizon=vegas_horizon,
+    )
     build = projections.build_projections if builder is None else builder
-    frames: dict[int, pd.DataFrame] = {}
-    for week in weeks:
-        loaded = projections.load_frames(conn, season, as_of_week=week, vegas_horizon=vegas_horizon)
-        frames[week] = build(loaded, week, role_source=role_source)
+    frames = {}
+    for week, frame in loaded.items():
+        result = build(frame, week, role_source=role_source)
+        result.attrs["input_provenance"] = frame.provenance
+        frames[week] = result
     return frames
+
+
+def weekly_inputs(
+    conn, season, weeks, *, input_policy="historical", decision_times=None, vegas_horizon=None
+):
+    """Load once per decision and share these inputs and shipped components across models."""
+    projections.validate_policy(input_policy, vegas_horizon=vegas_horizon)
+    if input_policy == "snapshots":
+        missing = [(season, w) for w in weeks if (season, w) not in (decision_times or {})]
+        if missing:
+            raise ValueError(f"--decision-times is missing timestamps for {missing}")
+    else:
+        scoring.require_complete(conn, season - 1, projections.available_weeks(conn, season - 1))
+        history = [w for w in projections.available_weeks(conn, season) if w < max(weeks)]
+        if history:
+            scoring.require_complete(conn, season, history)
+    return {
+        week: projections.load_frames(
+            conn,
+            season,
+            as_of_week=week,
+            vegas_horizon=vegas_horizon,
+            input_policy=input_policy,
+            decision_at=(decision_times or {}).get((season, week)),
+        )
+        for week in weeks
+    }
 
 
 # --- strategies -------------------------------------------------------------
@@ -230,7 +255,7 @@ def pick_random(proj, slot, week, used, *, rng, top_n=None, **_) -> Choice:
         return EMPTY
     players, column, playable = got
     top_n = config.RANDOM_TOP_N if top_n is None else top_n
-    best = playable[np.argsort(-column[playable])][:top_n]
+    best = playable[np.argsort(-column[playable], kind="stable")][:top_n]
     row = int(rng.choice(best))
     return _row(players, row, column[row])
 
@@ -337,14 +362,16 @@ def run_season(
     trials: int | None = None,
     seed: int = 0,
     discount: float | None = None,
-    role_source: str = "usage",
+    role_source: str | None = None,
     vegas_horizon: int | None = None,
+    input_policy: str = "historical",
+    decision_times: dict[tuple[int, int], str] | None = None,
     frames: dict[int, pd.DataFrame] | None = None,
     builder: Callable[..., pd.DataFrame] | None = None,
 ) -> list[Summary]:
     """Replay one season under each named strategy, sharing frozen projections."""
     strategies = list(strategies)
-    weeks = list(weeks) if weeks is not None else scored_weeks(conn, season)
+    weeks = list(weeks) if weeks is not None else projections.available_weeks(conn, season)
     scoring.require_complete(conn, season, weeks)
     actuals = actual_tds(conn, season)
     if frames is None:
@@ -354,6 +381,8 @@ def run_season(
             weeks,
             role_source=role_source,
             vegas_horizon=vegas_horizon,
+            input_policy=input_policy,
+            decision_times=decision_times,
             builder=builder,
         )
     trials = config.RANDOM_TRIALS if trials is None else trials
@@ -386,7 +415,21 @@ def run_season(
             out.append(
                 Summary.of(replay(frames, actuals, season, name, weeks=weeks, discount=discount))
             )
+    for row in out:
+        row.input_provenance = projection_provenance(frames, season)
     return out
+
+
+def projection_provenance(frames, season):
+    return [
+        dict(
+            season=season,
+            week=week,
+            decision_at=frame.attrs.get("decision_at"),
+            inputs=frame.attrs.get("input_provenance", []),
+        )
+        for week, frame in frames.items()
+    ]
 
 
 def sweep(
@@ -395,8 +438,10 @@ def sweep(
     discounts: Sequence[float],
     prior_weights: Sequence[float],
     *,
-    role_source: str = "usage",
+    role_source: str | None = None,
     vegas_horizon: int | None = None,
+    input_policy: str = "historical",
+    decision_times: dict[tuple[int, int], str] | None = None,
     log: Callable[[str], None] | None = None,
 ) -> pd.DataFrame:
     """Grid-search the future discount and prior weight, one row per cell.
@@ -405,15 +450,22 @@ def sweep(
     are rebuilt once per (season, prior weight) and reused across the discount
     axis. Greedy is scored once per those frames too — it ignores the discount.
     """
-    rows = []
+    rows, provenance = [], {}
     for season in seasons:
         weeks = scored_weeks(conn, season)
         actuals = actual_tds(conn, season)
         for pw in prior_weights:
             with config.override(PRIOR_WEIGHT_GAMES=float(pw)):
                 frames = weekly_projections(
-                    conn, season, weeks, role_source=role_source, vegas_horizon=vegas_horizon
+                    conn,
+                    season,
+                    weeks,
+                    role_source=role_source,
+                    vegas_horizon=vegas_horizon,
+                    input_policy=input_policy,
+                    decision_times=decision_times,
                 )
+                provenance[season] = projection_provenance(frames, season)
                 greedy = replay(frames, actuals, season, "greedy", weeks=weeks).total
                 for d in discounts:
                     total = replay(
@@ -431,4 +483,6 @@ def sweep(
                     )
             if log:
                 log(f"  {season} prior_weight={pw}: greedy {greedy:.0f}")
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    out.attrs["input_provenance"] = [r for records in provenance.values() for r in records]
+    return out

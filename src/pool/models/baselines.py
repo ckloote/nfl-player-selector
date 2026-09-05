@@ -5,9 +5,9 @@ Every model is built by taking the shipped projection frame for its scaffolding
 `lam`. Sharing the scaffolding is the point: the benchmark compares forecasts,
 so a difference in who is eligible would confound it.
 
-`avail_mult` is applied by every model. Availability is an eligibility filter,
-not a modelling choice under test; a model that "picked" a player who was ruled
-out would be scored against a zero it was never entitled to avoid.
+`hard_eligible` excludes ruled-out cells independently of lambda. `avail_mult`
+retains soft Questionable adjustments; shuffled models permute availability-free
+forecasts over eligible cells and apply the recipient adjustment afterward.
 """
 
 from __future__ import annotations
@@ -26,7 +26,9 @@ SORT_ASC = [True, True, False, True]
 
 
 def _scaffold(frames: Frames, from_week: int, role_source: str | None) -> pd.DataFrame:
-    return projections.build_projections(frames, from_week, role_source=role_source)
+    if frames.scaffold is None:
+        frames.scaffold = projections.build_projections(frames, from_week, role_source=role_source)
+    return frames.scaffold.copy()
 
 
 def _with_lam(proj: pd.DataFrame, lam) -> pd.DataFrame:
@@ -37,7 +39,9 @@ def _with_lam(proj: pd.DataFrame, lam) -> pd.DataFrame:
 
 def _pos_mean(proj: pd.DataFrame, frames: Frames) -> pd.Series:
     """Positional 'regular' mean TD rate — the shrinkage target, from the prior season."""
-    means = projections.positional_means(frames.pw_prior)
+    if frames.cached_pos_means is None:
+        frames.cached_pos_means = projections.positional_means(frames.pw_prior)
+    means = frames.cached_pos_means
     return proj.position.map(means).fillna(0.0).astype(float)
 
 
@@ -59,8 +63,11 @@ def shuffle_within_slot_week(seed: int):
         proj = proj.sort_values(SORT_KEYS, ascending=SORT_ASC).reset_index(drop=True)
         rng = np.random.default_rng(seed)
         lam = proj.lam.to_numpy(dtype=float).copy()
-        for _, idx in proj.groupby(["week", "slot"], sort=True).indices.items():
-            lam[idx] = rng.permutation(lam[idx])
+        for _, group in proj[proj.hard_eligible].groupby(["week", "slot"], sort=True):
+            idx = group.index.to_numpy()
+            lam[idx] = (
+                rng.permutation(lam[idx] / proj.avail_mult.iloc[idx]) * proj.avail_mult.iloc[idx]
+            )
         return _with_lam(proj, lam)
 
     build.__name__ = f"shuffle_within_slot_week_{seed}"
@@ -81,8 +88,11 @@ def shuffle_within_player(seed: int):
         proj = proj.sort_values(SORT_KEYS, ascending=SORT_ASC).reset_index(drop=True)
         rng = np.random.default_rng(seed)
         lam = proj.lam.to_numpy(dtype=float).copy()
-        for _, idx in proj.groupby("player_id", sort=True).indices.items():
-            lam[idx] = rng.permutation(lam[idx])
+        for _, group in proj[proj.hard_eligible].groupby("player_id", sort=True):
+            idx = group.index.to_numpy()
+            lam[idx] = (
+                rng.permutation(lam[idx] / proj.avail_mult.iloc[idx]) * proj.avail_mult.iloc[idx]
+            )
         return _with_lam(proj, lam)
 
     build.__name__ = f"shuffle_within_player_{seed}"
@@ -162,7 +172,7 @@ def player_plus_vegas(
 
 # --- ablations of the shipped model (instrument validation) -----------------
 def no_vegas(frames: Frames, from_week: int = 1, role_source: str | None = None) -> pd.DataFrame:
-    """Shipped model with vegas_mult neutralised. Sized at -8.56 TD/season (0/9).
+    """Shipped model with vegas_mult neutralised.
 
     Recomposed from the components rather than divided out of `lam`, so a
     zero or missing multiplier cannot turn into an infinity.
@@ -175,6 +185,6 @@ def no_vegas(frames: Frames, from_week: int = 1, role_source: str | None = None)
 def base_rate_only(
     frames: Frames, from_week: int = 1, role_source: str | None = None
 ) -> pd.DataFrame:
-    """Shipped base rate with no matchup context at all. Sized at -8.11 TD/season (0/9)."""
+    """Shipped base rate with no matchup context at all."""
     proj = _scaffold(frames, from_week, role_source)
     return _with_lam(proj, proj.base_rate * proj.avail_mult)

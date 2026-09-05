@@ -321,3 +321,58 @@ def test_scoring_parse_failure_preserves_imported_credits_and_coverage(tmp_path,
         scoring.import_touchdowns(conn, 2026, bad)
     assert scoring.touchdown_totals(conn, 2026).pool_td.sum() == 1
     assert scoring.coverage(conn, 2026).complete.all()
+
+
+def test_snapshot_failure_rolls_back_the_replacement(tmp_path, feeds, monkeypatch):
+    from pool import snapshots
+
+    conn = db.connect(tmp_path / "atomic-snapshots.db")
+    ingest.refresh(conn, 2026, log=lambda _: None)
+    before = db.read_df(conn, "SELECT * FROM player_weeks ORDER BY season, player_id")
+    observations = conn.execute(
+        "SELECT COUNT(*) FROM input_observations WHERE feed='player_stats'"
+    ).fetchone()[0]
+    original_archive, original_fetch = snapshots.archive, ingest.fetch_player_stats
+
+    def changed(season):
+        return original_fetch(season).assign(passing_tds=99)
+
+    def fail_archive(conn, season, feed, **kw):
+        if feed == "player_stats":
+            raise RuntimeError("archive disk failure")
+        return original_archive(conn, season, feed, **kw)
+
+    monkeypatch.setattr(ingest, "fetch_player_stats", changed)
+    monkeypatch.setattr(snapshots, "archive", fail_archive)
+    result = ingest.refresh(conn, 2026, log=lambda _: None)
+    assert any("archive disk failure" in failure for failure in result.failures)
+    pd.testing.assert_frame_equal(
+        before, db.read_df(conn, "SELECT * FROM player_weeks ORDER BY season, player_id")
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM input_observations WHERE feed='player_stats'"
+        ).fetchone()[0]
+        == observations
+    )
+
+
+def test_valid_empty_feed_is_archived_and_source_time_does_not_backdate(
+    tmp_path, feeds, monkeypatch
+):
+    conn = db.connect(tmp_path / "empty-snapshots.db")
+    original = ingest.fetch_injuries
+
+    def empty(season):
+        raw = original(season).iloc[:0].copy()
+        raw.attrs["source_timestamp"] = "1990-01-01T00:00:00Z"
+        return raw
+
+    monkeypatch.setattr(ingest, "fetch_injuries", empty)
+    assert not ingest.refresh(conn, 2026, log=lambda _: None).failures
+    rows = conn.execute("SELECT * FROM input_observations WHERE feed='injuries'").fetchall()
+    assert len(rows) == 2
+    for row in rows:
+        assert row["source_timestamp"] == "1990-01-01T00:00:00Z"
+        assert datetime.fromisoformat(row["observed_at"]).year >= 2026
+        assert '"rows": 0' in row["coverage"]

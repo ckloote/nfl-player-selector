@@ -380,7 +380,7 @@ def test_populated_legacy_migration_is_idempotent_and_leaves_ambiguous_games_unr
     conn.close()
     for _ in range(2):
         conn = db.connect(path)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == max(db.MIGRATIONS)
         picks = state.picks(conn, 2025).set_index("week")
         assert picks.tds.sum() == 6
         assert picks.loc[1, "game_id"] == "unique" and pd.isna(picks.loc[2, "game_id"])
@@ -477,3 +477,13 @@ def test_all_expired_cli_displays_future_plan_and_used_status(local, monkeypatch
     shown = runner.invoke(app, ["players", "--pos", "QB", "--week", "1", "--db", str(path)])
     assert shown.exit_code == 0
     assert "already used" in shown.stdout and "deadline passed" in shown.stdout
+
+
+def test_final_marker_is_authoritative_over_late_inserted_play_id(local):
+    conn, _ = local
+    timeout = play(
+        play_id=1001, touchdown=0, play_type="no_play", desc="Timeout #3", total_home_score=7
+    )
+    scoring.import_touchdowns(conn, 2026, pd.DataFrame([timeout, play(), end()]))
+    assert scoring.coverage(conn, 2026).set_index("game_id").loc["g1", "complete"] == 1
+    assert scoring.touchdown_totals(conn, 2026).pool_td.sum() == 1

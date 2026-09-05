@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable
+from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
 
 import pandas as pd
 
@@ -115,7 +117,7 @@ def replace_season(conn: sqlite3.Connection, table: str, season: int, df: pd.Dat
     missing = [c for c in df.columns if c not in cols]
     if missing:
         raise ValueError(f"{table}: unexpected columns {missing}")
-    with conn:
+    with transaction(conn):
         conn.execute(f"DELETE FROM {table} WHERE season = ?", (season,))
         if len(df):
             placeholders = ",".join("?" for _ in df.columns)
@@ -152,6 +154,21 @@ def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
 
 # Migrations deliberately do not infer scoring completeness from legacy totals.
 MIGRATIONS = {
+    2: [
+        """CREATE TABLE input_payloads (
+            content_hash TEXT PRIMARY KEY, schema_version INTEGER NOT NULL,
+            codec TEXT NOT NULL, payload BLOB NOT NULL)""",
+        """CREATE TABLE input_observations (
+            observation_id INTEGER PRIMARY KEY AUTOINCREMENT, season INTEGER NOT NULL,
+            feed TEXT NOT NULL, observed_at TEXT NOT NULL, source_timestamp TEXT,
+            content_hash TEXT NOT NULL REFERENCES input_payloads(content_hash),
+            coverage TEXT NOT NULL, schema_version INTEGER NOT NULL)""",
+        "CREATE INDEX observations_lookup ON input_observations(season, feed, observed_at)",
+        """CREATE TRIGGER observations_no_update BEFORE UPDATE ON input_observations
+            BEGIN SELECT RAISE(ABORT, 'input observations are append-only'); END""",
+        """CREATE TRIGGER observations_no_delete BEFORE DELETE ON input_observations
+            BEGIN SELECT RAISE(ABORT, 'input observations are append-only'); END""",
+    ],
     1: [
         "ALTER TABLE games ADD COLUMN kickoff_known INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE player_weeks ADD COLUMN game_id TEXT",
@@ -176,7 +193,7 @@ MIGRATIONS = {
 
 def migrate(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    for target, statements in MIGRATIONS.items():
+    for target, statements in sorted(MIGRATIONS.items()):
         if version < target:
             with conn:
                 conn.execute("BEGIN")
@@ -219,3 +236,17 @@ def backfill_game_ids(conn: sqlite3.Connection) -> None:
         AND g.week = r.week AND r.team IN (g.home_team, g.away_team)
         AND g.game_type = 'REG' WHERE r.season = my_picks.season
         AND r.week = my_picks.week AND r.player_id = my_picks.player_id)""")
+
+
+@contextmanager
+def transaction(conn: sqlite3.Connection):
+    """Nestable atomic write; an inner operation cannot commit its caller's work."""
+    name = "sp_" + uuid4().hex
+    conn.execute(f"SAVEPOINT {name}")
+    try:
+        yield
+        conn.execute(f"RELEASE SAVEPOINT {name}")
+    except BaseException:
+        conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
+        conn.execute(f"RELEASE SAVEPOINT {name}")
+        raise

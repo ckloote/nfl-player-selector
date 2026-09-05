@@ -55,6 +55,8 @@ boundary, timezone conversion, and re-solving after an early game.
 
 ### F02 — High: the replay still admits future information through betting lines
 
+**Phase 2 status:** Addressed in Phase 2: historical closing lines are masked for weeks ≥ W before all averages; snapshots resolve observed inputs by explicit timestamp. `tests/test_phase2.py` checks every model, week-one fallbacks, timestamp boundaries and later corrections. Final schedule revisions, weekly report timing and corrected historical stats remain approximations.
+
 **Evidence:** [`load_frames`](../src/pool/projections.py) preserves closing lines
 through `as_of_week + VEGAS_HORIZON_WEEKS`. A future game's closing line is not
 the advance line that existed at the replay's decision time. Moreover,
@@ -88,11 +90,13 @@ projections or choices.
 Reproduce the historical sensitivity checks with:
 
 ```bash
-uv run pool backtest --season 2024-2025 --strategy optimizer,greedy --vegas-horizon 6
-uv run pool backtest --season 2024-2025 --strategy optimizer,greedy --vegas-horizon 0
+uv run pool backtest --season 2024-2025 --strategy optimizer,greedy --input-policy legacy-closing --vegas-horizon 6
+uv run pool backtest --season 2024-2025 --strategy optimizer,greedy --input-policy legacy-closing --vegas-horizon 0
 ```
 
 ### F03 — High: a common-pool ranking metric is presented as season scoring
+
+**Phase 2 status:** Addressed in Phase 2: common-pool top-k is labeled TDs per ranked candidate with season-level uncertainty. Actual greedy/optimizer replays use separate no-reuse histories. The synthetic repeated-leader test demonstrates why rankings are not season scores. Evidence: corrected reports and saved ranking/replay artifacts.
 
 **Evidence:** [`forecast_set` and `forecasts`](../src/pool/evaluate.py) rank every
 challenger against players remaining after the baseline model's greedy walk.
@@ -126,6 +130,8 @@ using `--projection shipped` and `--projection player-vegas`.
 
 ### F04 — Medium: custom baselines can silently lose the shared candidate pool
 
+**Phase 2 status:** Addressed in Phase 2: the requested selected deterministic baseline is validated before loading and passed through generation. Its depletion history is shared across all models/seeds, with candidate and mask assertions. Custom-baseline API and CLI export tests run without shipped.
+
 **Evidence:** [`evaluate` in the CLI](../src/pool/cli.py) passes `--baseline` to
 rendering but does not pass it to `forecast_set`. The latter defaults to `shipped`.
 When that model is absent, `common` remains `None`, and each model falls back to
@@ -142,7 +148,7 @@ masks across all models in a comparison, including when `shipped` is absent.
 
 ### F05 — Medium: scoring omits touchdowns covered by the written rules
 
-**Current status:** Resolved in the weekly reliability phase: compact scorer/passer credits from play-by-play, conservative game coverage, shared complete scoring for projections/replay/hindsight and `pool score`, with return/recovery and pending-result tests. Published benchmarks retain the previous definition until separately rerun.
+**Current status:** Resolved in the weekly reliability phase: compact scorer/passer credits from play-by-play, conservative game coverage, shared complete scoring for projections/replay/hindsight and `pool score`, with return/recovery and pending-result tests. The corrected Phase 2 benchmark uses complete accounting; the prior reports are archived under their old definition.
 
 **Evidence:** [`transform_player_stats`](../src/pool/ingest.py), the database
 schema, and [`actual_tds`](../src/pool/backtest.py) retain and sum only passing,
@@ -161,6 +167,8 @@ If the pool excludes return touchdowns, document that exception instead.
 
 ### F06 — Medium: “untouched holdout” overstates research independence
 
+**Phase 2 status:** Addressed in Phase 2: both era summaries are retrospective. The dated TOML specification, source/dataset/dependency fingerprints, seeds, coverage, per-season checkpoints and saved exports record the research configuration. No untouched-holdout claim is made.
+
 **Evidence:** [`BACKTEST.md` §5](BACKTEST.md) records model searches on 2017–2025.
 The later [`PROJECTION_BENCHMARK.md`](PROJECTION_BENCHMARK.md) calls 2019–2025 an
 untouched holdout. Those seasons were already examined, and the earlier ablation
@@ -178,6 +186,8 @@ and reserve prospective data, or use a fully specified nested evaluation, for
 stronger confirmation claims.
 
 ### F07 — Medium: several model and roadmap conclusions exceed the evidence
+
+**Phase 2 status:** Documentation corrections complete in Phase 2. README, design, roadmap and replacement reports qualify all five claims below. Calibration validation by position/selection strata, transfer to live depth roles, and assignment/hold behavior remain Phase 3 work.
 
 The following claims should be corrected when reconciling the design, plan,
 backtest, and benchmark documents:
@@ -211,6 +221,8 @@ and hold/commit behavior whenever the scale of projected TDs changes.
 
 ### F08 — Medium: shuffled benchmark models can restore unavailable players
 
+**Phase 2 status:** Addressed in Phase 2: hard eligibility is independent of lambda and applied before pruning, ranking and assignment. Both nulls shuffle only eligible availability-free cells and reapply recipient Questionable adjustments. Twenty-seed exclusion, grouping, zero-estimate and strategy tests cover the contract.
+
 **Evidence:** both shuffle builders in [`models/baselines.py`](../src/pool/models/baselines.py)
 permute the final `lam`, which already includes availability. They do not preserve
 the relationship between a player's injury status and a zero projection.
@@ -241,6 +253,8 @@ unchanged.
 
 ### F10 — Medium: the documented random benchmark differs from the default runner
 
+**Phase 2 status:** Addressed in Phase 2: evaluate defaults to seeds 0–19 for each shuffled model; deterministic models run once with seed sentinel −1. Per-seed metrics average within season before uncertainty across seasons; shuffle SD is separate. The committed benchmark config distinguishes shuffled models from shipped random-top-10 strategy trials.
+
 **Evidence:** the benchmark describes 20 seeded permutations, but
 [`models.BUILDERS`](../src/pool/models/__init__.py) registers the `random`
 projection model with only `seed=0`, and the default evaluator does not iterate
@@ -257,18 +271,25 @@ The implementation status is broadly accurate: imports, projections, assignment,
 the recommendation CLI, season replay, and forecast evaluation exist. The weekly
 reliability phase now also implements `pool score`, feed freshness/coverage status,
 and the live deadline workflow. F01, F05, and F09 are resolved. Opponent tracking,
-standings, and win-probability strategy remain unfinished. F02–F04, F06–F08, and
-F10 remain open for the later evaluation/calibration phases.
+standings, and win-probability strategy remain unfinished. F02–F04, F06, F08 and F10 are addressed in Phase 2. F07 documentation corrections are
+complete; its empirical calibration validation remains Phase 3 work.
 
 Verification includes mocked refresh → recommend → record → score integration,
 migration rollback/idempotence, failed-feed preservation, and a temporary 2025
 historical import: 272 complete regular-season games, 2,206 throwing/scoring
-credits, and correct passing and return-TD pick scores. No benchmark was rerun.
+credits, and correct passing and return-TD pick scores. No benchmark was rerun during the weekly reliability step; Phase 2 supplies the replacement results.
 
-The roadmap also needs reconciliation: Phase 2 still lists per-type rates and
-negative-binomial dispersion as pending implementation, while later research
-documents reject or close those proposals. Keep implementation status distinct
-from research decisions and retain the qualifications in F07.
+The [roadmap](IMPLEMENTATION_PLAN.md) now distinguishes shipped behavior, corrected validation,
+and pending calibration/simulation research. Per-type rates and alternative count distributions
+remain research options without claims of established benefit or definitive rejection.
+
+Phase 2 evidence is in [the benchmark](PROJECTION_BENCHMARK.md), [actual replays](BACKTEST.md),
+[`experiments/phase2-validation.toml`](../experiments/phase2-validation.toml), and the saved compact
+artifacts. The research dataset audits all 4,175 scheduled regular-season games from 2010–2025
+before freezing. Explicit end-of-game score markers replace numeric play-ID ordering. One
+[guarded source correction](../experiments/scoring-corrections.json) removes duplicate rushing-TD
+records in the 2011 Detroit–New Orleans feed, reconciled to the official game report; original
+observations remain archived. The operational database is unchanged.
 
 Recommended order:
 

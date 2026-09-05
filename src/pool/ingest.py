@@ -13,7 +13,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from . import config, db, freshness, scoring, state
+from . import config, db, freshness, scoring, snapshots, state
 
 NFLVERSE_REPO = "nflverse-data"
 
@@ -308,21 +308,25 @@ def refresh(conn: sqlite3.Connection, season: int, log=print) -> RefreshResult:
                 if not expected:
                     result.failures.append(f"{feed} {s}: {detail}")
                 return
-            if feed == "touchdowns":
-                count = scoring.import_touchdowns(conn, s, raw)
-            else:
-                frame = transform(raw)
-                if frame.empty and feed != "injuries":
-                    raise ValueError("no matching rows in feed")
-                if "season" in frame and not frame.season.eq(s).all():
-                    raise ValueError("feed contains a different season")
-                count = db.replace_season(conn, table, s, frame)
-                with conn:
+            with db.transaction(conn):
+                if feed == "touchdowns":
+                    count = scoring.import_touchdowns(conn, s, raw)
+                else:
+                    frame = transform(raw)
+                    if "season" in frame and not frame.season.eq(s).all():
+                        raise ValueError("feed contains a different season")
+                    count = db.replace_season(conn, table, s, frame)
                     db.backfill_game_ids(conn)
+                freshness.record_status(
+                    conn,
+                    s,
+                    feed,
+                    "success",
+                    stamp,
+                    source_timestamp=raw.attrs.get("source_timestamp"),
+                )
+                snapshots.archive(conn, s, feed, source_timestamp=raw.attrs.get("source_timestamp"))
             result[f"{table or 'touchdown_credits'}_{s}"] = count
-            freshness.record_status(
-                conn, s, feed, "success", stamp, source_timestamp=raw.attrs.get("source_timestamp")
-            )
         except Exception as exc:
             detail = f"{type(exc).__name__}: {exc}"
             freshness.record_status(conn, s, feed, "failed", stamp, detail)

@@ -9,6 +9,8 @@ import pandas as pd
 
 from . import config, db, state
 
+SCORING_VERSION = 2  # explicit end-of-game scores, not numeric play-ID order
+
 CREDIT_COLUMNS = ["game_id", "play_id", "player_id", "kind", "player_name", "team"]
 RESULT_COLUMNS = [
     "game_id",
@@ -98,8 +100,10 @@ def transform_touchdowns(
         ending = plays.desc.fillna("").str.contains(r"\bEND (?:OF )?GAME\b", case=False)
         if "game_end" in plays:
             ending |= plays.game_end.eq(1)
-        terminal = plays.iloc[-1]
-        home, away = terminal.total_home_score, terminal.total_away_score
+        # Play IDs identify plays; late-inserted timeouts can have larger IDs than
+        # END GAME. Only explicit terminal markers establish the final score.
+        finals = plays.loc[ending, ["total_home_score", "total_away_score"]].drop_duplicates()
+        home, away = finals.iloc[0] if len(finals) == 1 else (float("nan"), float("nan"))
         matches = (
             pd.notna(home)
             and pd.notna(away)
@@ -113,7 +117,7 @@ def transform_touchdowns(
             reasons.append("conflicting duplicate plays")
         if not ending.any():
             reasons.append("no end-of-game marker")
-        if not matches:
+        if ending.any() and not matches:
             reasons.append("terminal scores do not match schedule")
         if unresolved:
             reasons.append("touchdown identities unresolved")
@@ -147,7 +151,7 @@ def import_touchdowns(conn: sqlite3.Connection, season: int, raw: pd.DataFrame) 
     if results.empty:
         raise ValueError("play-by-play has no matching regular-season games")
     # A successfully parsed season snapshot replaces coverage too: removed games become pending.
-    with conn:
+    with db.transaction(conn):
         conn.execute(
             "DELETE FROM touchdown_credits WHERE game_id IN "
             "(SELECT game_id FROM game_results WHERE season = ?)",

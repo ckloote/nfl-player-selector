@@ -92,11 +92,9 @@ ALTERNATIVES_SHOWN = 6
 ROLE_SOURCE = "depth"
 
 # --- Backtesting ------------------------------------------------------------
-# How many weeks past the pick week Vegas lines are treated as visible. A
-# finished season has closing lines for every week, but live the database holds
-# roughly six weeks of lines and nothing beyond, so replaying with the whole
-# season's lines would make far-future matchups look more knowable than they
-# are — and that biases the future discount upward.
+# Closing-line horizon retained only for explicitly labeled legacy-closing sensitivity
+# comparisons. Historical replay masks all current/future closing lines; live defaults
+# continue to use the available feed. This constant is not an availability guarantee.
 VEGAS_HORIZON_WEEKS = 6
 # The random baseline picks uniformly among this many top players per slot.
 RANDOM_TOP_N = 10

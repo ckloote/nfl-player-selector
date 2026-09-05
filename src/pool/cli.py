@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Annotated
 
 import pandas as pd
 import typer
@@ -11,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import backtest as bt
-from . import config, db, freshness, ingest, models, projections, scoring, state
+from . import config, db, freshness, ingest, models, projections, scoring, snapshots, state
 from . import evaluate as ev
 from .optimizer import plan_slot
 from .recommend import Candidate, SlotAdvice, advise_week
@@ -25,9 +26,15 @@ WeekOpt = typer.Option(None, "--week", "-w", help="Week (default: current)")
 SeasonsOpt = typer.Option(
     "2025", "--season", "-s", help="Season, list, or range: 2025 | 2024,2025 | 2017-2025"
 )
-RoleSourceOpt = typer.Option("usage", "--role-source", help="usage, depth, or none")
+RoleSourceOpt = typer.Option(None, "--role-source", help="usage, depth, or none")
 HorizonOpt = typer.Option(
-    config.VEGAS_HORIZON_WEEKS, "--vegas-horizon", help="Weeks ahead Vegas lines are visible"
+    None, "--vegas-horizon", help="Closing-line horizon (legacy-closing policy only)"
+)
+PolicyOpt = typer.Option(
+    "historical", "--input-policy", help="historical, snapshots, legacy-closing"
+)
+DecisionOpt = typer.Option(
+    None, "--decision-times", help="CSV: season,week,decision_at (with timezone)"
 )
 CsvOpt = typer.Option(None, "--csv", help="Write every cell to a CSV")
 ProjectionOpt = typer.Option(
@@ -347,6 +354,10 @@ def status(week: int | None = WeekOpt, season: int = SeasonOpt, db_path: Path | 
     wk = _week(conn, season, week, now) if has_schedule else (week if week is not None else 1)
     console.print(f"[bold]Data status — {season}, week {wk}[/bold]")
     _status(conn, season, wk, now, detail=True)
+    archived = snapshots.coverage(conn)
+    archived = archived[archived.season == season]
+    console.print("Snapshot coverage (UTC):")
+    console.print(archived.to_string(index=False) if len(archived) else "No archived observations.")
 
 
 @app.command()
@@ -476,7 +487,7 @@ def _builder(name: str):
 
 def _backtest_ready(conn, season: int) -> list[int]:
     """Weeks available to replay, or a message naming the refresh that fixes it."""
-    weeks = bt.scored_weeks(conn, season)
+    weeks = projections.available_weeks(conn, season)
     prior = conn.execute(
         "SELECT COUNT(*) FROM player_weeks WHERE season = ?", (season - 1,)
     ).fetchone()[0]
@@ -497,6 +508,7 @@ def _backtest_ready(conn, season: int) -> list[int]:
             scoring.require_complete(
                 conn, season - 1, projections.available_weeks(conn, season - 1)
             )
+            scoring.require_complete(conn, season, weeks)
             return weeks
         except ValueError as exc:
             msg = str(exc)
@@ -514,15 +526,24 @@ def backtest(
     seed: int = typer.Option(0, help="Seed for the random baseline"),
     discount: float | None = typer.Option(None, help="Override FUTURE_DISCOUNT"),
     prior_weight: float | None = typer.Option(None, help="Override PRIOR_WEIGHT_GAMES"),
-    role_source: str = RoleSourceOpt,
-    vegas_horizon: int = HorizonOpt,
+    role_source: str | None = RoleSourceOpt,
+    vegas_horizon: int | None = HorizonOpt,
+    input_policy: str = PolicyOpt,
+    decision_times: Path | None = DecisionOpt,
     projection: str = ProjectionOpt,
     detail: bool = typer.Option(False, "--detail", help="Show every week's picks"),
     db_path: Path | None = DbOpt,
 ):
     """Replay finished seasons with data frozen at each pick deadline."""
-    conn = _conn(db_path)
     builder = _builder(projection)
+    role_source, times = _input_options(input_policy, role_source, vegas_horizon, decision_times)
+    conn = _conn(db_path)
+    console.print(
+        f"Projection: {projection}; random strategy trials: {trials}; "
+        f"trial seeds: {seed}–{seed + trials - 1}; "
+        f"discount: {config.FUTURE_DISCOUNT if discount is None else discount}; "
+        f"prior weight: {config.PRIOR_WEIGHT_GAMES if prior_weight is None else prior_weight}"
+    )
     names = [s.strip() for s in strategy.split(",") if s.strip()]
     unknown = [n for n in names if n not in bt.STRATEGIES and n != "hindsight"]
     if unknown:
@@ -545,8 +566,11 @@ def backtest(
                 discount=discount,
                 role_source=role_source,
                 vegas_horizon=vegas_horizon,
+                input_policy=input_policy,
+                decision_times=times,
                 builder=builder,
             )
+        _render_input_provenance(rows[0].input_provenance)
         by_name = {r.strategy: r for r in rows}
         ceiling = by_name["hindsight"].total if "hindsight" in by_name else 0.0
         base = by_name["greedy"].total if "greedy" in by_name else None
@@ -625,12 +649,15 @@ def sweep(
     season: str = SeasonsOpt,
     discount: str = typer.Option("0.9,0.95,0.985,1.0", help="FUTURE_DISCOUNT grid"),
     prior_weight: str = typer.Option("5,7,10", help="PRIOR_WEIGHT_GAMES grid"),
-    role_source: str = RoleSourceOpt,
-    vegas_horizon: int = HorizonOpt,
+    role_source: str | None = RoleSourceOpt,
+    vegas_horizon: int | None = HorizonOpt,
+    input_policy: str = PolicyOpt,
+    decision_times: Path | None = DecisionOpt,
     csv_out: Path | None = CsvOpt,
     db_path: Path | None = DbOpt,
 ):
     """Grid-search the future discount and prior weight against the greedy baseline."""
+    role_source, times = _input_options(input_policy, role_source, vegas_horizon, decision_times)
     conn = _conn(db_path)
     seasons = _seasons(season)
     for yr in seasons:
@@ -641,11 +668,42 @@ def sweep(
         f"Sweeping {len(weights)}x{len(discounts)} cells over {len(seasons)} season(s)..."
     )
     df = bt.sweep(
-        conn, seasons, discounts, weights, role_source=role_source, vegas_horizon=vegas_horizon
+        conn,
+        seasons,
+        discounts,
+        weights,
+        role_source=role_source,
+        vegas_horizon=vegas_horizon,
+        input_policy=input_policy,
+        decision_times=times,
     )
+    _render_input_provenance(df.attrs["input_provenance"])
     if csv_out:
         df.to_csv(csv_out, index=False)
-        console.print(f"Wrote {csv_out}")
+        from . import benchmark as bench
+
+        bench.write_json(
+            csv_out.with_suffix(".metadata.json"),
+            dict(
+                schema_version=bench.SCHEMA_VERSION,
+                scoring_version=scoring.SCORING_VERSION,
+                seasons=seasons,
+                discounts=discounts,
+                prior_weights=weights,
+                input_policy=input_policy,
+                role_source=role_source,
+                vegas_horizon=vegas_horizon,
+                decision_times=[
+                    dict(season=s, week=w, decision_at=t) for (s, w), t in (times or {}).items()
+                ],
+                input_provenance=df.attrs["input_provenance"],
+                constants=bench.constants(),
+                code=bench.code_identity(),
+                assumptions=bench.ASSUMPTIONS,
+                input_metadata=bench.input_metadata(conn, {}),
+            ),
+        )
+        console.print(f"Wrote {csv_out} and reproducibility metadata")
 
     grid = df.pivot_table(index="prior_weight", columns="discount", values="delta", aggfunc="mean")
     sd = df.groupby(["prior_weight", "discount"]).delta.std().mean()
@@ -712,23 +770,29 @@ def evaluate(
     season: str = SeasonsOpt,
     model: str = typer.Option("bakeoff", "--model", "-m", help="Models, or bakeoff / all"),
     baseline: str = typer.Option("shipped", help="Model every comparison is paired against"),
+    seeds: str = typer.Option("0-19", help="Shuffled model seeds: integers or ranges"),
     k: int = typer.Option(ev.PRIMARY_K, "--k", help="Primary top-k for paired comparison"),
-    role_source: str = RoleSourceOpt,
-    vegas_horizon: int = HorizonOpt,
+    role_source: str | None = RoleSourceOpt,
+    vegas_horizon: int | None = HorizonOpt,
+    input_policy: str = PolicyOpt,
+    decision_times: Path | None = DecisionOpt,
     csv_out: Path | None = CsvOpt,
     db_path: Path | None = DbOpt,
 ):
-    """Score the projection layer on every player-week forecast, not just the picks.
-
-    A replayed season yields 54 picks and one number; the same frozen
-    projections hold ~7,500 forecasts. That is the resolution the +/-3 TD
-    detection floor in BACKTEST.md denies the season-level harness.
-    """
+    """Report common-pool ranking diagnostics and separate achieved season scores."""
+    chosen = _model_set(model)
+    try:
+        ev.validate_models(chosen, baseline)
+        seed_values = models.parse_seeds(seeds)
+        if k < 1:
+            raise ValueError("k must be positive")
+    except (ValueError, KeyError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    role_source, times = _input_options(input_policy, role_source, vegas_horizon, decision_times)
     conn = _conn(db_path)
     seasons = _seasons(season)
     for yr in seasons:
         _backtest_ready(conn, yr)
-    chosen = _model_set(model)
     console.print(f"Evaluating {len(chosen)} model(s) over {len(seasons)} season(s)...")
     df = ev.forecast_set(
         conn,
@@ -736,109 +800,132 @@ def evaluate(
         chosen,
         role_source=role_source,
         vegas_horizon=vegas_horizon,
+        baseline=baseline,
+        seeds=seed_values,
+        input_policy=input_policy,
+        decision_times=times,
         log=None,
     )
     console.print(
-        f"{len(df):,} forecasts — {len(df) // max(len(chosen), 1):,} per model, "
-        f"{len(df) // max(len(chosen) * len(seasons), 1):,} per model-season."
+        f"{len(df):,} forecast rows; shuffled seeds {seed_values}; "
+        "deterministic models run once. Ranking uses all hard-eligible candidates "
+        "before assignment pruning."
     )
     if csv_out:
+        from . import benchmark as bench
+
         df.to_csv(csv_out, index=False)
-        console.print(f"Wrote {csv_out}")
+        bench.save_frame(csv_out.with_suffix(".replays.csv"), pd.DataFrame(df.attrs["replays"]))
+        bench.save_frame(csv_out.with_suffix(".picks.csv"), pd.DataFrame(df.attrs["picks"]))
+        bench.write_json(
+            csv_out.with_suffix(".metadata.json"),
+            dict(
+                schema_version=bench.SCHEMA_VERSION,
+                scoring_version=scoring.SCORING_VERSION,
+                baseline=baseline,
+                models=list(chosen),
+                seeds=seed_values,
+                seasons=seasons,
+                input_policy=input_policy,
+                role_source=role_source,
+                vegas_horizon=vegas_horizon,
+                decision_times=[
+                    dict(season=s, week=w, decision_at=t) for (s, w), t in (times or {}).items()
+                ],
+                input_provenance=df.attrs["input_provenance"],
+                constants=bench.constants(),
+                code=bench.code_identity(),
+                assumptions=bench.ASSUMPTIONS,
+                input_metadata=bench.input_metadata(conn, {}),
+            ),
+        )
+        console.print(f"Wrote {csv_out}, replay picks, scores and reproducibility metadata")
     _render_evaluation(df, baseline, k)
 
 
+def _input_options(policy, role, horizon, path):
+    try:
+        role = projections.validate_policy(policy, role, horizon)
+        if policy == "snapshots" and path is None:
+            raise ValueError("--input-policy snapshots requires --decision-times PATH")
+        if path is not None and policy != "snapshots":
+            raise ValueError("--decision-times requires --input-policy snapshots")
+        times = snapshots.decision_times(path) if path is not None else None
+    except (ValueError, OSError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(
+        f"Input policy: {policy}; roles: {role}; scoring: all thrown/scored TD credits. "
+        "Historical schedules, weekly reports and corrected stats are approximations."
+    )
+    from . import benchmark as bench
+
+    console.print(
+        "Candidates: active-roster QB/RB/WR/TE, with latest stat-team fallback; "
+        "hard exclusions before pruning/ranking, eligible zeros retained, player-ID ties. "
+        f"Code fingerprint: {bench.code_identity()['code_hash']}"
+    )
+    return role, times
+
+
+def _render_input_provenance(records):
+    observed = [r for r in records if r["inputs"]]
+    if not observed:
+        return
+    table = Table("Decision", "Input season", "Feed", "Observed (UTC)", "Age hours", "Status")
+    for record in observed:
+        for feed in record["inputs"]:
+            table.add_row(
+                f"{record['season']} W{record['week']}: {record['decision_at']}",
+                str(feed["season"]),
+                feed["feed"],
+                feed["observed_at"] or "none",
+                "—" if feed["age_hours"] is None else f"{feed['age_hours']:.2f}",
+                "missing / fallback"
+                if feed["missing"]
+                else "stale"
+                if feed["stale"]
+                else "observed",
+            )
+    console.print(table)
+
+
 def _render_evaluation(df, baseline: str, k: int) -> None:
-    present = list(dict.fromkeys(df.model))
-
-    for rank, label in (("rank_available", "still available"), ("rank_in_slot", "full pool")):
-        t = Table(
-            "Model",
-            *[f"top{kk}" for kk in ev.TOP_K],
-            "played@1",
-            "lift@10",
-            title=f"Realised TDs per pick — ranked among players {label}",
-        )
-        tk = ev.top_k(df, rank=rank).set_index(["model", "k"])
-        for m in present:
-            cells = [f"{tk.loc[(m, kk), 'actual']:.3f}" for kk in ev.TOP_K]
-            t.add_row(
-                m, *cells, f"{tk.loc[(m, 1), 'played']:.3f}", f"{tk.loc[(m, 10), 'lift']:.1f}x"
-            )
-        console.print(t)
-
-    if baseline in present and len(present) > 1:
-        t = Table(
-            "Model",
-            f"PRIMARY top{k}",
-            "SE",
-            "won",
-            f"GATE top{ev.CONFIRM_K}",
-            "SE",
-            "won",
-            "deviance",
-            "SE",
-            title=(
-                f"Paired against {baseline}, TD/season — primary and gate are both on the "
-                "depleted pool; deviance is a diagnostic, not a gate"
-            ),
-        )
-        pk = ev.paired_top_k(df, baseline=baseline, k=k).set_index("model")
-        gate = ev.paired_top_k(df, baseline=baseline, k=ev.CONFIRM_K).set_index("model")
-        pd_ = ev.paired_deviance(df, baseline=baseline).set_index("model")
-        for m in present:
-            if m == baseline:
-                continue
-            a, g, b = pk.loc[m], gate.loc[m], pd_.loc[m]
-            t.add_row(
-                m,
-                f"{a.delta_per_season:+.2f}",
-                f"{a.se_per_season:.2f}",
-                f"{int(a.seasons_won)}/{int(a.seasons)}",
-                f"{g.delta_per_season:+.2f}",
-                f"{g.se_per_season:.2f}",
-                f"{int(g.seasons_won)}/{int(g.seasons)}",
-                f"{b.delta:+.4f}",
-                f"{b.se:.4f}",
-            )
-        console.print(t)
-
-    t = Table(
-        "Model",
-        "slope b",
-        "95% CI",
-        "intercept a",
-        "clusters",
-        "Spearman",
-        title="Calibration  E[Y]=exp(a + b*log lambda)   b<1 = forecasts too extreme",
+    _render_input_provenance(df.attrs["input_provenance"])
+    console.print(
+        "Ranking diagnostics: TDs per ranked candidate; shared baseline greedy depletion."
     )
-    sp = ev.spearman(df).set_index("model")
-    for m in present:
-        c = ev.calibration(df[df.model == m])
-        t.add_row(
-            m,
-            f"{c['slope']:.3f}",
-            f"[{c['slope_lo']:.3f}, {c['slope_hi']:.3f}]",
-            f"{c['intercept']:+.3f}",
-            f"{c['clusters']:,}",
-            f"{sp.loc[m, 'spearman']:.3f}",
+    console.print(ev.top_k(df).to_string(index=False))
+    if df.model.nunique() > 1:
+        console.print(f"Paired ranking differences vs {baseline}; uncertainty across seasons:")
+        console.print(ev.paired_top_k(df, baseline, k).to_string(index=False))
+        console.print("Paired deviance on baseline lambda > 0.30 (diagnostic):")
+        console.print(ev.paired_deviance(df, baseline).to_string(index=False))
+    console.print("Calibration computed separately for each seed (slope, intercept):")
+    for (model, seed), group in df.groupby(["model", "seed"]):
+        fit = ev.calibration(group)
+        console.print(
+            f"{model} seed={seed}: slope {fit['slope']:.3f}, intercept {fit['intercept']:.3f}"
         )
-    console.print(t)
-
-    rel = ev.reliability(df[df.model == baseline])
-    t = Table(
-        "lambda bin", "n", "proj", "actual", "proj/act", "played", title=f"Reliability — {baseline}"
+    console.print("Achieved season TDs: each strategy uses its own player history.")
+    console.print(
+        ev.replay_summary(pd.DataFrame(df.attrs["replays"]), baseline).to_string(index=False)
     )
-    for _, r in rel.iterrows():
-        t.add_row(
-            str(r["bin"]),
-            f"{int(r.n):,}",
-            f"{r.proj:.3f}",
-            f"{r.actual:.3f}",
-            f"{r.ratio:.2f}",
-            f"{r.played:.2f}",
-        )
-    console.print(t)
+
+
+@app.command()
+def benchmark(
+    config_path: Annotated[Path, typer.Option("--config", help="Experiment TOML")],
+    output: Annotated[Path, typer.Option(help="Ignored research dataset and experiment artifacts")],
+    resume: bool = typer.Option(False, help="Continue compatible season checkpoints"),
+):
+    """Run a specified benchmark against a frozen, fully audited research database."""
+    from . import benchmark as bench
+
+    try:
+        bench.run(config_path, output, resume=resume, log=console.print)
+    except (ValueError, OSError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
 
 
 if __name__ == "__main__":

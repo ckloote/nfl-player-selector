@@ -165,8 +165,8 @@ def test_projections_are_identical_whether_or_not_the_future_exists(tmp_path, we
         trimmed.execute("DELETE FROM player_weeks WHERE season=? AND week>=?", (SEASON, week))
         trimmed.execute("DELETE FROM rosters WHERE season=? AND week>?", (SEASON, week))
         trimmed.execute(
-            "UPDATE games SET spread_line=NULL, total_line=NULL WHERE season=? AND week>?",
-            (SEASON, week + config.VEGAS_HORIZON_WEEKS),
+            "UPDATE games SET spread_line=NULL, total_line=NULL WHERE season=? AND week>=?",
+            (SEASON, week),
         )
     builder = models.get(model)
     build = P.build_projections if builder is None else builder
@@ -179,7 +179,9 @@ def test_vegas_lines_beyond_the_horizon_are_hidden(seeded):
     """A finished season has every closing line; live, the database holds a few
     weeks and nothing beyond. Replaying with all of them would make far-future
     matchups look knowable and bias the future discount upward."""
-    frames = P.load_frames(seeded, SEASON, as_of_week=1, vegas_horizon=1)
+    frames = P.load_frames(
+        seeded, SEASON, as_of_week=1, vegas_horizon=1, input_policy="legacy-closing"
+    )
     cur = frames.games[frames.games.season == SEASON]
     assert cur[cur.week <= 2].total_line.notna().all()
     assert cur[cur.week > 2].total_line.isna().all()

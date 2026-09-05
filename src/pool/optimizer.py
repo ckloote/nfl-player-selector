@@ -52,6 +52,7 @@ def build_matrix(
     discount = config.FUTURE_DISCOUNT if discount is None else discount
     max_players = config.CANDIDATES_PER_SLOT if max_players is None else max_players
     sub = proj[(proj.slot == slot) & proj.week.isin(weeks) & ~proj.player_id.isin(used_ids)]
+    sub = sub[sub.get("hard_eligible", pd.Series(True, index=sub.index)).fillna(False)]
     if not len(sub):
         empty = pd.DataFrame(columns=["player_id", "player_name", "team", "position"])
         return empty, np.zeros((0, len(weeks))), np.zeros((0, len(weeks)))
@@ -66,7 +67,11 @@ def build_matrix(
             index=sub.index,
         )
         feasible = sub[~blocked]
-    rank = feasible.groupby("player_id").lam.max().sort_values(ascending=False)
+    rank = (
+        feasible.groupby("player_id", sort=True)
+        .lam.max()
+        .sort_values(ascending=False, kind="stable")
+    )
     keep = list(rank.index[:max_players])
     sub = sub[sub.player_id.isin(keep)]
     players = (
@@ -81,7 +86,6 @@ def build_matrix(
     raw_arr = raw.to_numpy(dtype=float)
     disc = np.array([discount ** max(w - current_week, 0) for w in weeks])
     values = np.where(np.isnan(raw_arr), FORBIDDEN, raw_arr * disc)
-    values = np.where(raw_arr <= 0, FORBIDDEN, values)  # ruled out this week
     for r, pid in enumerate(keep):
         for c, week in enumerate(weeks):
             if unavailable and (pid, week) in unavailable:

@@ -1,0 +1,43 @@
+schema_version = 1
+workers = 4
+specification_date = "2026-09-04"
+seasons = [2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
+history_start = 2010
+models = ["random", "within-player", "historical-rate", "regressed-rate", "current-season-rate", "vegas-environment", "player-vegas", "shipped", "no-vegas", "base-rate-only"]
+baseline = "shipped"
+seeds = "0-19"
+input_policy = "historical"
+role_source = "usage"
+constants = "shipped"
+scoring_corrections = "experiments/scoring-corrections.json"
+strategies = ["greedy", "optimizer"]
+random_top_n = 10
+random_trials = 20
+random_seed = 0
+hindsight = true
+ranking_k = [1, 3, 5, 10]
+ranking_pools = ["rank_available", "rank_in_slot"]
+calibration = true
+export_future_forecasts = true
+
+[eras]
+"2011-2018 retrospective" = [2011, 2018]
+"2019-2025 retrospective" = [2019, 2025]
+
+[expected_games]
+2010 = 256
+2011 = 256
+2012 = 256
+2013 = 256
+2014 = 256
+2015 = 256
+2016 = 256
+2017 = 256
+2018 = 256
+2019 = 256
+2020 = 256
+2021 = 272
+2022 = 271
+2023 = 272
+2024 = 272
+2025 = 272

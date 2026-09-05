@@ -17,34 +17,25 @@ appetite change with your position on the leaderboard?
 
 ## Status
 
-The weekly reliability work from the [September 4 review](docs/REVIEW.md) is
-implemented: enforced deadlines, validated pick history, complete touchdown
-accounting, local scoring, and feed freshness reporting. Evaluation repairs,
-calibration changes, and leaderboard strategy remain later work.
+The weekly workflow and Phase 2 validation repairs are implemented: explicit deadline
+eligibility, complete touchdown accounting, timestamped input archives, shared baseline
+comparisons, and reproducible season experiments. Production model constants remain fixed.
+Calibration validation and leaderboard strategy remain future work.
 
-**Published benchmark numbers below and in both research reports use the previous
-passing/rushing/receiving scoring definition. They have not been rerun with
-complete touchdown accounting.**
+The corrected [projection benchmark](docs/PROJECTION_BENCHMARK.md) reports common-pool
+ranking diagnostics in TDs per ranked candidate. The separate [backtest report](docs/BACKTEST.md)
+reports actual season scores from each model's greedy and optimizer pick history. Both cover
+2011–2025 with 2010 prior history; both era summaries are retrospective. Their saved configuration,
+scoring coverage, seeds, source hashes and provenance accompany the results in
+[`experiments/results/phase2-validation`](experiments/results/phase2-validation).
+Previous reports are retained in [`docs/archive`](docs/archive) under their old scoring and
+evaluation definitions.
 
-Phases 0 and 1 are implemented: data import, a matchup-adjusted projection
-model, the season-long assignment optimizer, and a CLI that gives weekly picks.
-The Phase 4 backtesting harness is built too, and it reports an uncomfortable
-result: replayed over 2011-2025 the optimizer is **statistically tied with
-simply picking the best available player each week** (-0.73 TD/season, SE 2.39,
-better in 8 of 15 seasons), though both beat a random baseline by ~13 TD/season.
-The optimizer stays anyway — it is what produces the rest-of-season plan and the
-season-cost ranking — but the plan is a forecast of intent, not a proven edge.
-See [`docs/BACKTEST.md`](docs/BACKTEST.md) for the numbers, the ideas that were
-tested and rejected, and how small an effect the harness can actually resolve.
-
-The projection layer has since been benchmarked on its own, scoring every
-player-week forecast rather than the 54 picks — 877,000 forecasts across eight
-models and fifteen seasons. The shipped model leads the reported ranking
-comparison; the contextual multipliers' top-10 advantage does not establish a
-season-scoring gain. The model also over-projects its best players. A monotone
-calibration correction preserves greedy rankings but can change assignment picks. See
-[`docs/PROJECTION_BENCHMARK.md`](docs/PROJECTION_BENCHMARK.md).
-Leaderboard-aware strategy (Phase 3) is not built yet.
+The assignment solver supplies a rest-of-season plan and the projected cost of overriding it.
+Its optimality for a fixed, pruned forecast matrix does not establish a rolling-policy scoring
+advantage. Monotone calibration preserves greedy ordering but can change assignment and
+hold/commit decisions. Joint ablations do not isolate defense alone, and these model comparisons
+do not establish that the available inputs are exhausted or that simulations are validated.
 
 ## Setup
 
@@ -154,16 +145,50 @@ uv run pool evaluate --season 2011-2025    # score every player-week forecast
 uv run pool backtest --season 2017-2025 --projection player-vegas
 ```
 
-`backtest` answers "does this decision rule win more touchdowns"; `evaluate`
-answers "is this projection a better forecast". The first is limited to effects
-above ~±3 TD/season; the second resolves roughly 5x smaller — but only for claims
-about the forecast.
+`backtest` measures actual season scores; `evaluate` reports ranking and calibration diagnostics
+alongside separate greedy/optimizer replays. A challenger's common-pool top-one rankings can
+repeat a player, while its achieved replay uses each player at most once. Ranking differences
+are never multiplied into purported season gains. Slot-week differences are averaged within
+season; shuffled seeds are averaged within season before computing uncertainty across seasons.
+Seed variability and empty-cell coverage are reported separately.
 
-Each week the model sees only what was knowable an hour before kickoff, picks a
-player per slot, and is scored on the touchdowns they actually went on to score
-— against greedy best-available, a random top-10 baseline, and perfect
-hindsight. Backfill more seasons with
-`for y in 2017 2019 2021 2023 2025; do uv run pool refresh --season $y; done`.
+Replay commands share these input policies:
+
+| Policy | Inputs and assumptions |
+|---|---|
+| `historical` (default) | Closing lines strictly before week W, masked before team/league averages; stats through W−1; rosters/injuries through W; usage roles. Final schedule revisions, weekly report timing and later stat corrections remain approximations. |
+| `snapshots` | Latest successful archived feed observation at or before an explicit decision timestamp; depth-chart roles by default. Missing essential history fails; absent/stale optional feeds are recorded with fallbacks. |
+| `legacy-closing` | Prior closing-line horizon, explicitly labeled sensitivity analysis. Only this policy permits `--vegas-horizon`. |
+
+Historical and legacy replay reject the latest depth chart. Live recommendations retain their
+depth-chart defaults and available current lines. Historical replay uses one decision immediately
+before the first confirmed pick deadline. Snapshot replay also makes one decision per week;
+this phase does not simulate repeated decisions within a week.
+
+```bash
+uv run pool evaluate --season 2024-2025 --model all --seeds 0-19 --csv /tmp/forecasts.csv
+uv run pool evaluate --model player-vegas,regressed-rate --baseline player-vegas
+uv run pool backtest --season 2025 --input-policy legacy-closing --vegas-horizon 0
+uv run pool backtest --season 2026 --input-policy snapshots --decision-times decisions.csv
+uv run pool benchmark --config experiments/phase2-validation.toml --output data/experiments/phase2-validation
+# Continue only when configuration, code, dependencies and frozen dataset match:
+uv run pool benchmark --config experiments/phase2-validation.toml --output data/experiments/phase2-validation --resume
+```
+
+Decision CSVs require `season,week,decision_at`, with one timezone-aware timestamp for every
+requested week, such as `2026,1,2026-09-10T18:00:00-04:00`. Observations become available when
+an import succeeds; source publication timestamps never backdate availability. Legacy database
+rows acquire no invented observation times. Later imports may change measured final outcomes
+but cannot alter projections reconstructed from earlier snapshots.
+
+Every successful refresh atomically replaces a normalized feed and appends an observation,
+including valid empty feeds. Payloads are compressed and deduplicated; full play-by-play is not
+stored. Schedule/lines, player stats, rosters, injuries, depth charts and compact TD credits/results
+are archived. Failed imports retain earlier data and add no successful observation. `status`
+shows snapshot coverage and earliest/latest observation times. The benchmark uses a dedicated
+research database, audits every required game/history season, then freezes a separate copy.
+A documented, guarded [source correction](experiments/scoring-corrections.json) resolves two
+duplicate source TD plays in one 2011 game; original observations remain archived.
 
 `recommend` shows, per slot, the optimizer's pick, its expected TDs, its pick
 deadline (one hour before kickoff), and alternatives ranked by **season cost**:

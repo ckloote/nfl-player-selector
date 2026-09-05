@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 
-from . import config, db, scoring
+from . import config, db, scoring, snapshots, state
 from .config import slot_for_position
 
 
@@ -33,6 +35,29 @@ class Frames:
     injuries: pd.DataFrame  # current season
     depth: pd.DataFrame = field(default_factory=pd.DataFrame)  # current season, latest snapshot
     as_of_week: int | None = None  # None = everything loaded (live use)
+    input_policy: str = "live"
+    decision_at: str | None = None
+    provenance: list[dict] = field(default_factory=list)
+    scaffold: pd.DataFrame | None = None
+    cached_pos_means: dict[str, float] | None = None
+
+
+def validate_policy(
+    input_policy: str, role_source: str | None = None, vegas_horizon: int | None = None
+) -> str:
+    if input_policy not in ("historical", "snapshots", "legacy-closing", "live"):
+        raise ValueError("input-policy must be historical, snapshots, or legacy-closing")
+    if vegas_horizon is not None and input_policy != "legacy-closing":
+        raise ValueError("--vegas-horizon requires --input-policy legacy-closing")
+    role = role_source or ("depth" if input_policy in ("live", "snapshots") else "usage")
+    if role not in ("usage", "depth", "none"):
+        raise ValueError("role-source must be usage, depth, or none")
+    if role == "depth" and input_policy in ("historical", "legacy-closing"):
+        raise ValueError(
+            "Historical replay cannot use the latest depth chart; use usage roles "
+            "or --input-policy snapshots with --decision-times."
+        )
+    return role
 
 
 def load_frames(
@@ -40,32 +65,58 @@ def load_frames(
     season: int,
     as_of_week: int | None = None,
     vegas_horizon: int | None = None,
+    *,
+    input_policy: str | None = None,
+    decision_at: str | datetime | None = None,
 ) -> Frames:
-    """Every frame the model needs, optionally frozen at a past pick deadline.
+    """Historical inputs use stats < W, reports <= W and closing lines < W.
 
-    With `as_of_week` set the loader returns only what was knowable an hour
-    before week W's first kickoff — which is the whole basis of a backtest:
-
-    | source                       | visible at week W                        |
-    |------------------------------|------------------------------------------|
-    | games (teams, weeks, kickoff)| all REG weeks: the schedule is published  |
-    |                              | in advance                               |
-    | games.spread_line/total_line | weeks <= W + horizon; NaN beyond          |
-    | player_weeks, prior season   | all: the prior season is complete         |
-    | player_weeks, this season    | week < W — week W has not been played     |
-    | rosters                      | week <= W, then the latest row per player |
-    | injuries                     | week <= W: the report precedes kickoff    |
-
-    Final scores are never read by the model, so they need no cutoff.
+    Final schedule revisions, weekly report timing and later stat corrections remain
+    historical approximations. Snapshot mode resolves only observed inputs by timestamp.
+    Live loading preserves recommendation defaults.
     """
+    policy = input_policy or ("historical" if as_of_week is not None else "live")
+    validate_policy(policy, vegas_horizon=vegas_horizon)
+    if policy == "snapshots":
+        if decision_at is None or as_of_week is None:
+            raise ValueError("Snapshot replay requires a decision timestamp for every week")
+        restored, provenance = snapshots.restore(conn, season, decision_at, as_of_week)
+        try:
+            for yr, weeks in (
+                (season - 1, available_weeks(restored, season - 1)),
+                (season, [w for w in available_weeks(restored, season) if w < as_of_week]),
+            ):
+                if yr < season or weeks:
+                    scoring.require_complete(restored, yr, weeks)
+            out = load_frames(restored, season, as_of_week, input_policy="live")
+            if out.pw_prior.empty:
+                raise ValueError(
+                    f"Missing essential {season - 1} player history in archived inputs"
+                )
+            prior_weeks = set(available_weeks(restored, season - 1))
+            if prior_weeks - set(out.pw_prior.week):
+                raise ValueError("Archived prior-season player history has missing weeks")
+            required = {w for w in available_weeks(restored, season) if w < as_of_week}
+            if required - set(out.pw_cur.week):
+                raise ValueError("Archived current-season player history has missing weeks")
+        finally:
+            restored.close()
+        out.input_policy = policy
+        out.decision_at = snapshots.timestamp(decision_at)
+        out.provenance = provenance
+        return out
     prior = season - 1
     games = db.read_df(
         conn, "SELECT * FROM games WHERE season IN (?, ?) AND game_type = 'REG'", (prior, season)
     )
-    if as_of_week is not None:
+    if as_of_week is not None and policy in ("historical", "legacy-closing"):
         horizon = config.VEGAS_HORIZON_WEEKS if vegas_horizon is None else vegas_horizon
-        beyond = (games.season == season) & (games.week > as_of_week + horizon)
-        games.loc[beyond, ["spread_line", "total_line"]] = np.nan
+        beyond = (
+            games.week >= as_of_week
+            if policy == "historical"
+            else games.week > as_of_week + horizon
+        )
+        games.loc[(games.season == season) & beyond, ["spread_line", "total_line"]] = np.nan
 
     pw = pd.concat(
         [scoring.pool_history(conn, prior), scoring.pool_history(conn, season)], ignore_index=True
@@ -91,6 +142,7 @@ def load_frames(
         injuries=injuries,
         depth=depth,
         as_of_week=as_of_week,
+        input_policy=policy,
     )
 
 
@@ -345,6 +397,7 @@ PROJECTION_COLUMNS = [
     "vegas_mult",
     "home_mult",
     "avail_mult",
+    "hard_eligible",
     "report_status",
     "role_mult",
     "depth_rank",
@@ -360,7 +413,7 @@ def _role_frames(
     frames: Frames, pool: pd.DataFrame, role_source: str | None
 ) -> tuple[pd.Series, pd.Series]:
     """(role multiplier, depth rank) per player_id for the configured source."""
-    source = config.ROLE_SOURCE if role_source is None else role_source
+    source = validate_policy(frames.input_policy, role_source)
     if source == "none":
         return pd.Series(dtype=float), pd.Series(dtype=float)
     if source == "usage":
@@ -397,6 +450,7 @@ def build_projections(
     inj = injury_multipliers(frames.injuries)
     proj = proj.merge(inj, on=["player_id", "week"], how="left")
     proj["avail_mult"] = proj.avail_mult.fillna(1.0)
+    proj["hard_eligible"] = proj.avail_mult.gt(0)
 
     role, ranks = _role_frames(frames, pool, role_source)
     proj["role_mult"] = proj.player_id.map(role)
@@ -411,11 +465,39 @@ def build_projections(
         * proj.avail_mult
         * proj.role_mult
     )
-    return (
+    if frames.as_of_week is not None:
+        now = frames.decision_at
+        if now is None and frames.input_policy != "live":
+            current = frames.games[
+                (frames.games.season == frames.season)
+                & (frames.games.week == frames.as_of_week)
+                & frames.games.kickoff_known.eq(1)
+            ]
+            if len(current):
+                # One historical decision immediately before the first pick deadline.
+                first = datetime.fromisoformat(current.kickoff.min()).replace(
+                    tzinfo=ZoneInfo(config.TIMEZONE)
+                )
+                now = (
+                    first - timedelta(minutes=config.PICK_DEADLINE_MINUTES, microseconds=1)
+                ).isoformat()
+        if now is not None:
+            frames.decision_at = snapshots.timestamp(now)
+            eastern = state.eastern_now(datetime.fromisoformat(now))
+            deadlines = pd.to_datetime(proj.kickoff) - pd.Timedelta(
+                minutes=config.PICK_DEADLINE_MINUTES
+            )
+            blocked = (proj.kickoff_known.eq(1) & deadlines.le(eastern)) | (
+                proj.week.eq(frames.as_of_week) & ~proj.kickoff_known.eq(1)
+            )
+            proj["hard_eligible"] &= ~blocked
+    out = (
         proj[PROJECTION_COLUMNS]
-        .sort_values(["week", "slot", "lam"], ascending=[True, True, False])
+        .sort_values(["week", "slot", "lam", "player_id"], ascending=[True, True, False, True])
         .reset_index(drop=True)
     )
+    out.attrs["decision_at"] = frames.decision_at
+    return out
 
 
 def projections_for(

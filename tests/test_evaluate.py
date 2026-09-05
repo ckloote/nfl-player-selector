@@ -108,10 +108,9 @@ def test_poisson_deviance_is_minimised_by_the_truth():
     assert truth < ev.poisson_deviance(y, lam * 0.7)
 
 
-def test_the_calibration_correction_cannot_reorder_anybody(seeded):
-    """lambda' = exp(a) * lambda**b is monotone, so it moves the level and never
-    the ranking. Every pick, and therefore every season total, is unchanged —
-    which is exactly why it is a layer-A fix and not a pool improvement."""
+def test_positive_monotone_calibration_preserves_greedy_order(seeded):
+    """For positive b, lambda' = exp(a) * lambda**b preserves within-week ranks.
+    This test makes no claim about assignments or fixed-TD decision thresholds."""
     df = ev.forecasts(seeded, SEASON, model="shipped", weeks=WEEKS)
     fixed = df.copy()
     fixed["lam"] = np.exp(-0.14) * fixed.lam.to_numpy(dtype=float) ** 0.89

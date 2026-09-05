@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "specification_date": "2026-09-04",
+  "corrections": [
+    {
+      "id": "2011-13-det-no-duplicate-rushing-touchdowns",
+      "season": 2011,
+      "game_id": "2011_13_DET_NO",
+      "source": "https://www.neworleanssaints.com/news/saints-win-fourth-straight-with-31-17-victory-over-lions-6425767",
+      "explanation": "The official report describes one rushing touchdown each by Mark Ingram and Kevin Smith, plus four receiving touchdowns. The source duplicates Ingram at play 1152 (misclassified kickoff, repeating play 1129) and Smith at play 1655 (repeating play 1946). Its cumulative final scores are consequently six points too high for both teams. The schedule and source home_score/away_score fields agree with the official 31-17 result.",
+      "expected_result": [37, 23],
+      "corrected_result": [31, 17],
+      "expected_credits": 12,
+      "remove_credits": [[1152, "00-0027966", "scoring"], [1655, "00-0026204", "scoring"]],
+      "retained_credits": [[1129, "00-0027966", "scoring"], [1946, "00-0026204", "scoring"]],
+      "expected_player_totals": {"00-0027966": 1, "00-0026204": 1, "00-0025414": 1, "00-0023310": 1, "00-0021182": 1, "00-0023564": 1, "00-0020531": 3, "00-0026498": 1}
+    }
+  ]
+}

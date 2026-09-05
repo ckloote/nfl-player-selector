@@ -25,9 +25,9 @@ Consequences worth calling out:
   scheduling the stars.
 - Because the schedule is known in advance, this is fundamentally an
   **assignment problem**: assign players to weeks to maximize total expected
-  TDs, subject to one-use-per-player. Picking greedily each week ("best
-  available now") is provably worse — it burns Josh Allen in week 1 against a
-  top defense when week 9 offers him against the league's worst.
+  TDs, subject to one-use-per-player. Exact assignment maximizes the fixed pruned forecast matrix. Its rolling
+  policy is compared with greedy using each policy's own history; uncertain, changing
+  projections prevent that mathematical optimum from proving a season-score advantage.
 - Winner-take-all means the true objective is **probability of finishing
   first**, not expected TDs. Those diverge exactly when you're not in the
   middle of the pack: a trailing player should prefer a high-variance pick with
@@ -49,6 +49,9 @@ Consequences worth calling out:
   against *predicted* opponent picks, never observed ones.
 
 ## 2. What the tool does
+
+The current CLI implements expected-TD advice, picks and scoring. Opponent tracking,
+boom/bust displays and leaderboard adaptation described below are proposed features.
 
 Each week, the tool answers: **"Who should I pick this week, and why?"**
 
@@ -123,12 +126,12 @@ Model TDs as a **Poisson-like count** with a per-game rate λ built from:
 
 | Factor | How it enters |
 |---|---|
-| Player baseline TD rate | TDs per game from a blend of last season and this season (see updating below), with per-type rates kept separate (pass/rush/receive) since matchups affect them differently |
+| Player baseline TD rate | TDs per game from a blend of last season and this season (see updating below), using complete thrown/scored TD credits; separate per-type rates remain a research proposal |
 | Opponent defense | Multiplier from TDs allowed by the opponent to that position, regressed toward league average (defense stats are noisy early in the season) |
-| Vegas implied team total | The single best public predictor of scoring; scale λ by implied team points relative to league average |
+| Vegas implied team total | A team scoring-environment estimate; scale λ by implied team points relative to league average |
 | Home/away | Small fixed adjustment |
 | Role | Depth-chart rank multiplier: a backup QB is worth a small fraction of a starter; RB2/WR2 keep most of their value (committees and multiple starters) |
-| Availability | Injury status and bye weeks zero out or discount λ; only active-roster players are in the pool |
+| Availability | An explicit hard-eligibility mask excludes Out/Doubtful cells and byes; Questionable scales λ by 0.85; eligible zero forecasts remain selectable |
 
 **Start-of-season prior (before any 2026 games):** last season's rates,
 regressed toward positional means (touchdown rates are notoriously noisy —
@@ -140,11 +143,15 @@ where `w` is a prior weight of roughly 6–8 games. Early in the season the mode
 trusts last year; by midseason this year's data dominates. This is simple,
 transparent, and hard to beat without much more sophistication.
 
-**Variance:** Poisson gives variance = mean for free, but real TD scoring is
-lumpier (multi-TD games cluster). Fit a negative-binomial dispersion parameter
-per position from historical data. "Boom/bust" players are those whose TD
-production concentrates (goal-line backs, deep-threat WRs on high-total games);
-the dispersion measure is what the risk module leans on.
+**Variance:** Poisson is a starting count model. Pooled variance/mean agreement does
+not validate conditional tails, dependence between players or finishing-first probabilities.
+Position and selection strata, shared player outcomes, player correlations, tie handling and
+future policy changes need validation before leaderboard simulation is trusted. Negative-binomial
+dispersion is an unvalidated option, not a shipped feature or a closed research question.
+
+A positive monotone calibration correction preserves within-week greedy ranks. It can change
+sum-maximizing assignments and the fixed-TD information premium. Phase 3 validation must check
+those behaviors and transfer from historical usage roles to the live depth-chart model.
 
 The model layer exposes one interface: a (player, week) projection frame
 carrying a TD rate per row — today a Poisson `lam`, later the parameters of a
@@ -162,7 +169,9 @@ the problem decomposes into three separate assignment problems, one per slot:
 
 This is the classic linear assignment problem, solved exactly and instantly by
 `scipy.optimize.linear_sum_assignment` on a (players × remaining weeks) matrix
-of projected expected TDs (bye weeks and already-used players get −∞).
+of discounted projected TDs after candidate pruning. Hard exclusions are applied before
+pruning and assignment; missing cells and used players are forbidden. Eligible zero estimates
+remain feasible. Current deadline restrictions and recorded locks are preserved.
 
 **Rolling horizon:** only this week's pick is ever committed. Each week the
 projections are refreshed and the whole remaining-season assignment is
@@ -244,8 +253,9 @@ A web dashboard is a possible Phase 4 nicety, not a requirement.
   greedy heuristics anywhere in the core.
 - **Simple statistical model over ML:** with 18 games/season, TD data is far
   too sparse to train fancy models without overfitting. Poisson rates + Vegas
-  lines + shrinkage is transparent, debuggable, and near the practical ceiling.
-  The projection-frame interface leaves the door open.
+  lines + shrinkage is transparent and debuggable. Comparing a few hand-built models
+  does not establish a ceiling for these inputs; the projection-frame interface permits
+  better features or estimation. Joint context ablations do not identify defense alone.
 - **Leaderboard from the official weekly report:** the pool publishes
   everyone's picks and totals at week's end, so opponent state is entered once
   a week from that report (a CSV/paste import, with manual entry as fallback)
@@ -260,7 +270,37 @@ A web dashboard is a possible Phase 4 nicety, not a requirement.
   model, tune the future-discount, and honestly answer "does this beat naive
   strategies?" before trusting it with real picks.
 
-## 5. Out of scope (for now)
+## 5. Validation and input history
+
+The shared projection loader implements historical, archived-snapshot and legacy-closing
+policies. Historical lines at weeks ≥ W are removed before every team/league average;
+week-one uses the shipped fallback. Stats stop at W−1, weekly reports at W. Final schedule
+revisions, within-week roster/injury timing and later stat corrections remain approximations.
+Historical roles use usage; only observed snapshots support replay of the depth-chart model.
+
+Snapshots use compressed deduplicated payloads and append-only UTC observations. Feed
+replacement and archival share a transaction. Source timestamps describe provenance, while
+observation time governs availability. Legacy rows have no inferred historical availability.
+Snapshot replay resolves every feed into a separate in-memory database with no fallback to
+current tables. Outcome scoring uses finalized results separately. One explicit timestamp
+per requested week is required; absent/stale optional feeds and essential-history errors are
+reported. There is no machine-clock dependency in replay decisions.
+
+Common-pool top-1/3/5/10 rankings share one selected deterministic baseline's greedy depletion.
+They measure TDs per ranked candidate, not achieved season gains. Hard eligibility and candidate
+keys are asserted across models/seeds. Shuffles permute availability-free values only over
+eligible slot-week or within-player cells and reapply each recipient's availability adjustment.
+Deterministic models run once; shuffled models use seeds 0–19. Seeds are averaged within
+season before estimating uncertainty across seasons. Empty comparison cells are reported.
+
+Actual greedy and optimizer replays maintain independent no-reuse histories. Shipped random-top-10
+strategy trials and hindsight are separate reference strategies. The configuration in
+`experiments/phase2-validation.toml` fixes 2011–2025 replays, 2010 prior history, shipped
+constants and retrospective era summaries. The runner audits all game coverage, freezes a
+research database, fingerprints code/data/configuration, checkpoints each season, and exports
+forecasts, future surfaces, picks, per-seed metrics and reports. Operational picks are untouched.
+
+## 6. Out of scope (for now)
 
 - Automatic scraping of your pool's website (manual entry instead).
 - DFS-style lineup pricing/salary logic — this pool has no salaries.
