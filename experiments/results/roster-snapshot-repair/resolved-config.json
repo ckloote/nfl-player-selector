@@ -1,0 +1,243 @@
+{
+  "baseline": "shipped",
+  "calibration": true,
+  "constants": "shipped",
+  "eras": {
+    "2011-2018 retrospective": [
+      2011,
+      2018
+    ],
+    "2019-2025 retrospective": [
+      2019,
+      2025
+    ]
+  },
+  "expected_games": {
+    "2010": 256,
+    "2011": 256,
+    "2012": 256,
+    "2013": 256,
+    "2014": 256,
+    "2015": 256,
+    "2016": 256,
+    "2017": 256,
+    "2018": 256,
+    "2019": 256,
+    "2020": 256,
+    "2021": 272,
+    "2022": 271,
+    "2023": 272,
+    "2024": 272,
+    "2025": 272
+  },
+  "export_future_forecasts": true,
+  "hindsight": true,
+  "history_start": 2010,
+  "input_policy": "historical",
+  "models": [
+    "random",
+    "within-player",
+    "historical-rate",
+    "regressed-rate",
+    "current-season-rate",
+    "vegas-environment",
+    "player-vegas",
+    "shipped",
+    "no-vegas",
+    "base-rate-only"
+  ],
+  "production_constants": {
+    "ACTIVE_ROSTER_STATUSES": [
+      "ACT"
+    ],
+    "ALTERNATIVES_SHOWN": 6,
+    "AWAY_MULT": 0.97,
+    "CANDIDATES_PER_SLOT": 80,
+    "DEF_PRIOR_SEASON_WEIGHT": 0.5,
+    "DEF_SHRINK_GAMES": 8.0,
+    "DEPTH_DEFAULT_MULT": 0.5,
+    "DEPTH_MULT": {
+      "QB": {
+        "1": 1.0,
+        "2": 0.15,
+        "3": 0.05
+      },
+      "RB": {
+        "1": 1.0,
+        "2": 0.8,
+        "3": 0.45,
+        "4": 0.25
+      },
+      "TE": {
+        "1": 1.0,
+        "2": 0.6,
+        "3": 0.3
+      },
+      "WR": {
+        "1": 1.0,
+        "2": 0.85,
+        "3": 0.5
+      }
+    },
+    "FALLBACK_TEAM_TOTAL": 22.5,
+    "FUTURE_DISCOUNT": 0.985,
+    "HOME_MULT": 1.03,
+    "INFO_PREMIUM_TD": 0.1,
+    "INJURY_MULT": {
+      "Doubtful": 0.0,
+      "Out": 0.0,
+      "Questionable": 0.85
+    },
+    "NO_HISTORY_FACTOR": 0.6,
+    "PICK_DEADLINE_MINUTES": 60,
+    "POSITIONS": [
+      "QB",
+      "RB",
+      "WR",
+      "TE"
+    ],
+    "PRIOR_SEASON_SHRINK_GAMES": 6.0,
+    "PRIOR_WEIGHT_GAMES": 7.0,
+    "RANDOM_TOP_N": 10,
+    "RANDOM_TRIALS": 20,
+    "REGULAR_MIN_GAMES": 8,
+    "REGULAR_MIN_USAGE": {
+      "QB": 15.0,
+      "RB": 8.0,
+      "TE": 3.0,
+      "WR": 4.0
+    },
+    "ROLE_SOURCE": "depth",
+    "SLOTS": {
+      "FLEX": [
+        "WR",
+        "TE"
+      ],
+      "QB": [
+        "QB"
+      ],
+      "RB": [
+        "RB"
+      ]
+    },
+    "TIMEZONE": "America/New_York",
+    "VEGAS_HORIZON_WEEKS": 6
+  },
+  "random_seed": 0,
+  "random_top_n": 10,
+  "random_trials": 20,
+  "ranking_k": [
+    1,
+    3,
+    5,
+    10
+  ],
+  "ranking_pools": [
+    "rank_available",
+    "rank_in_slot"
+  ],
+  "resolved_corrections": {
+    "corrections": [
+      {
+        "corrected_result": [
+          31,
+          17
+        ],
+        "expected_credits": 12,
+        "expected_player_totals": {
+          "00-0020531": 3,
+          "00-0021182": 1,
+          "00-0023310": 1,
+          "00-0023564": 1,
+          "00-0025414": 1,
+          "00-0026204": 1,
+          "00-0026498": 1,
+          "00-0027966": 1
+        },
+        "expected_result": [
+          37,
+          23
+        ],
+        "explanation": "The official report describes one rushing touchdown each by Mark Ingram and Kevin Smith, plus four receiving touchdowns. The source duplicates Ingram at play 1152 (misclassified kickoff, repeating play 1129) and Smith at play 1655 (repeating play 1946). Its cumulative final scores are consequently six points too high for both teams. The schedule and source home_score/away_score fields agree with the official 31-17 result.",
+        "game_id": "2011_13_DET_NO",
+        "id": "2011-13-det-no-duplicate-rushing-touchdowns",
+        "remove_credits": [
+          [
+            1152,
+            "00-0027966",
+            "scoring"
+          ],
+          [
+            1655,
+            "00-0026204",
+            "scoring"
+          ]
+        ],
+        "retained_credits": [
+          [
+            1129,
+            "00-0027966",
+            "scoring"
+          ],
+          [
+            1946,
+            "00-0026204",
+            "scoring"
+          ]
+        ],
+        "season": 2011,
+        "source": "https://www.neworleanssaints.com/news/saints-win-fourth-straight-with-31-17-victory-over-lions-6425767"
+      }
+    ],
+    "schema_version": 1,
+    "specification_date": "2026-09-04"
+  },
+  "role_source": "usage",
+  "schema_version": 1,
+  "scoring_corrections": "experiments/scoring-corrections.json",
+  "seasons": [
+    2011,
+    2012,
+    2013,
+    2014,
+    2015,
+    2016,
+    2017,
+    2018,
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024,
+    2025
+  ],
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19
+  ],
+  "specification_date": "2026-09-04",
+  "strategies": [
+    "greedy",
+    "optimizer"
+  ],
+  "workers": 4
+}

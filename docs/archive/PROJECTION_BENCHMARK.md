@@ -1,6 +1,6 @@
 # Archived results — superseded definitions
 
-This report is preserved as research history. Its numbers use the previous offensive-only scoring, closing-line replay horizon and earlier evaluation semantics. Its season-gain, confirmatory-gate, untouched-holdout and model-ceiling interpretations are superseded. Do not combine these results with the corrected Phase 2 artifacts.
+This report is preserved as research history. Its numbers use the previous offensive-only scoring, closing-line replay horizon and earlier evaluation semantics. Its season-gain, confirmatory-gate, untouched-holdout and model-ceiling interpretations are superseded. Do not combine these results with the corrected Phase 2 artifacts. Its instrument-validation gate rests on the −8.56 and −8.11 ablations from the archived backtest; the first of those is largely leakage, so the gate was calibrated against an effect that shrinks to −3.11 once future closing lines are masked. See [REVIEW.md](../REVIEW.md) F02 and the current [projection benchmark](../PROJECTION_BENCHMARK.md).
 
 ---
 

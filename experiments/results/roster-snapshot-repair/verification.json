@@ -1,0 +1,147 @@
+{
+  "checks": [
+    "all configured models and seeds",
+    "candidate/eligibility/depletion masks",
+    "hard exclusions unranked",
+    "explicit decision timestamps",
+    "consistent finalized actuals",
+    "no player reuse",
+    "pick sums equal season scores",
+    "unique-player counts",
+    "forecast pick indicators match replays",
+    "game coverage",
+    "both teams player-stat coverage"
+  ],
+  "complete_games": 4175,
+  "dataset_hash": "405df67ac6a2d73b1036ffdd483b56f1e9745934af110a1730c84d6e7e93fdf2",
+  "format": "Ruff format --check passed",
+  "implementation_commit": "61f204903757b8655c7ba1818a2cd6be82c614d9",
+  "lint": "Ruff check passed",
+  "player_stat_game_gaps": 0,
+  "pytest_passed": 218,
+  "scheduled_games": 4175,
+  "schema_version": 1,
+  "seasons": [
+    {
+      "empty_slots": 0,
+      "forecast_rows": 272832,
+      "model_seed_runs": 48,
+      "picks": 5967,
+      "season": 2011,
+      "season_scores": 117
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 271296,
+      "model_seed_runs": 48,
+      "picks": 5967,
+      "season": 2012,
+      "season_scores": 117
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 276480,
+      "model_seed_runs": 48,
+      "picks": 5967,
+      "season": 2013,
+      "season_scores": 117
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 273696,
+      "model_seed_runs": 48,
+      "picks": 5967,
+      "season": 2014,
+      "season_scores": 117
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 261312,
+      "model_seed_runs": 48,
+      "picks": 5967,
+      "season": 2015,
+      "season_scores": 117
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 409776,
+      "model_seed_runs": 48,
+      "picks": 5967,
+      "season": 2016,
+      "season_scores": 117
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 394080,
+      "model_seed_runs": 48,
+      "picks": 5967,
+      "season": 2017,
+      "season_scores": 117
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 385248,
+      "model_seed_runs": 48,
+      "picks": 5967,
+      "season": 2018,
+      "season_scores": 117
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 345648,
+      "model_seed_runs": 48,
+      "picks": 5967,
+      "season": 2019,
+      "season_scores": 117
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 347184,
+      "model_seed_runs": 48,
+      "picks": 5967,
+      "season": 2020,
+      "season_scores": 117
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 365424,
+      "model_seed_runs": 48,
+      "picks": 6318,
+      "season": 2021,
+      "season_scores": 117
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 361536,
+      "model_seed_runs": 48,
+      "picks": 6318,
+      "season": 2022,
+      "season_scores": 117
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 360384,
+      "model_seed_runs": 48,
+      "picks": 6318,
+      "season": 2023,
+      "season_scores": 117
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 360384,
+      "model_seed_runs": 48,
+      "picks": 6318,
+      "season": 2024,
+      "season_scores": 117
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 360672,
+      "model_seed_runs": 48,
+      "picks": 6318,
+      "season": 2025,
+      "season_scores": 117
+    }
+  ],
+  "source_hash": "a90e7cda4582e9320bca5283a7e45b472f5fc5247d65ad9bb2e8f6bdee7418f2"
+}

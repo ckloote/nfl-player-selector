@@ -28,9 +28,9 @@ No challenger ranks better than `shipped` at any reported k: every paired common
 
 Across the 7 candidate models, excluding the shuffled nulls, the common-pool top-10 diagnostic orders models much as their achieved season scores do (Spearman 0.86), but it does not convert into them: scaled by the 52 picks in a season it recovers about 59% of the season difference. Use it to rank candidates, never to quote a season gain.
 
-![Forecast over outcome by projection bin](../experiments/results/roster-snapshot-repair/figures/reliability.svg)
+![Forecast over outcome by projection bin](figures/reliability.svg)
 
-![Poisson calibration slope by season](../experiments/results/roster-snapshot-repair/figures/calibration-slope.svg)
+![Poisson calibration slope by season](figures/calibration-slope.svg)
 
 ## Common-pool paired ranking diagnostics
 
@@ -88,4 +88,4 @@ All 15 seasons completed: 720 model/seed/season runs, 5,045,952 forecast rows, 1
 
 Verification: 218 pytest tests passed; Ruff lint and formatting passed. Saved forecasts were checked for identical candidate/mask populations, hard exclusions, timestamps and outcomes. Pick histories contain no player reuse; pick sums equal reported scores; selected-player flags and unique-player counts reconcile. A full `--resume` verified all checkpoint hashes. Synthetic interrupted/resumed and uninterrupted runs produced identical artifacts.
 
-This run used `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1`; keep these environment variables when resuming. The pinned dependencies and exact environment are recorded in the manifest. See [experiment instructions](../experiments/README.md) for the full command and schema. Reports are generated from saved metrics and this verification record.
+This run used `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1`; keep these environment variables when resuming. The pinned dependencies and exact environment are recorded in the manifest. See [experiment instructions](../../README.md) for the full command and schema. Reports are generated from saved metrics and this verification record.

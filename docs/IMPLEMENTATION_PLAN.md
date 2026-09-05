@@ -3,13 +3,16 @@
 The September 4 review's repair sequence takes precedence over the original feature phases.
 The original benchmark and backtest reports are preserved in [archive](archive) with their old
 scoring, temporal and evaluation definitions. Current results use the saved
-[Phase 2 specification](../experiments/phase2-validation.toml).
+[candidate-pool repair specification](../experiments/roster-snapshot-repair.toml), which reruns
+the [Phase 2 specification](../experiments/phase2-validation.toml) on the identical frozen dataset
+after F11. The superseded Phase 2 results remain published for comparison.
 
 | Work | Status |
 |---|---|
 | Data import, projections, assignment, recommendation CLI | Implemented |
 | Weekly reliability (review step 1) | Implemented: F01, F05, F09 |
 | Validation repairs (review step 2) | Implemented: F02–F04, F06, F08, F10; F07 documentation corrected |
+| Candidate-pool repair (review step 2) | Implemented: F11; benchmark rerun on the same frozen dataset |
 | Calibration validation (review step 3) | Pending; no production calibration or tuning changes |
 | Leaderboard strategy (review step 4) | Pending |
 
@@ -60,6 +63,10 @@ historical replay. Both 2011–2018 and 2019–2025 summaries are retrospective.
 ## Phase 3 — calibration validation
 
 F07's documentation corrections are complete; its empirical calibration work remains open.
+The shipped Poisson calibration slope now sits between 0.817 and 0.892 in all fifteen seasons
+(mean 0.867, SD 0.022) once F11 is repaired, so forecasts are too extreme by a consistent and
+replicable amount rather than by an amount that varies with the season. That is the quantity
+Phase 3 has to explain before it corrects anything.
 Validate by position, projected-rate range and selected/available population. Check transfer
 from historical usage roles to the live depth-chart model. Evaluate changes in assignment
 and hold/commit choices when forecast scale changes. Positive monotone corrections preserve
