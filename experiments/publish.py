@@ -6,6 +6,7 @@ import shutil
 import sys
 from pathlib import Path
 
+import appendix
 import figures
 import pandas as pd
 
@@ -80,38 +81,8 @@ def with_figures(text, name, prefix):
     return text.replace(marker, block + marker, 1)
 
 
-counts = {
-    key: sum(row[key] for row in verification["seasons"])
-    for key in ("forecast_rows", "model_seed_runs", "season_scores", "picks", "empty_slots")
-}
-appendix = (
-    "\n\n## Run verification\n\n"
-    f"Implementation commit matching every recorded source-file hash: "
-    f"`{verification['implementation_commit']}`. The run began from that source tree before "
-    "its implementation commit; the manifest preserves the original parent revision and dirty "
-    "fingerprint.\n\n"
-    f"All 15 seasons completed: {counts['model_seed_runs']:,} model/seed/season runs, "
-    f"{counts['forecast_rows']:,} forecast rows, "
-    f"{counts['season_scores']:,} achieved season scores, "
-    f"and {counts['picks']:,} individual replay picks. All 4,175 required games have complete "
-    "scoring and player-stat coverage for both teams. No season was omitted.\n\n"
-    "2022 includes 271 completed games; the [Bills–Bengals game was canceled]"
-    "(https://www.buffalobills.com/news/"
-    "nfl-says-neutral-site-afc-championship-game-is-possible-bills-bengals-week-17-ga). "
-    "Its absence from the final schedule is a historical-replay approximation.\n\n"
-    f"Verification: {verification['pytest_passed']} pytest tests passed; Ruff lint and formatting "
-    "passed. Saved forecasts were checked for identical candidate/mask populations, hard "
-    "exclusions, timestamps and outcomes. Pick histories contain no player reuse; pick sums "
-    "equal reported scores; selected-player flags and unique-player counts reconcile. "
-    "A full `--resume` verified all checkpoint hashes. Synthetic interrupted/resumed and "
-    "uninterrupted runs produced identical artifacts.\n\n"
-    "This run used `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1`; keep these environment variables "
-    "when resuming. The pinned dependencies and exact environment are recorded in the manifest. "
-    "See [experiment instructions](../experiments/README.md) for the full command and schema. "
-    "Reports are generated from saved metrics and this verification record.\n"
-)
 for name in ("PROJECTION_BENCHMARK.md", "BACKTEST.md"):
-    text = (output / "compact" / name).read_text() + appendix
+    text = (output / "compact" / name).read_text() + appendix.run_verification(verification)
     beside = with_figures(text, name, "figures/")
     (published / name).write_text(beside.replace("(../experiments/README.md)", "(../../README.md)"))
     (Path("docs") / name).write_text(

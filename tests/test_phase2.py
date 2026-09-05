@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 from typer.testing import CliRunner
 
-from experiments import figures
+from experiments import appendix, figures
 from pool import backtest, benchmark, db, models, snapshots
 from pool import evaluate as ev
 from pool import projections as P
@@ -527,13 +527,19 @@ def _calibration(slopes, se=0.05):
     )
 
 
-def _viewbox_ys(svg):
-    height = float(svg.split('viewBox="0 0 ')[1].split('"')[0].split()[1])
+def _viewbox(svg, axis):
+    """Every plotted coordinate on one axis, with the viewBox extent it must fit."""
+    box = svg.split('viewBox="0 0 ')[1].split('"')[0].split()
+    extent = float(box[0 if axis == "x" else 1])
     values = []
-    for attr in ("cy=", "y1=", "y2="):
+    for attr in (f"c{axis}=", f"{axis}1=", f"{axis}2="):
         for chunk in svg.split(attr)[1:]:
             values.append(float(chunk.split('"')[1]))
-    return height, values
+    return extent, values
+
+
+def _viewbox_ys(svg):
+    return _viewbox(svg, "y")
 
 
 def test_calibration_figure_holds_every_plotted_interval():
@@ -560,6 +566,111 @@ def test_a_single_season_publishes_without_a_resolution_band():
     assert "Shaded" not in svg
     height, ys = _viewbox_ys(svg)
     assert all(0 <= y <= height for y in ys)
+
+
+def test_a_single_season_bakeoff_keeps_its_zero_reference():
+    """The zero line is always drawn, so zero must always be in the domain. Saved 2025
+    results, whose comparisons all lose, put it at x=819.9 on a 720-wide canvas."""
+    scores = {(2025, "shipped"): 50.0, (2025, "within-player"): 42.0, (2025, "no-vegas"): 44.0}
+    data, _ = _findings_data(scores, {"within-player": -0.1, "no-vegas": -0.2})
+    svg = figures.bakeoff(data, "shipped", None)
+    width, xs = _viewbox(svg, "x")
+    assert xs and all(0 <= x <= width for x in xs)
+
+
+def test_random_alone_is_still_a_comparison():
+    """`random` is set aside because it would squash the real comparisons. With
+    `models = ["shipped", "random"]` there are none to squash, and dropping it anyway
+    left `min()` an empty argument."""
+    scores = {}
+    for season in (2011, 2012):
+        scores[(season, "shipped")] = 50.0
+        scores[(season, "random")] = 20.0
+    data, _ = _findings_data(scores, {"random": -0.9})
+    svg = figures.bakeoff(data, "shipped", 4.35)
+    assert ">random<" in svg and "omitted" not in svg
+    height, ys = _viewbox_ys(svg)
+    assert all(0 <= y <= height for y in ys)
+
+
+def test_a_bakeoff_without_a_challenger_says_so():
+    """A baseline-only run has nothing to compare; the report still references the file."""
+    data, _ = _findings_data({(2011, "shipped"): 50.0}, {})
+    svg = figures.bakeoff(data, "shipped", None)
+    assert "nothing to compare" in svg and svg.rstrip().endswith("</svg>")
+
+
+def _reliability(bins):
+    return pd.DataFrame(
+        [
+            dict(model="m", season=2025, bin=name, n=n, proj=proj, actual=actual)
+            for name, n, proj, actual in bins
+        ]
+    )
+
+
+def test_a_bin_that_scored_nothing_has_no_ratio():
+    """The saved 2025 `vegas-environment` bin holds one candidate projected at 0.0483
+    with no touchdowns. Dividing by zero made its ratio the axis bound, and the tick
+    loop raised `Maximum allowed size exceeded` — in 17 of 150 season/model runs."""
+    data = {
+        "reliability": _reliability(
+            [
+                ("(-0.001, 0.05]", 40, 0.04, 0.06),
+                ("(0.05, 0.1]", 20, 0.08, 0.09),
+                ("(0.8, 1.0]", 1, 0.0483, 0.0),
+                ("(1.0, 1.5]", 25, 1.2, 1.1),
+                ("(1.5, inf]", 30, 1.7, 1.5),
+            ]
+        )
+    }
+    svg = figures.reliability(data, "m")
+    assert "inf" not in svg and "nan" not in svg.lower()
+    assert "no TDs" in svg and "have no ratio" in svg
+    height, ys = _viewbox_ys(svg)
+    assert ys and all(0 <= y <= height for y in ys)
+    # The defined bins still plot, and no line is drawn across the undefined one.
+    assert ">0.67<" in svg and ">1.13<" in svg
+    assert svg.count("<polyline") == 2
+
+
+def _record(seasons, scheduled, complete):
+    return dict(
+        implementation_commit="abc1234",
+        pytest_passed=229,
+        scheduled_games=scheduled,
+        complete_games=complete,
+        seasons=[
+            dict(
+                season=season,
+                forecast_rows=1000,
+                model_seed_runs=48,
+                season_scores=117,
+                picks=5967,
+            )
+            for season in seasons
+        ],
+    )
+
+
+def test_the_appendix_counts_come_from_the_record():
+    """It announced "All 15 seasons completed" and "All 4,175 required games" beside
+    counts summed from the run, so a one-season publication claimed fourteen it never
+    ran. The 2022 canceled game is only remarked on when 2022 was replayed."""
+    solo = appendix.run_verification(_record([2025], 272, 272))
+    assert "15 seasons" not in solo and "4,175" not in solo
+    assert "The 2025 season completed" in solo and "All 272 required games" in solo
+    assert "Bills" not in solo
+
+    full = appendix.run_verification(_record(range(2011, 2026), 4175, 4175))
+    assert "All 15 seasons completed" in full and "All 4,175 required games" in full
+    assert "Bills" in full
+
+
+def test_the_appendix_does_not_claim_coverage_it_lacks():
+    """The completeness sentence is generated too: a short run must not inherit it."""
+    text = appendix.run_verification(_record([2024, 2025], 544, 543))
+    assert "543 of 544 required games" in text and "All 544" not in text
 
 
 def test_the_shaded_band_is_a_typical_scale_not_a_threshold():

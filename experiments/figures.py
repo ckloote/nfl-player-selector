@@ -77,23 +77,29 @@ def reliability(data, baseline):
         ),
         include_groups=False,
     )
-    pooled["ratio"] = pooled.proj / pooled.actual
+    # A bin whose candidates scored nothing has no ratio at all. Dividing anyway gave
+    # it an infinite one, which became the axis bound: the 2025 `vegas-environment`
+    # bin of one candidate at 0.0483 and no touchdowns took the tick loop to
+    # `Maximum allowed size exceeded`, in 17 of the 150 season/model combinations.
+    pooled["ratio"] = np.where(pooled.actual > 0, pooled.proj / pooled.actual, np.nan)
     pooled = pooled.reset_index()
+    defined = np.isfinite(pooled.ratio)
 
     w, h = 720, 360
     left, right, top, bottom = 62, 24, 66, 62
-    lo = min(0.55, pooled.ratio.min() - 0.05)
-    hi = max(1.35, pooled.ratio.max() + 0.05)
+    ratios = pooled.ratio[defined]
+    lo = min(0.55, ratios.min() - 0.05) if len(ratios) else 0.55
+    hi = max(1.35, ratios.max() + 0.05) if len(ratios) else 1.35
     y = _scale(lo, hi, h - bottom, top)
     step = (w - left - right) / len(pooled)
     xs = [left + step * (i + 0.5) for i in range(len(pooled))]
 
-    out = _frame(
-        w,
-        h,
-        "Forecast / outcome by projection bin",
-        f"`{baseline}`, all seasons pooled. Below 1: under-projected. Above 1: over-projected.",
-    )
+    subtitle = [
+        f"`{baseline}`, all seasons pooled. Below 1: under-projected. Above 1: over-projected."
+    ]
+    if not defined.all():
+        subtitle.append("Bins whose candidates scored no touchdowns have no ratio, and are marked.")
+    out = _frame(w, h, "Forecast / outcome by projection bin", subtitle)
     for tick in np.arange(0.6, hi + 0.001, 0.2):
         out.append(
             f'<line x1="{left}" y1="{y(tick):.1f}" x2="{w - right}" y2="{y(tick):.1f}" '
@@ -106,14 +112,31 @@ def reliability(data, baseline):
     )
     out.append(_text(w - right - 4, y(1.0) - 8, "calibrated", size=10, anchor="end"))
 
-    # One polyline, then points coloured by which side of 1.0 they fall.
-    path = " ".join(f"{x:.1f},{y(r):.1f}" for x, r in zip(xs, pooled.ratio, strict=True))
-    out.append(f'<polyline points="{path}" fill="none" stroke="{INK}" stroke-width="1.5"/>')
+    # One polyline per run of defined bins: a segment drawn across an undefined one
+    # would imply a value the bin does not have.
+    run = []
+    for x, ratio in zip(xs, pooled.ratio, strict=True):
+        if np.isfinite(ratio):
+            run.append(f"{x:.1f},{y(ratio):.1f}")
+            continue
+        if len(run) > 1:
+            out.append(
+                f'<polyline points="{" ".join(run)}" fill="none" stroke="{INK}" '
+                'stroke-width="1.5"/>'
+            )
+        run = []
+    if len(run) > 1:
+        out.append(
+            f'<polyline points="{" ".join(run)}" fill="none" stroke="{INK}" stroke-width="1.5"/>'
+        )
     for x, row in zip(xs, pooled.itertuples(), strict=True):
-        colour = OVER if row.ratio > 1 else UNDER
-        out.append(f'<circle cx="{x:.1f}" cy="{y(row.ratio):.1f}" r="4.5" fill="{colour}"/>')
-        offset = 18 if abs(row.ratio - 1.0) < 0.09 else -12
-        out.append(_text(x, y(row.ratio) + offset, f"{row.ratio:.2f}", size=10, fill=colour))
+        if np.isfinite(row.ratio):
+            colour = OVER if row.ratio > 1 else UNDER
+            out.append(f'<circle cx="{x:.1f}" cy="{y(row.ratio):.1f}" r="4.5" fill="{colour}"/>')
+            offset = 18 if abs(row.ratio - 1.0) < 0.09 else -12
+            out.append(_text(x, y(row.ratio) + offset, f"{row.ratio:.2f}", size=10, fill=colour))
+        else:
+            out.append(_text(x, (top + h - bottom) / 2, "no TDs", size=10, fill=GRID))
         out.append(_text(x, h - bottom + 18, _bin_label(row.bin), size=10))
         out.append(_text(x, h - bottom + 34, f"{int(row.n):,}", size=9))
     out.append(_text(left, h - 12, "projection bin (lambda) / candidates", size=10, anchor="start"))
@@ -181,6 +204,9 @@ def bakeoff(data, baseline, floor=None):
     band "these replays cannot resolve" put `within-player` inside it at -3.14 when
     its own SE is 1.46, which the report's own two-SE criterion resolves. A run with
     one season has no cross-season SE at all, so it is drawn without a band.
+
+    The comparison set is whatever the run configured against the baseline, down to
+    `random` alone or to nothing.
     """
     wide = data["replays"]
     wide = wide[wide.strategy.eq("greedy")].pivot_table(
@@ -188,7 +214,18 @@ def bakeoff(data, baseline, floor=None):
     )
     delta = wide.sub(wide[baseline], axis=0).drop(columns=[baseline])
     # `random` sits an order of magnitude out and would squash every real comparison.
-    aside = delta.pop("random") if "random" in delta else None
+    # A run whose only challenger is `random` has no real comparison left to squash,
+    # and setting it aside there left nothing to plot at all.
+    aside = delta.pop("random") if "random" in delta and delta.shape[1] > 1 else None
+    if delta.columns.empty:
+        out = _frame(
+            720,
+            160,
+            f"Season score vs `{baseline}`, greedy replay",
+            "No challenger was configured against the baseline; there is nothing to compare.",
+        )
+        out.append("</svg>")
+        return "\n".join(out)
     stats = pd.DataFrame(
         {
             "mean": delta.mean(),
@@ -203,8 +240,10 @@ def bakeoff(data, baseline, floor=None):
     w = 720
     left, right, top, bottom = 168, 132, 92, 52
     h = top + row_h * len(stats) + bottom
-    lo = min(stats["mean"] - spread) - 1.0
-    hi = max(stats["mean"] + spread) + 1.0
+    # Zero is always drawn as the reference line, so it is always in the domain: a
+    # single season whose comparisons all lose put that line at x=819.9 on a 720 canvas.
+    lo = min(0.0, (stats["mean"] - spread).min()) - 1.0
+    hi = max(0.0, (stats["mean"] + spread).max()) + 1.0
     if banded:
         lo, hi = min(lo, -floor - 1.0), max(hi, floor + 1.0)
     x = _scale(lo, hi, left, w - right)
