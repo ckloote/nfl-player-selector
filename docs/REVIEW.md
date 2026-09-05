@@ -8,10 +8,40 @@ subsequent implementation from the original review.
 The project has a sound separation between import, projections, assignment,
 recommendation, and evaluation, with useful tests. Keeping the assignment solver
 for planning and season-cost explanations is reasonable. Its season-scoring
-advantage remains unproven. Live eligibility and the evaluation's interpretation
-need attention before leaderboard-aware simulation becomes the priority.
+advantage remains uncertain. The original deadline/eligibility repairs are implemented;
+calibration readiness and live-policy validation now take priority over leaderboard simulation.
 
-## Scope and verification
+## Current Update: 2026-09-05
+
+Current documentation review basis: main `abc8523` and the saved
+[`roster-snapshot-repair` study](../experiments/results/roster-snapshot-repair), with metric
+implementation `7a98f03` and source hash `08886f8851956059ccb50dace43e2b8af4f0607f724ff8a5d14c04b6e82d5686`.
+The September 4 evidence and subsequent sensitivity numbers below remain historical records,
+not newly rerun results. Current numerical interpretation and its limits are separately authored
+in [ANALYSIS.md](ANALYSIS.md), dated and not automatically refreshed by reruns. Generated reports
+are for facts, methods and provenance, not automatically restated research conclusions.
+
+The latest review found overstatements about identity/timing attribution from the null,
+a universal calibration correction, a universal 4-TD resolution floor and ranking as a
+model-selection rule. Those documentation claims are corrected in this update. F07's empirical
+work is still open; documentation correction does not fix the following implementation gaps:
+
+| Open Gap | Planned Resolution |
+|---|---|
+| GLM identifiability/convergence and unsupported inference | Phase 3A guards and fixtures for constant predictors, all-zero outcomes, `n <= 2`, exhausted iterations and insufficient clusters; explicit fit status and zero-rate accounting |
+| Hold advice depends on `n_alternatives` display sizing | Phase 3A evaluates later alternatives independently of display truncation and tests invariant advice |
+| Live/snapshot same-week stats handling differs | Phase 3A defines one observed-stats contract and tests parity after an early game, plus later-input noninterference |
+| Resume identifies a decision-time CSV path, not frozen contents | Phase 3A copies/hashes actual CSV contents, uses the frozen input and rejects same-path edits on resume |
+| Feed snapshots do not yet provide the full decision evidence needed | Phase 3A adds append-only current/future surfaces, model/calibrator/input identities and used/locked/action records |
+
+The [Phase 3 plan](IMPLEMENTATION_PLAN.md) gives dependencies, deliverables, tests and acceptance
+criteria for those repairs, followed by past-only calibration experiments and shadow-live
+transfer/policy validation. Begin prospective capture alongside retrospective diagnosis; initial
+2026 snapshots are not completed live validation. Current one-decision-per-week replay calls
+`plan_slot`, not `advise_slot`, and does not validate waiting for later news. No implementation
+defect is marked fixed by this documentation update, and no production calibration is approved.
+
+## September 4 Scope And Verification
 
 The review covered the source, tests, README, design, implementation plan,
 backtest report, projection benchmark, and local database coverage.
@@ -94,21 +124,23 @@ uv run pool backtest --season 2024-2025 --strategy optimizer,greedy --input-poli
 uv run pool backtest --season 2024-2025 --strategy optimizer,greedy --input-policy legacy-closing --vegas-horizon 0
 ```
 
-**What the repair changed.** Two conclusions the archived reports carried do not survive the
-masking, and in both cases what the leak was supporting was the claim, not the uncertainty.
+**Historical post-repair sensitivity, before the final F11 rerun.** These checks weakened two
+archived conclusions. They are exploratory sensitivity evidence, not a formal attribution of
+the effect of each repair; the original numbers are retained here.
 
 - Dropping the Vegas multiplier was sized at −8.56 TDs per season (SE 1.72, better in 0 of 9) in
   the archived backtest. On the identical nine seasons under the corrected policy it is −3.11
   (SE 2.18, better in 4 of 9). `base-rate-only`, which removes the whole context stack rather than
-  the Vegas term alone, barely moves over those seasons (−8.11 to −7.67), so the collapse is
-  specific to the leaked term.
+  the Vegas term alone, barely moves over those seasons (−8.11 to −7.67). This pattern is
+  consistent with sensitivity to the line policy, not an isolated causal estimate of each term.
 - The archived headline was that the assignment optimizer is not worth its complexity: −0.73 TDs
   per season (SE 2.39, better in 8 of 15). Under the corrected policy the same comparison is
-  +2.87 (SE 1.68, better in 10 of 15). Running the current code under the old policy
+  +2.87 (SE 1.68, better in 10 of 15). Running the then-current code under the old policy
   (`--input-policy legacy-closing --vegas-horizon 6`) reproduces −1.27 (SE 2.48, better in 8 of
-  15), so the eligibility and scoring repairs account for almost none of that swing and the
-  closing-line masking accounts for nearly all of it. Neither figure clears two standard errors:
-  the optimizer is not established as better, but the evidence for calling it useless was leakage.
+  15), suggesting substantial sensitivity to closing-line policy. These checks do not establish
+  that masking caused nearly all of the swing or formally apportion it among eligibility,
+  scoring and line-policy repairs. Neither comparison establishes optimizer superiority or
+  equivalence; the archived result does not justify calling the optimizer useless.
 
 ### F03 — High: a common-pool ranking metric is presented as season scoring
 
@@ -203,13 +235,18 @@ stronger confirmation claims.
 
 ### F07 — Medium: several model and roadmap conclusions exceed the evidence
 
-**Phase 2 status:** Documentation corrections complete in Phase 2. README, design, roadmap and replacement reports qualify all five claims below. Calibration validation by position/selection strata, transfer to live depth roles, and assignment/hold behavior remain Phase 3 work.
+**Current status (2026-09-05):** Documentation corrections are complete in this update, including
+the newer overstatements identified above. The five original claims below remain historical
+review context. Empirical calibration by position/selection/horizon, live-depth-role transfer,
+assignment/hold validation and the Phase 3A implementation repairs are pending, not fixed by
+rewording reports or adding the authored analysis.
 
-The following claims should be corrected when reconciling the design, plan,
-backtest, and benchmark documents:
+The original review identified the following claims; the numerical evidence here refers to
+the reports reviewed then, not the current study:
 
-- **Calibration cannot change a pick:** a positive monotone transform preserves
-  within-week greedy rankings. It does not generally preserve a sum-maximizing
+- **Calibration cannot change a pick:** a strictly increasing transform shared by all
+  candidates in a slot preserves within-week greedy rankings; separate WR/TE maps need not
+  preserve FLEX ordering. It does not generally preserve a sum-maximizing
   assignment or the fixed-TD information-premium decision. The benchmark itself
   reports assignment changes in two of seven seasons. A noisy observed effect
   is not proof that the correction is worth exactly zero expected TDs.
@@ -346,29 +383,33 @@ players enter the surface. The rolling-assignment comparison goes from +2.87 (1.
 of two standard errors. The defect was real and the plan it corrupted was real; the season-level
 conclusion it supports is unchanged.
 
-## Current status and recommended sequence
+## Current Status And Sequence
 
 The implementation status is broadly accurate: imports, projections, assignment,
 the recommendation CLI, season replay, and forecast evaluation exist. The weekly
 reliability phase now also implements `pool score`, feed freshness/coverage status,
 and the live deadline workflow. F01, F05, and F09 are resolved. Opponent tracking,
 standings, and win-probability strategy remain unfinished. F02–F04, F06, F08 and F10 are addressed in Phase 2. F07 documentation corrections are
-complete; its empirical calibration validation remains Phase 3 work. F11 was found while
+complete as of the September 5 update; its empirical validation and the newly identified
+readiness gaps remain Phase 3 work. F11 was found while
 reviewing the Phase 2 results and is resolved by the candidate-pool repair, which reruns
 the identical frozen dataset.
 
-Verification includes mocked refresh → recommend → record → score integration,
+Previously recorded verification includes mocked refresh → recommend → record → score integration,
 migration rollback/idempotence, failed-feed preservation, and a temporary 2025
 historical import: 272 complete regular-season games, 2,206 throwing/scoring
 credits, and correct passing and return-TD pick scores. No benchmark was rerun during the weekly reliability step; Phase 2 supplies the replacement results.
 
-The [roadmap](IMPLEMENTATION_PLAN.md) now distinguishes shipped behavior, corrected validation,
-and pending calibration/simulation research. Per-type rates and alternative count distributions
-remain research options without claims of established benefit or definitive rejection.
+The [roadmap](IMPLEMENTATION_PLAN.md) distinguishes shipped behavior, corrected documentation,
+open implementation repairs, chronological calibration experiments and shadow validation.
+Per-type rates and alternative count distributions remain later research options without
+claims of established benefit or definitive rejection. No new verification of implementation
+repairs or benchmark rerun is implied by this documentation update.
 
-Phase 2 evidence is in [the benchmark](PROJECTION_BENCHMARK.md), [actual replays](BACKTEST.md),
-[`experiments/phase2-validation.toml`](../experiments/phase2-validation.toml), and the saved compact
-artifacts. The research dataset audits all 4,175 scheduled regular-season games from 2010–2025
+Current evidence is in [the benchmark](PROJECTION_BENCHMARK.md), [actual replays](BACKTEST.md),
+[`experiments/roster-snapshot-repair.toml`](../experiments/roster-snapshot-repair.toml), and its
+[saved compact artifacts](../experiments/results/roster-snapshot-repair). Superseded Phase 2
+results remain available. The research dataset audits all 4,175 scheduled regular-season games from 2010–2025
 before freezing. Explicit end-of-game score markers replace numeric play-ID ordering. One
 [guarded source correction](../experiments/scoring-corrections.json) removes duplicate rushing-TD
 records in the 2011 Detroit–New Orleans feed, reconciled to the official game report; original
@@ -376,19 +417,18 @@ observations remain archived. Operational picks and imported data were preserved
 schema migration triggered by a CLI error-path test was reverted; hashes of all ten existing
 tables matched, and the tests now use temporary databases.
 
-Recommended order:
+Recommended order (September 5 status):
 
-1. **Make the weekly workflow reliable.** Address deadline eligibility, scoring
-   semantics, and pick validation; complete `pool score`; expose freshness and
-   missing-feed status for the inputs on which a recommendation depends.
-2. **Repair and document validation.** Fix custom-baseline handling and shuffled
-   eligibility. Correct metric labels and temporal claims. Start preserving
-   timestamped inputs, and save reproducible experiment configurations before
-   making further holdout claims.
-3. **Reassess calibration.** Use the corrected evaluation and verify behavior for
-   the actual live role model, relevant positions, assignment choices, and
-   hold/commit decisions. Improved calibration is valuable for expected-TD
-   interpretation even without an established season-score gain.
+1. **Weekly reliability: implemented.** Deadline eligibility, scoring semantics,
+   pick validation, `pool score`, and input freshness/missing-feed status are shipped.
+2. **Phase 2 repairs: implemented; documentation corrected.** Custom-baseline handling,
+   shuffled eligibility, metric labels and temporal claims were repaired. Timestamped input
+   archives and reproducible configurations exist; remaining readiness gaps are listed above.
+3. **Phase 3: planned.** Start capture and readiness repairs now (3A), run predeclared
+   chronological train/apply experiments (3B), then validate live transfer and policy effects
+   in shadow (3C). Keep forecast proper metrics separate from achieved policy TDs and static
+   hold sensitivity separate from the dynamic value of waiting. Production stays unchanged
+   unless the intended deployment has appropriate evidence; no change is a valid outcome.
 4. **Then build leaderboard strategy.** Start with scoring and opponent-report
    state. In simulations, every entrant choosing the same player must receive the
    same sampled player-week outcome. Account for relevant player correlations,

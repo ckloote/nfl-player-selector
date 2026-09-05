@@ -52,10 +52,11 @@ def _shrunk(tds: pd.Series, games: pd.Series, mean: pd.Series, k: float) -> np.n
 
 # --- Model 0a/0b: nulls -----------------------------------------------------
 def shuffle_within_slot_week(seed: int):
-    """Model 0a. Permute lam within each (week, slot): destroys all information.
+    """Model 0a. Permute availability-free rates within each eligible (week, slot).
 
-    The null the metrics must reject. Used as a distribution over seeds rather
-    than a single draw, so the rejection carries a standard error.
+    Eligibility and recipient availability remain attached to their original cells.
+    FLEX combines WR and TE. Seeds describe perturbations of the same outcomes,
+    not independent seasons or an information-free prediction experiment.
     """
 
     def build(frames: Frames, from_week: int = 1, role_source: str | None = None) -> pd.DataFrame:
@@ -75,12 +76,12 @@ def shuffle_within_slot_week(seed: int):
 
 
 def shuffle_within_player(seed: int):
-    """Model 0b. Permute each player's lam across the weeks they are available.
+    """Model 0b. Permute a player's eligible remaining-week availability-free rates.
 
-    Preserves between-player variation and destroys only week-to-week matchup
-    signal, so the gap to the shipped model measures how much the lam surface
-    knows about *which week* to play someone — the quantity the assignment
-    optimizer consumes, and the one BACKTEST.md sized at 13-28% of variance.
+    Each decision rebuilds and perturbs its own remaining-season surface. Rate and
+    role updates across decisions survive, as do eligibility and recipient
+    availability. This is not a permutation of the consumed decision-week sequence
+    or an identity-versus-timing decomposition of season performance.
     """
 
     def build(frames: Frames, from_week: int = 1, role_source: str | None = None) -> pd.DataFrame:

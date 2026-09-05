@@ -17,7 +17,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 
 from . import backtest, config, db, ingest, models, projections, scoring
 from . import evaluate as ev
@@ -424,205 +423,11 @@ def markdown_table(frame, columns):
     # Avoid an optional tabulate dependency in the reproducible report path.
     lines = ["| " + " | ".join(columns) + " |", "| " + " | ".join("---" for _ in columns) + " |"]
     for row in frame[columns].itertuples(index=False, name=None):
-        cells = [f"{v:.4f}" if isinstance(v, float) else str(v) for v in row]
+        cells = [
+            "NA" if pd.isna(v) else f"{v:.4f}" if isinstance(v, float) else str(v) for v in row
+        ]
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
-
-
-def paired_seasons(replays, baseline, strategy="greedy"):
-    """Per-season totals by model for one strategy, and each model's paired delta."""
-    wide = replays[replays.strategy.eq(strategy)].pivot_table(
-        index="season", columns="model", values="total", aggfunc="mean"
-    )
-    return wide, wide.sub(wide[baseline], axis=0)
-
-
-def stat(values):
-    """Mean, standard error across seasons, and seasons won — the readout used throughout."""
-    values = pd.Series(values).dropna()
-    se = values.std(ddof=1) / np.sqrt(len(values)) if len(values) > 1 else float("nan")
-    return float(values.mean()), float(se), int((values > 0).sum()), len(values)
-
-
-def resolved(mean, se):
-    """Whether fifteen replayed seasons can tell this effect from zero at all.
-
-    Two standard errors is the bar, and most differences in this harness do not
-    clear it: that is the constraint the whole project runs into, not a footnote.
-    """
-    return abs(mean) >= 2 * se
-
-
-def replay_findings(data, spec):
-    """Findings stated from the saved replay metrics, so a rerun restates them.
-
-    Every claim here is conditioned on what the numbers actually say. A finding that
-    reads the same whatever the run produced would be decoration, and one that could
-    contradict the table printed beneath it would be worse.
-    """
-    baseline = spec["baseline"]
-    wide, delta = paired_seasons(data["replays"], baseline)
-    others = [m for m in wide.columns if m != baseline]
-    if not others or len(wide.index) < 2:
-        return ""
-    best = max(others, key=lambda m: delta[m].mean())
-    b_mean, b_se, b_won, seasons = stat(delta[best])
-    standing = (
-        "ahead of every alternative forecast. The nearest is"
-        if b_mean < 0
-        else "**behind** at least one alternative forecast. The leader is"
-    )
-    lines = [
-        f"`{baseline}` scores {wide[baseline].mean():.1f} TDs per season under greedy, "
-        f"{standing} `{best}` at {b_mean:+.2f} "
-        f"({b_se:.2f} SE), better in {b_won} of {seasons} seasons."
-    ]
-
-    strategies = set(data["replays"].strategy)
-    if "optimizer" in strategies:
-        opt = data["replays"][data["replays"].model.eq(baseline)].pivot_table(
-            index="season", columns="strategy", values="total", aggfunc="mean"
-        )
-        o_mean, o_se, o_won, _ = stat(opt.optimizer - opt.greedy)
-        verdict = (
-            "That clears two standard errors"
-            if resolved(o_mean, o_se)
-            else "That does not clear two standard errors, so these seasons cannot separate the "
-            "two policies"
-        )
-        lines.append(
-            f"Replaying the rolling assignment against its own no-reuse history scores "
-            f"{o_mean:+.2f} TDs per season ({o_se:.2f} SE) versus greedy, better in {o_won} of "
-            f"{seasons} seasons. {verdict}. Exact optimality on a fixed pruned matrix is a "
-            "property of the solver, not evidence about the rolling policy, and this comparison "
-            "is sensitive to the input policy the replay is run under."
-        )
-
-    if "within-player" in others and "random" in others:
-        w_mean, w_se, w_won, _ = stat(delta["within-player"])
-        r_mean, _, _, _ = stat(delta["random"])
-        detail = ""
-        if r_mean < 0 and w_mean < 0:
-            # Its own standard error, not the typical one: quoting a shared floor here would
-            # contradict the floor sentence below, which is a median across all comparisons.
-            detail = (
-                f" So about {100 * (1 - w_mean / r_mean):.0f}% of the measured advantage over "
-                "random is in telling players apart, and the remainder in timing them."
-            )
-            # Seasons that lose the same amount every time have no paired spread at all, so
-            # there is no standard error to divide by and none to quote.
-            detail += (
-                f" That timing component sits {abs(w_mean) / w_se:.1f} standard errors from zero."
-                if np.isfinite(w_se) and w_se > 0
-                else " These seasons differ by the same amount every time, so they carry no "
-                "paired spread to measure that component against."
-            )
-        lines.append(
-            f"`within-player` keeps each player's own forecasts and destroys only their order "
-            f"across weeks. It costs {w_mean:+.2f} TDs per season ({w_se:.2f} SE), better in "
-            f"{w_won} of {seasons}, against {r_mean:+.2f} for the fully shuffled null.{detail}"
-        )
-
-    full = data["replay_summary"]
-    full = full[full.era.eq("all retrospective")]
-    ses = full.paired_se[full.paired_se > 0].dropna()
-    if len(ses):
-        lines.append(
-            f"Paired standard errors on these {seasons}-season comparisons run "
-            f"{ses.min():.2f}-{ses.max():.2f} TDs per season, median {ses.median():.2f}. A "
-            f"typical comparison therefore needs roughly {2 * ses.median():.0f} TDs per season "
-            "before these replays can tell it from zero. That floor, not the length of the "
-            "model list, is what limits every season-level claim here."
-        )
-    return "## What the replays show\n\n" + "\n\n".join(lines) + "\n\n"
-
-
-def diagnostic_findings(data, spec):
-    """Findings stated from the saved forecast diagnostics, conditioned on the numbers."""
-    baseline = spec["baseline"]
-    cal = data["calibration"]
-    cal = cal[cal.model.eq(baseline)].groupby("season").slope.mean()
-    if cal.empty or cal.size < 2:
-        return ""
-    lines = []
-    one_sided = cal.max() < 1 or cal.min() > 1
-    reading = (
-        " A slope below 1 means the forecasts are too extreme: the spread between high and low "
-        "estimates is wider than the outcomes justify."
-        if cal.max() < 1
-        else " A slope above 1 means the forecasts are too flat for the spread in outcomes."
-        if cal.min() > 1
-        else " The range spans 1, so the direction of the miscalibration is not consistent "
-        "across seasons."
-    )
-    standing = (
-        " The season-to-season spread is small next to the gap from 1, so this is a standing "
-        "property of the model rather than a season effect."
-        if one_sided and cal.std(ddof=1) < abs(1 - cal.mean()) / 2
-        else ""
-    )
-    lines.append(
-        f"`{baseline}`'s Poisson calibration slope is {cal.min():.3f}-{cal.max():.3f} in all "
-        f"{cal.size} seasons (mean {cal.mean():.3f}, SD {cal.std(ddof=1):.3f})."
-        + reading
-        + standing
-    )
-
-    paired = data["paired_ranking_summary"]
-    paired = paired[(paired.era == "all retrospective") & (paired["rank"] == "rank_available")]
-    best = paired.groupby("model")["mean"].max()
-    if len(best) and (best < 0).all():
-        lines.append(
-            f"No challenger ranks better than `{baseline}` at any reported k: every paired "
-            "common-pool difference is negative. The bake-off does not identify a better "
-            "functional form among the alternatives tried, which is not the same as showing "
-            "the available inputs are exhausted."
-        )
-    elif len(best):
-        ahead = ", ".join(f"`{m}`" for m in best[best > 0].index)
-        lines.append(
-            f"{ahead} rank better than `{baseline}` on at least one reported k. A ranking "
-            "diagnostic is not a season score, so check the achieved replays before treating "
-            "that as a candidate to ship."
-        )
-
-    _, delta = paired_seasons(data["replays"], baseline)
-    top = paired[paired.k == paired.k.max()].set_index("model")["mean"]
-    season = pd.Series({m: delta[m].mean() for m in delta.columns if m != baseline})
-    both = pd.concat([top.rename("rank"), season.rename("season")], axis=1).dropna()
-    # The shuffled nulls are order-of-magnitude outliers; a correlation carried by them
-    # says nothing about ordering the candidates anyone would actually choose between.
-    both = both.drop(index=[m for m in models.NULLS if m in both.index])
-    picks = data["ranking"].groupby("season").covered_cells.max().mean()
-    if len(both) > 2 and abs(both.season.sum()) > 1e-9:
-        rho = float(stats.spearmanr(both["rank"], both.season).statistic)
-        ratio = float((both["rank"] * picks).sum() / both.season.sum())
-        # The reading has to follow the correlation. On these fifteen seasons it is +0.86,
-        # but the same models over 2011-2012 give -0.20 and over 2020-2021 -0.02: a sentence
-        # that recommends ranking by the diagnostic whatever rho came out is not a finding.
-        if rho >= 0.5:
-            agreement = (
-                f"orders models much as their achieved season scores do (Spearman {rho:.2f}), "
-                "but it does not convert into them"
-            )
-            advice = "Use it to rank candidates, never to quote a season gain."
-        elif rho <= -0.5:
-            agreement = f"orders models against their achieved season scores (Spearman {rho:.2f})"
-            advice = "On these seasons it does not rank candidates, let alone quote a season gain."
-        else:
-            agreement = (
-                f"does not order models as their achieved season scores do (Spearman {rho:.2f})"
-            )
-            advice = (
-                "These seasons do not support ranking candidates by it, and never a season gain."
-            )
-        lines.append(
-            f"Across the {len(both)} candidate models, excluding the shuffled nulls, the "
-            f"common-pool top-{int(paired.k.max())} diagnostic {agreement}: scaled by the "
-            f"{picks:.0f} picks in a season it recovers about {100 * ratio:.0f}% of the "
-            f"season difference. {advice}"
-        )
-    return "## What the diagnostics show\n\n" + "\n\n".join(lines) + "\n\n"
 
 
 def reports(output, spec, manifest, config_path=None):
@@ -667,13 +472,28 @@ def reports(output, spec, manifest, config_path=None):
     write_json(compact / "manifest.json", manifest)
     shutil.copy2(output / "resolved-config.json", compact / "resolved-config.json")
     shutil.copy2(output / "coverage.csv", compact / "coverage.csv")
+    for name, text in render_reports(data, spec, manifest, output, config_path).items():
+        (compact / name).write_text(text)
+    return compact
+
+
+def render_reports(data, spec, manifest, output, config_path=None):
+    """Render saved measurements and methods, without model-selection interpretations.
+
+    This pure presentation step is also used to republish existing metrics without
+    rerunning models or changing their recorded source/dataset identity.
+    """
     # A generated report that names a different experiment sends its reader to the
     # wrong numbers, so both names come from the run rather than from a constant.
     experiment = Path(output).name
     config = config_path or f"experiments/{experiment}.toml"
     intro = (
-        f"Specification: {spec['specification_date']}. Artifact schema {SCHEMA_VERSION}; "
-        f"scoring version {scoring.SCORING_VERSION}; "
+        "Generated measurements and methodological notes. Interpretation is maintained "
+        "separately in `docs/ANALYSIS.md`, is tied to a named experiment, and is not updated "
+        "by report generation. NA denotes an unavailable metric.\n\n"
+        f"Specification: {spec['specification_date']}. "
+        f"Artifact schema {manifest['schema_version']}; "
+        f"scoring version {manifest['scoring_version']}; "
         f"database schema {manifest['database_schema']}.\n\n"
         f"Code revision `{manifest['code']['revision']}`; source fingerprint "
         f"`{manifest['code']['code_hash']}`; dirty tree: {manifest['code']['dirty']}. "
@@ -685,15 +505,39 @@ def reports(output, spec, manifest, config_path=None):
         f"--output {output} --resume`. Checkpoints require matching "
         "code, configuration, dependencies and frozen dataset. Saved compact artifacts are in "
         f"`experiments/results/{experiment}`; detailed forecasts and future surfaces remain "
-        "in the ignored output directory.\n\n" + "\n".join(f"- {a}" for a in ASSUMPTIONS) + "\n\n"
+        "in the ignored output directory.\n\n"
+        + "\n".join(f"- {a}" for a in manifest["assumptions"])
+        + "\n\n"
     )
     paired = data["paired_ranking_summary"]
     paired = paired[(paired.era == "all retrospective") & (paired["rank"] == "rank_available")]
     ranking_report = "# Corrected projection benchmark\n\n" + intro
-    ranking_report += diagnostic_findings(data, spec)
     ranking_report += "## Common-pool paired ranking diagnostics\n\n"
     ranking_report += "Challenger minus baseline, TDs per ranked candidate; SE across seasons.\n\n"
     ranking_report += markdown_table(paired, ["model", "k", "mean", "se", "shuffle_sd", "seasons"])
+    cal = data["calibration"]
+    cal = cal[cal.model.eq(spec["baseline"])].sort_values("season")
+    ranking_report += (
+        f"\n\n## Baseline calibration estimates\n\n"
+        f"`{spec['baseline']}`; hard-eligible forecasts with positive lambda, including "
+        "baseline-spent players. Separate diagnostic fits on each evaluated season: "
+        "`E[Y] = exp(intercept) * lambda ** slope`. SEs use player-season clusters. "
+        "These are in-sample diagnostic coefficients, not fitted correction artifacts. "
+        "Intercept 0 and slope 1 define the identity reference; slope alone does not "
+        "establish calibration. `dropped_zero_lam` counts excluded eligible zero forecasts.\n\n"
+    )
+    cal_columns = [
+        "season",
+        "intercept",
+        "slope",
+        "se_intercept",
+        "se_slope",
+        "n",
+        "clusters",
+        "dropped_zero_lam",
+    ]
+    # Fits with no positive-rate rows do not export uncertainty or cluster fields.
+    ranking_report += markdown_table(cal.reindex(columns=cal_columns), cal_columns)
     rank = data["ranking"]
     ranking_report += (
         f"\n\nPer-seed coverage, jointly empty cells and per-season diagnostics are saved "
@@ -707,7 +551,6 @@ def reports(output, spec, manifest, config_path=None):
     replays = data["replay_summary"]
     replays = replays[replays.era == "all retrospective"]
     backtest_report = "# Corrected season replays\n\n" + intro
-    backtest_report += replay_findings(data, spec)
     backtest_report += "## Achieved season scores\n\n"
     backtest_report += markdown_table(
         replays,
@@ -729,9 +572,7 @@ def reports(output, spec, manifest, config_path=None):
         "The solver is exact for the pruned fixed matrix, which does not establish an "
         "advantage for its rolling policy. No production parameter was changed.\n"
     )
-    (compact / "PROJECTION_BENCHMARK.md").write_text(ranking_report)
-    (compact / "BACKTEST.md").write_text(backtest_report)
-    return compact
+    return {"PROJECTION_BENCHMARK.md": ranking_report, "BACKTEST.md": backtest_report}
 
 
 def _season_worker(frozen, season, spec, directory):

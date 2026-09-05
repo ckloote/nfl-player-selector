@@ -1,5 +1,7 @@
 # Corrected season replays
 
+Generated measurements and methodological notes. Interpretation is maintained separately in `docs/ANALYSIS.md`, is tied to a named experiment, and is not updated by report generation. NA denotes an unavailable metric.
+
 Specification: 2026-09-04. Artifact schema 1; scoring version 2; database schema 2.
 
 Code revision `9b0525c86b59e15f9238a5fd01abe9f6ff824064`; source fingerprint `08886f8851956059ccb50dace43e2b8af4f0607f724ff8a5d14c04b6e82d5686`; dirty tree: True. Frozen dataset SHA-256 `405df67ac6a2d73b1036ffdd483b56f1e9745934af110a1730c84d6e7e93fdf2`.
@@ -19,16 +21,6 @@ Reproduce: `pool benchmark --config experiments/roster-snapshot-repair.toml --ou
 - Each greedy/optimizer replay has its own no-reuse history. Random-top-10 strategy trials use shipped forecasts and differ from shuffled projection models. Hindsight is retrospective.
 - All seasons and era summaries are retrospective; neither era is an untouched holdout. Production constants are fixed; no calibration correction or tuning is applied.
 - Research scoring includes the checked correction in experiments/scoring-corrections.json: duplicate rushing touchdowns in 2011_13_DET_NO reconciled to the official Saints game report.
-
-## What the replays show
-
-`shipped` scores 53.7 TDs per season under greedy, ahead of every alternative forecast. The nearest is `no-vegas` at -2.73 (1.31 SE), better in 4 of 15 seasons.
-
-Replaying the rolling assignment against its own no-reuse history scores +2.87 TDs per season (1.80 SE) versus greedy, better in 11 of 15 seasons. That does not clear two standard errors, so these seasons cannot separate the two policies. Exact optimality on a fixed pruned matrix is a property of the solver, not evidence about the rolling policy, and this comparison is sensitive to the input policy the replay is run under.
-
-`within-player` keeps each player's own forecasts and destroys only their order across weeks. It costs -3.34 TDs per season (1.49 SE), better in 6 of 15, against -34.42 for the fully shuffled null. So about 90% of the measured advantage over random is in telling players apart, and the remainder in timing them. That timing component sits 2.2 standard errors from zero.
-
-Paired standard errors on these 15-season comparisons run 1.31-2.67 TDs per season, median 2.05. A typical comparison therefore needs roughly 4 TDs per season before these replays can tell it from zero. That floor, not the length of the model list, is what limits every season-level claim here.
 
 ![Season score against the baseline, with standard errors](../experiments/results/roster-snapshot-repair/figures/bakeoff.svg)
 
@@ -66,12 +58,30 @@ Paired standard errors on these 15-season comparisons run 1.31-2.67 TDs per seas
 
 ## Run verification
 
-Implementation commit matching every recorded source-file hash: `7a98f03150193572515617f29f60e635f21aedb9`. The run began from that source tree before its implementation commit; the manifest preserves the original parent revision and dirty fingerprint.
+Recorded metric implementation commit: `7a98f03150193572515617f29f60e635f21aedb9`. The original manifest records the metric source and dataset identities.
 
-All 15 seasons completed: 720 model/seed/season runs, 5,045,952 forecast rows, 1,755 achieved season scores, and 91,260 individual replay picks. All 4,175 required games have complete scoring and player-stat coverage for both teams. No season was omitted.
+All 15 seasons completed: 720 model/seed/season runs, 5,045,952 forecast rows, 1,755 achieved season scores, and 91,260 individual replay picks. All 4,175 required games have complete scoring and player-stat coverage for both teams.
 
 2022 includes 271 completed games; the [Bills–Bengals game was canceled](https://www.buffalobills.com/news/nfl-says-neutral-site-afc-championship-game-is-possible-bills-bengals-week-17-ga). Its absence from the final schedule is a historical-replay approximation.
 
-Verification: 229 pytest tests passed; Ruff lint and formatting passed. Saved forecasts were checked for identical candidate/mask populations, hard exclusions, timestamps and outcomes. Pick histories contain no player reuse; pick sums equal reported scores; selected-player flags and unique-player counts reconcile. A full `--resume` verified all checkpoint hashes. Synthetic interrupted/resumed and uninterrupted runs produced identical artifacts.
+Original verification record: 229 pytest tests passed. Lint: Ruff check passed. Formatting: Ruff format --check passed. These are recorded results, not checks executed by the presentation step.
 
-This run used `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1`; keep these environment variables when resuming. The pinned dependencies and exact environment are recorded in the manifest. See [experiment instructions](../experiments/README.md) for the full command and schema. Reports are generated from saved metrics and this verification record.
+Recorded checks:
+
+- all configured models and seeds
+- candidate/eligibility/depletion masks
+- hard exclusions unranked
+- explicit decision timestamps
+- consistent finalized actuals
+- no player reuse
+- pick sums equal season scores
+- unique-player counts
+- forecast pick indicators match replays
+- game coverage
+- both teams player-stat coverage
+
+The pinned dependencies and thread environment are recorded in the metric manifest; retain that environment when resuming model computation. See [experiment instructions](../experiments/README.md) for commands and schema.
+
+## Presentation
+
+Rendered from saved compact metrics; no forecasts, replays, or calibration fits were recomputed. `presentation.json` records the rendering-source hashes. The metric manifest and original verification record are unchanged.

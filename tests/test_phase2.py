@@ -1,7 +1,10 @@
 """Temporal isolation, comparable populations, snapshots, and reproducible artifacts."""
 
+import hashlib
 import json
+import runpy
 import sqlite3
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -446,7 +449,7 @@ def test_invalid_backtest_policy_does_not_open_a_database(monkeypatch):
     assert "decision-times" in result.output
 
 
-# --- generated findings and figures -----------------------------------------
+# --- generated measurements and figures -------------------------------------
 def _replay_rows(scores):
     """`replays` rows for {(season, model): total} under both strategies."""
     return pd.DataFrame(
@@ -458,67 +461,183 @@ def _replay_rows(scores):
     )
 
 
-def _findings_data(scores, ranks):
+def _report_data(scores, ranks):
     replays = _replay_rows(scores)
     seasons = sorted({season for season, _ in scores})
-    summary = pd.DataFrame(
-        [dict(era="all retrospective", model=m, paired_se=1.5) for m in ranks],
-    )
+    summary = ev.replay_summary(replays, "shipped").assign(era="all retrospective")
     paired = pd.DataFrame(
         [
-            dict(era="all retrospective", rank="rank_available", k=10, model=m, mean=v)
+            dict(
+                era="all retrospective",
+                rank="rank_available",
+                k=10,
+                model=m,
+                mean=v,
+                se=0.0,
+                shuffle_sd=0.0,
+                seasons=len(seasons),
+            )
             for m, v in ranks.items()
         ]
     )
-    ranking = pd.DataFrame([dict(season=s, covered_cells=40) for s in seasons])
+    ranking = pd.DataFrame([dict(season=s, covered_cells=40, empty_cells=0) for s in seasons])
     return {
         "replays": replays,
         "replay_summary": summary,
         "paired_ranking_summary": paired,
         "ranking": ranking,
-    }, {"baseline": "shipped", "seasons": seasons}
-
-
-def test_a_comparison_with_no_paired_spread_still_reports():
-    """Seasons that lose the same amount every time have zero paired variance.
-    Saved results for 2012 and 2018 at seed 0 give `within-player` exactly -8 in
-    both, and dividing the mean by that standard error ended the whole report."""
-    scores = {}
-    for season in (2012, 2018):
-        scores[(season, "shipped")] = 50.0
-        scores[(season, "within-player")] = 42.0
-        scores[(season, "random")] = 20.0
-    data, spec = _findings_data(scores, {"within-player": -0.1, "random": -0.9})
-    text = benchmark.replay_findings(data, spec)
-    assert "-8.00" in text
-    assert "no paired spread" in text
-    assert "nan" not in text.lower()
-
-
-@pytest.mark.parametrize(
-    ("ranks", "expected", "forbidden"),
-    [
-        ({"a": -0.1, "b": -0.2, "c": -0.3, "d": -0.4}, "much as their", "against their"),
-        ({"a": -0.4, "b": -0.3, "c": -0.2, "d": -0.1}, "against their", "Use it to rank"),
-    ],
-)
-def test_the_ranking_conclusion_follows_the_correlation(ranks, expected, forbidden):
-    """The conclusion asserted agreement whatever the correlation came out. The
-    same models give Spearman +0.86 over fifteen seasons, -0.20 over 2011-2012
-    and -0.02 over 2020-2021; only the first of those supports the sentence."""
-    scores = {}
-    for i, season in enumerate((2011, 2012)):
-        scores[(season, "shipped")] = 50.0
-        for j, model in enumerate(ranks):
-            scores[(season, model)] = 50.0 - (j + 1) - i
-    data, spec = _findings_data(scores, ranks)
-    data["calibration"] = pd.DataFrame(
-        [dict(season=s, model="shipped", slope=0.86, se_slope=0.02) for s in (2011, 2012)]
+        "calibration": pd.DataFrame(
+            [
+                dict(
+                    season=s,
+                    model="shipped",
+                    intercept=-0.1,
+                    slope=0.86,
+                    se_intercept=0.01,
+                    se_slope=0.02,
+                    n=100,
+                    clusters=20,
+                    dropped_zero_lam=0,
+                )
+                for s in seasons
+            ]
+        ),
+    }, dict(
+        baseline="shipped",
+        seasons=seasons,
+        models=sorted({m for _, m in scores}),
+        seeds=[0],
+        specification_date="2026-09-05",
+        input_policy="historical",
+        role_source="usage",
     )
-    text = benchmark.diagnostic_findings(data, spec)
-    assert expected in text
-    assert forbidden not in text
-    assert "never" in text or "not" in text
+
+
+@pytest.mark.parametrize("seasons", [[2012, 2018], [2025]])
+def test_reports_measure_results_without_interpreting_them(seasons):
+    manifest = dict(
+        schema_version=1,
+        scoring_version=2,
+        database_schema=2,
+        code=dict(revision="original-run", code_hash="original-source", dirty=False),
+        dataset_hash="frozen-data",
+        assumptions=["The recorded input policy."],
+    )
+    prose = []
+    for delta, slope in [(-8.0, 0.86), (0.0, 1.0), (8.0, 1.2)]:
+        scores = {
+            (s, m): v
+            for s in seasons
+            for m, v in [("shipped", 50.0), ("within-player", 50.0 + delta), ("random", 20.0)]
+        }
+        data, spec = _report_data(scores, {"within-player": delta / 100, "random": -0.9})
+        data["calibration"]["slope"] = slope
+        reports = benchmark.render_reports(data, spec, manifest, Path("data/experiments/test"))
+        replay = reports["BACKTEST.md"]
+        ranking = reports["PROJECTION_BENCHMARK.md"]
+        assert f"| within-player | greedy | {50 + delta:.4f}" in replay
+        assert f"| {seasons[0]} | -0.1000 | {slope:.4f}" in ranking
+        assert "original-run" in replay and "original-source" in ranking
+        assert "The recorded input policy." in ranking
+        assert "docs/ANALYSIS.md" in replay
+        assert "NA" in replay if len(seasons) == 1 else "| 0.0000 |" in replay
+        combined = replay + ranking
+        for claim in (
+            "What the replays show",
+            "What the diagnostics show",
+            "clears two",
+            "timing component",
+            "telling players apart",
+            "Use it to rank",
+            "standing property",
+            "resolution floor",
+            "ahead of every",
+            "**behind**",
+        ):
+            assert claim not in combined
+        prose.append("\n".join(line for line in combined.splitlines() if not line.startswith("|")))
+    assert prose[0] == prose[1] == prose[2]
+    empty_fit = ev.calibration(pd.DataFrame(dict(hard_eligible=[True], lam=[0.0])))
+    data["calibration"] = pd.DataFrame(
+        [dict(season=s, model="shipped", **empty_fit) for s in seasons]
+    )
+    ranking = benchmark.render_reports(data, spec, manifest, Path("data/experiments/test"))[
+        "PROJECTION_BENCHMARK.md"
+    ]
+    assert f"| {seasons[0]} | NA | NA | NA | NA | 0 | NA | NA |" in ranking
+
+
+def test_republish_renders_saved_metrics_without_changing_the_run(tmp_path, monkeypatch):
+    """Presentation may change after the recorded model source; the metrics must not."""
+    output = tmp_path / "data/experiments/test"
+    compact = output / "compact"
+    compact.mkdir(parents=True)
+    (tmp_path / "docs").mkdir()
+    analysis = tmp_path / "docs/ANALYSIS.md"
+    analysis.write_text("Separately reviewed interpretation.\n")
+    dataset = output / "dataset.sqlite"
+    dataset.write_bytes(b"frozen dataset")
+    data, spec = _report_data(
+        {(2025, "shipped"): 50.0, (2025, "within-player"): 42.0}, {"within-player": -0.1}
+    )
+    data["reliability"] = _reliability([("(0.05, 0.1]", 10, 0.08, 0.1)]).assign(model="shipped")
+    identity = dict(
+        code_hash="recorded-model-source",
+        dataset_hash=benchmark.digest(dataset),
+        config_hash=hashlib.sha256(benchmark.json_text(spec).encode()).hexdigest(),
+    )
+    manifest = dict(
+        identity=identity,
+        schema_version=1,
+        scoring_version=2,
+        database_schema=2,
+        code=dict(revision="original-run", code_hash=identity["code_hash"], dirty=False),
+        dataset_hash=identity["dataset_hash"],
+        assumptions=["Recorded methodology."],
+    )
+    verification = _record([2025], 272, 272)
+    verification.update(source_hash=identity["code_hash"], dataset_hash=identity["dataset_hash"])
+    for path, value in [
+        (output / "manifest.json", manifest),
+        (compact / "manifest.json", manifest),
+        (output / "complete.json", dict(identity=identity)),
+        (output / "verification.json", verification),
+        (compact / "resolved-config.json", spec),
+    ]:
+        benchmark.write_json(path, value)
+    for name, frame in data.items():
+        frame.to_csv(compact / f"{name}.csv", index=False)
+    for name in ("BACKTEST.md", "PROJECTION_BENCHMARK.md"):
+        (compact / name).write_text("Stale generated conclusion.\n")
+    originals = {p: benchmark.digest(p) for p in output.rglob("*") if p.is_file()}
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["publish.py", "test"])
+    monkeypatch.setitem(sys.modules, "appendix", appendix)
+    monkeypatch.setitem(sys.modules, "figures", figures)
+    monkeypatch.setattr(benchmark, "code_identity", lambda: pytest.fail("consulted runtime model"))
+    monkeypatch.setattr(benchmark, "reports", lambda *a: pytest.fail("recomputed compact metrics"))
+    monkeypatch.setattr(benchmark, "evaluate_season", lambda *a: pytest.fail("reran models"))
+    script = str(benchmark.ROOT / "experiments/publish.py")
+    runpy.run_path(script, run_name="__main__")
+    published = tmp_path / "experiments/results/test"
+    text = (published / "BACKTEST.md").read_text()
+    assert "Stale generated conclusion" not in text
+    assert "| within-player | greedy | 42.0000" in text
+    assert "original-run" in text and "recorded-model-source" in text
+    assert "presentation.json" in text
+    presentation = json.loads((published / "presentation.json").read_text())
+    assert presentation["metric_source_hash"] == identity["code_hash"]
+    assert presentation["source_hashes"]["src/pool/benchmark.py"] == benchmark.digest(
+        benchmark.ROOT / "src/pool/benchmark.py"
+    )
+    assert originals == {p: benchmark.digest(p) for p in originals}
+    assert analysis.read_text() == "Separately reviewed interpretation.\n"
+    before = {p: benchmark.digest(p) for p in published.rglob("*") if p.is_file()}
+    runpy.run_path(script, run_name="__main__")
+    assert before == {p: benchmark.digest(p) for p in before}
+    benchmark.write_json(compact / "resolved-config.json", dict(spec, baseline="different"))
+    with pytest.raises(SystemExit, match="Compact configuration"):
+        runpy.run_path(script, run_name="__main__")
 
 
 def _calibration(slopes, se=0.05):
@@ -560,8 +679,8 @@ def test_a_single_season_publishes_without_a_resolution_band():
     """One season has no cross-season paired SE, so the median floor is NaN and
     the bake-off tick loop raised `cannot convert float NaN to integer`."""
     scores = {(2024, "shipped"): 50.0, (2024, "within-player"): 42.0}
-    data, _ = _findings_data(scores, {"within-player": -0.1})
-    svg = figures.bakeoff(data, "shipped", None)
+    data, _ = _report_data(scores, {"within-player": -0.1})
+    svg = figures.bakeoff(data, "shipped")
     assert "nan" not in svg.lower()
     assert "Shaded" not in svg
     height, ys = _viewbox_ys(svg)
@@ -572,8 +691,8 @@ def test_a_single_season_bakeoff_keeps_its_zero_reference():
     """The zero line is always drawn, so zero must always be in the domain. Saved 2025
     results, whose comparisons all lose, put it at x=819.9 on a 720-wide canvas."""
     scores = {(2025, "shipped"): 50.0, (2025, "within-player"): 42.0, (2025, "no-vegas"): 44.0}
-    data, _ = _findings_data(scores, {"within-player": -0.1, "no-vegas": -0.2})
-    svg = figures.bakeoff(data, "shipped", None)
+    data, _ = _report_data(scores, {"within-player": -0.1, "no-vegas": -0.2})
+    svg = figures.bakeoff(data, "shipped")
     width, xs = _viewbox(svg, "x")
     assert xs and all(0 <= x <= width for x in xs)
 
@@ -586,8 +705,8 @@ def test_random_alone_is_still_a_comparison():
     for season in (2011, 2012):
         scores[(season, "shipped")] = 50.0
         scores[(season, "random")] = 20.0
-    data, _ = _findings_data(scores, {"random": -0.9})
-    svg = figures.bakeoff(data, "shipped", 4.35)
+    data, _ = _report_data(scores, {"random": -0.9})
+    svg = figures.bakeoff(data, "shipped")
     assert ">random<" in svg and "omitted" not in svg
     height, ys = _viewbox_ys(svg)
     assert all(0 <= y <= height for y in ys)
@@ -595,8 +714,8 @@ def test_random_alone_is_still_a_comparison():
 
 def test_a_bakeoff_without_a_challenger_says_so():
     """A baseline-only run has nothing to compare; the report still references the file."""
-    data, _ = _findings_data({(2011, "shipped"): 50.0}, {})
-    svg = figures.bakeoff(data, "shipped", None)
+    data, _ = _report_data({(2011, "shipped"): 50.0}, {})
+    svg = figures.bakeoff(data, "shipped")
     assert "nothing to compare" in svg and svg.rstrip().endswith("</svg>")
 
 
@@ -638,6 +757,9 @@ def _record(seasons, scheduled, complete):
     return dict(
         implementation_commit="abc1234",
         pytest_passed=229,
+        lint="Recorded lint result",
+        format="Recorded formatting result",
+        checks=["Recorded scoring check"],
         scheduled_games=scheduled,
         complete_games=complete,
         seasons=[
@@ -661,6 +783,9 @@ def test_the_appendix_counts_come_from_the_record():
     assert "15 seasons" not in solo and "4,175" not in solo
     assert "The 2025 season completed" in solo and "All 272 required games" in solo
     assert "Bills" not in solo
+    assert "Recorded lint result" in solo and "Recorded scoring check" in solo
+    assert "A full `--resume` verified" not in solo
+    assert "OPENBLAS_NUM_THREADS=1" not in solo
 
     full = appendix.run_verification(_record(range(2011, 2026), 4175, 4175))
     assert "All 15 seasons completed" in full and "All 4,175 required games" in full
@@ -673,17 +798,18 @@ def test_the_appendix_does_not_claim_coverage_it_lacks():
     assert "543 of 544 required games" in text and "All 544" not in text
 
 
-def test_the_shaded_band_is_a_typical_scale_not_a_threshold():
-    """`within-player` is -3.14 with its own SE of 1.46 — 2.16 SE from zero, and
-    resolved by the report's criterion — yet sits inside a +/-4.35 median band."""
+def test_figures_do_not_classify_significance_or_state_conclusions():
     scores = {}
     for i, season in enumerate((2011, 2012, 2013)):
         scores[(season, "shipped")] = 50.0
         scores[(season, "within-player")] = 46.9 + 0.1 * i
-    data, _ = _findings_data(scores, {"within-player": -0.1})
-    svg = figures.bakeoff(data, "shipped", 4.35)
+    data, _ = _report_data(scores, {"within-player": -0.1})
+    svg = figures.bakeoff(data, "shipped")
     assert "cannot resolve" not in svg
-    assert "typical scale" in svg
-    # Resolved against its own SE, so it is coloured as a real difference even
-    # though the median-SE band would swallow it.
-    assert f'fill="{figures.OVER}"' in svg
+    assert "Shaded" not in svg and "threshold" not in svg
+    assert f'fill="{figures.OVER}"' not in svg
+    assert f'fill="{figures.INK}"' in svg
+    slope = figures.slope_by_season({"calibration": _calibration([0.82, 0.89])}, "m")
+    assert "1.0 is calibrated" not in slope and "too extreme" not in slope
+    assert "1.96 SE" in slope and "Intercepts in table" in slope
+    assert "is the finding" not in figures.optimizer_by_season(data, "shipped")

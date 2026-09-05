@@ -11,8 +11,9 @@ appetite change with your position on the leaderboard?
 
 - [`docs/DESIGN.md`](docs/DESIGN.md) — the pool rules, the model, and the system architecture
 - [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — phased build plan and status
-- [`docs/BACKTEST.md`](docs/BACKTEST.md) — how the model performs against fifteen replayed seasons
-- [`docs/PROJECTION_BENCHMARK.md`](docs/PROJECTION_BENCHMARK.md) — the projection layer scored on every player-week forecast, against seven alternatives
+- [`docs/BACKTEST.md`](docs/BACKTEST.md) - generated replay facts, methods and provenance
+- [`docs/PROJECTION_BENCHMARK.md`](docs/PROJECTION_BENCHMARK.md) - generated forecast metrics, methods and provenance
+- [`docs/ANALYSIS.md`](docs/ANALYSIS.md) - dated, authored interpretation and research limits; not refreshed by reruns
 - [`docs/REVIEW.md`](docs/REVIEW.md) — September 2026 review: open defects, validation limitations, and recommended priorities
 
 ## Status
@@ -20,7 +21,9 @@ appetite change with your position on the leaderboard?
 The weekly workflow and Phase 2 validation repairs are implemented: explicit deadline
 eligibility, complete touchdown accounting, timestamped input archives, shared baseline
 comparisons, and reproducible season experiments. Production model constants remain fixed.
-Calibration validation and leaderboard strategy remain future work.
+The saved study supports further diagnosis, not a production calibration change. Calibration
+experiments and live-policy validation are planned in [Phase 3](docs/IMPLEMENTATION_PLAN.md);
+leaderboard strategy comes later.
 
 The corrected [projection benchmark](docs/PROJECTION_BENCHMARK.md) reports common-pool
 ranking diagnostics in TDs per ranked candidate. The separate [backtest report](docs/BACKTEST.md)
@@ -33,20 +36,17 @@ reran the identical frozen dataset after the F11 candidate-pool repair. The supe
 Previous reports are retained in [`docs/archive`](docs/archive) under their old scoring and
 evaluation definitions.
 
-Both reports now state their own conclusions, generated from the saved metrics so a rerun
-restates them. In summary: the shipped model scores 53.7 TDs per season under greedy, ahead of
-every alternative tried and well clear of the 19.3 a shuffled null manages. About 90% of that
-advantage is in telling players apart rather than in timing them across weeks — destroying only
-the week-to-week ordering costs 3.3 TDs per season. Its forecasts are systematically too extreme:
-the Poisson calibration slope is 0.817–0.892 in all fifteen seasons. And the binding constraint on
-everything else is resolution — a season-level difference needs roughly 4 TDs per season before
-fifteen replays can tell it from zero, which is larger than most of the effects worth chasing.
+Generated reports are for facts, metric definitions and provenance, not automated research
+conclusions. Human/AI reasoning is maintained separately in the dated [analysis](docs/ANALYSIS.md).
+Its interpretation of this retrospective study is not automatically refreshed by reruns.
 
 The assignment solver supplies a rest-of-season plan and the projected cost of overriding it.
 Its optimality for a fixed, pruned forecast matrix does not establish a rolling-policy scoring
-advantage. Monotone calibration preserves greedy ordering but can change assignment and
-hold/commit decisions. Joint ablations do not isolate defense alone, and these model comparisons
-do not establish that the available inputs are exhausted or that simulations are validated.
+advantage. One strictly increasing map shared by all candidates in a slot preserves greedy
+ordering; position-specific WR/TE maps can change FLEX ranks. Calibration can also change
+assignment and hold/commit decisions. Joint ablations do not isolate defense alone, and these
+model comparisons do not establish that the available inputs are exhausted or that simulations
+are validated.
 
 ## Setup
 
@@ -191,6 +191,8 @@ requested week, such as `2026,1,2026-09-10T18:00:00-04:00`. Observations become 
 an import succeeds; source publication timestamps never backdate availability. Legacy database
 rows acquire no invented observation times. Later imports may change measured final outcomes
 but cannot alter projections reconstructed from earlier snapshots.
+Freezing and hashing the actual decision CSV contents for benchmark resume remains a Phase 3A
+repair; the current path-based configuration is not a safeguard against same-path content edits.
 
 Every successful refresh atomically replaces a normalized feed and appends an observation,
 including valid empty feeds. Payloads are compressed and deduplicated; full play-by-play is not

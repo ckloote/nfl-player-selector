@@ -110,7 +110,7 @@ Four layers, deliberately decoupled so each can improve independently:
     imported as its own table.
   - *Pool state*: your picks and results, each opponent's picks and results,
     weekly standings. (Only your own picks exist today; the opponent and
-    standings tables arrive with Phase 3.)
+    standings tables are later work, after Phase 3 calibration/policy validation.)
 - **Refresh:** one command (`refresh`) re-pulls current-season data. Everything
   downstream reads only from the database, so the model and optimizer never
   care where data came from — which also makes backtesting on past seasons
@@ -149,9 +149,14 @@ Position and selection strata, shared player outcomes, player correlations, tie 
 future policy changes need validation before leaderboard simulation is trusted. Negative-binomial
 dispersion is an unvalidated option, not a shipped feature or a closed research question.
 
-A positive monotone calibration correction preserves within-week greedy ranks. It can change
-sum-maximizing assignments and the fixed-TD information premium. Phase 3 validation must check
-those behaviors and transfer from historical usage roles to the live depth-chart model.
+A strictly increasing calibration map shared by every candidate in a slot preserves
+within-week greedy ranks under the same eligibility mask and tie rule. Separate WR and TE
+maps can change FLEX ordering even if each map is increasing. A nonlinear shared map can
+change sum-maximizing assignments; even a level rescale can change comparisons with the
+fixed-TD information premium. [Phase 3](IMPLEMENTATION_PLAN.md) must validate these behaviors,
+current and future forecast horizons, and transfer from historical usage roles to live depth
+roles before production calibration. Pooled slopes alone do not specify a universal correction;
+see the dated [analysis](ANALYSIS.md).
 
 The model layer exposes one interface: a (player, week) projection frame
 carrying a TD rate per row — today a Poisson `lam`, later the parameters of a
@@ -182,12 +187,13 @@ decisions automatically.
 **Within-week, slot-by-slot decisions:** the assignment is computed at week
 granularity, but the recommendation layer applies an **early-commitment rule**
 for players whose games kick off before the week's main slate: commit early
-only when the early player's projected edge over the best later-game
-alternative exceeds an "information premium" (a tunable threshold representing
-the value of Friday injury news and Sunday inactives — calibratable from
-historical late-week injury-downgrade rates). Otherwise the tool says "hold
-this slot," and re-solving after early games have locked (or finished) is a
-first-class operation: locked slots are frozen, everything else re-optimizes.
+unless a considered later-game alternative costs less than the fixed TD
+"information premium." This is a heuristic, not an estimated dynamic value of waiting.
+The considered candidate subset currently depends on `n_alternatives`; making hold advice
+independent of display truncation is an open Phase 3A repair, not a completed guarantee.
+Re-solving after early games have locked (or finished) preserves recorded locks and
+excludes elapsed current-week choices. Current season replay calls `plan_slot`, not
+`advise_slot`, once per week, so it does not validate this hold/commit workflow.
 
 **Future-uncertainty discount:** a projected TD in week 17 is worth slightly
 less than one now (injury risk, role changes, late-season benching of
@@ -222,9 +228,8 @@ Turns "maximize expected TDs" into "maximize probability of winning the pool."
 - The CLI shows both rankings (EV and win-probability) side by side with a note
   when they diverge and why.
 
-This module is deliberately built last (Phase 3): early in the season, EV
-maximization *is* the right strategy, so the tool is fully useful before this
-exists.
+This module is later work, after Phase 3 calibration and policy validation. Expected-TD
+planning is useful without it, but is not generally equivalent to maximizing win probability.
 
 ### 3.5 Interface
 
@@ -289,7 +294,11 @@ reported. There is no machine-clock dependency in replay decisions.
 Common-pool top-1/3/5/10 rankings share one selected deterministic baseline's greedy depletion.
 They measure TDs per ranked candidate, not achieved season gains. Hard eligibility and candidate
 keys are asserted across models/seeds. Shuffles permute availability-free values only over
-eligible slot-week or within-player cells and reapply each recipient's availability adjustment.
+eligible slot-week cells (`random`) or each player's eligible remaining-week cells
+(`within-player`) and reapply each recipient's availability adjustment. The within-player
+permutation is rebuilt on every decision's remaining-week surface; rate updates, eligibility
+and availability remain. It is not a season-long fixed-rate null or a causal separation of
+player identity from timing.
 Deterministic models run once; shuffled models use seeds 0–19. Seeds are averaged within
 season before estimating uncertainty across seasons. Empty comparison cells are reported.
 
@@ -299,6 +308,12 @@ strategy trials and hindsight are separate reference strategies. The configurati
 constants and retrospective era summaries. The runner audits all game coverage, freezes a
 research database, fingerprints code/data/configuration, checkpoints each season, and exports
 forecasts, future surfaces, picks, per-seed metrics and reports. Operational picks are untouched.
+
+Generated reports contain facts, methods and provenance; human/AI interpretation belongs in
+the separately authored [analysis](ANALYSIS.md), which reruns do not refresh. The saved historical
+study supports diagnosis, not calibrated production. Phase 3A tracks remaining GLM guards,
+live/snapshot same-week stats parity, decision-CSV content hashing for resume, and prospective
+full-surface/action capture. Initial 2026 feed snapshots are not completed live validation.
 
 ## 6. Out of scope (for now)
 
