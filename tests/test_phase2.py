@@ -297,7 +297,23 @@ def test_benchmark_resume_and_fingerprint_rejection(seeded, tmp_path, monkeypatc
     destination.close()
     monkeypatch.setattr(benchmark, "evaluate_season", original)
     independent = benchmark.run("unused", other, log=lambda x: None)
-    assert before == {p.name: benchmark.digest(p) for p in independent.iterdir()}
+    # Saved metrics must match byte for byte. The two reports differ only where they
+    # name their own experiment, which is the point of naming it: a generated report
+    # that cites another run's config sends its reader to the wrong numbers.
+    docs = {"BACKTEST.md", "PROJECTION_BENCHMARK.md"}
+    after = {p.name: benchmark.digest(p) for p in independent.iterdir()}
+    assert {k: v for k, v in before.items() if k not in docs} == {
+        k: v for k, v in after.items() if k not in docs
+    }
+
+    def anonymise(path, run, name):
+        text = (path / name).read_text()
+        return text.replace(str(run), "<run>").replace(
+            f"experiments/results/{run.name}", "<results>"
+        )
+
+    for name in docs:
+        assert anonymise(compact, out, name) == anonymise(independent, other, name)
     assert benchmark.digest(out / str(SEASON) / "forecasts.parquet") == benchmark.digest(
         other / str(SEASON) / "forecasts.parquet"
     )

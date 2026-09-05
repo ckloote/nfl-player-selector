@@ -1,5 +1,8 @@
+"""Independently verify a completed benchmark run: `verify.py <experiment> [tests-passed]`."""
+
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -7,8 +10,10 @@ import pandas as pd
 from pool import benchmark, models
 from pool import evaluate as ev
 
-out = Path("data/experiments/phase2-validation")
-spec = benchmark.resolve("experiments/phase2-validation.toml")
+experiment = sys.argv[1] if len(sys.argv) > 1 else "phase2-validation"
+tests_passed = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+out = Path("data/experiments") / experiment
+spec = benchmark.resolve(f"experiments/{experiment}.toml")
 manifest = json.loads((out / "manifest.json").read_text())
 assert manifest["code"]["code_hash"] == benchmark.code_identity()["code_hash"]
 expected = {
@@ -86,7 +91,7 @@ validation = dict(
     scheduled_games=4175,
     complete_games=4175,
     player_stat_game_gaps=0,
-    pytest_passed=214,
+    pytest_passed=tests_passed,
     lint="Ruff check passed",
     format="Ruff format --check passed",
     checks=[
