@@ -50,6 +50,7 @@ Artifact schema version 1:
 | `picks.csv` | Every individual strategy choice and its final actual TDs; empty slots are retained |
 | `*_summary.csv` | Seeds/trials averaged within season, then equally weighted seasons; cross-season SE and separate within-season shuffle/trial SD, including retrospective era summaries |
 | `input-provenance.json` | Decision timestamps and, for snapshot policy, resolved observation identities, hashes, absence, age and staleness |
+| `decision-times.csv` | Normalized copy of the frozen `season,week,decision_at` inputs the run used; the same records are in the resolved configuration and so in its hash |
 | `coverage.csv` | Each scheduled game in every required history/evaluation season, with completion and reason |
 | `presentation.json` | Publication-only source hashes for the report/figure renderers, plus the original metric source and dataset identities; does not replace the metric manifest |
 

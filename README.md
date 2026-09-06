@@ -191,8 +191,10 @@ requested week, such as `2026,1,2026-09-10T18:00:00-04:00`. Observations become 
 an import succeeds; source publication timestamps never backdate availability. Legacy database
 rows acquire no invented observation times. Later imports may change measured final outcomes
 but cannot alter projections reconstructed from earlier snapshots.
-Freezing and hashing the actual decision CSV contents for benchmark resume remains a Phase 3A
-repair; the current path-based configuration is not a safeguard against same-path content edits.
+The benchmark reads the decision CSV once, while resolving its configuration, and carries the
+timestamps in the resolved specification. They are therefore part of the run's configuration
+hash: editing the file in place and resuming is rejected, and the workers never re-read the
+path. A normalized `decision-times.csv` copy is saved beside the frozen dataset.
 
 Every successful refresh atomically replaces a normalized feed and appends an observation,
 including valid empty feeds. Payloads are compressed and deduplicated; full play-by-play is not
