@@ -5,6 +5,7 @@ unguarded fit returned plausible numbers for populations that identify nothing,
 and a plausible number survives into a published table.
 """
 
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -12,8 +13,12 @@ import pandas as pd
 import pytest
 from scipy import optimize
 
-from pool import config
+from pool import config, db, snapshots
 from pool import evaluate as ev
+from pool import projections as P
+from pool.recommend import advise_week
+from tests.test_backtest import SEASON, _seed
+from tests.test_phase2 import archive_all
 
 STUDY = Path("data/experiments/roster-snapshot-repair")
 
@@ -234,3 +239,204 @@ def test_a_population_with_no_positive_rates_reports_its_exclusions():
     assert fit["reason"] == "no positive-rate rows"
     assert fit["n"] == 0 and fit["zero_lam_n"] == 3
     assert set(ev.FIT_KEYS) <= set(fit)
+
+
+# --- one same-week stats contract -------------------------------------------
+THU_KICK, SUN_KICK = "2024-09-19T20:15", "2024-09-22T13:00"
+PRE_WEEK3 = "2024-09-19T18:00:00+00:00"  # Thursday afternoon, before kickoff
+POST_THU = "2024-09-20T12:00:00+00:00"  # the Thursday result is in the feed
+DECISION = "2024-09-20T16:00:00+00:00"  # Friday: Thursday locked, Sunday open
+POST_SUN = "2024-09-23T12:00:00+00:00"  # everything else has been played
+
+
+def _dicts(conn, sql, params=()):
+    return [dict(r) for r in conn.execute(sql, params)]
+
+
+def _insert(conn, table, rows):
+    if not rows:
+        return
+    cols = list(rows[0])
+    conn.executemany(
+        f"INSERT INTO {table} ({','.join(cols)}) VALUES ({','.join('?' for _ in cols)})",
+        [tuple(r[c] for c in cols) for r in rows],
+    )
+
+
+def _staged(tmp_path):
+    """A week-3 decision with one game already played and the rest still to come.
+
+    The shared fixture kicks every game off at the same hour, which is precisely the
+    situation in which the live and snapshot stats rules cannot disagree. Give week 3
+    a Thursday game and a Sunday game, then withhold everything from week 3 on so the
+    feed can publish it in the order it really would.
+    """
+    conn = _seed(db.connect(tmp_path / "parity.db"))
+    with conn:
+        for week, kick in ((1, "2024-09-08T13:00"), (2, "2024-09-15T13:00")):
+            conn.execute(
+                "UPDATE games SET kickoff = ? WHERE season = ? AND week = ?", (kick, SEASON, week)
+            )
+        conn.execute("UPDATE games SET kickoff = ? WHERE game_id = ?", (THU_KICK, "g2024-3-AAA"))
+        conn.execute("UPDATE games SET kickoff = ? WHERE game_id = ?", (SUN_KICK, "g2024-3-CCC"))
+        conn.execute(
+            "UPDATE games SET kickoff = '2024-09-29T13:00' WHERE season = ? AND week = 4",
+            (SEASON,),
+        )
+    unplayed = {
+        "player_weeks": _dicts(
+            conn, "SELECT * FROM player_weeks WHERE season = ? AND week >= 3", (SEASON,)
+        ),
+        "rosters": _dicts(conn, "SELECT * FROM rosters WHERE season = ? AND week >= 4", (SEASON,)),
+        "game_results": _dicts(
+            conn, "SELECT * FROM game_results WHERE season = ? AND week >= 3", (SEASON,)
+        ),
+        "touchdown_credits": _dicts(
+            conn,
+            "SELECT t.* FROM touchdown_credits t JOIN games g USING(game_id) "
+            "WHERE g.season = ? AND g.week >= 3",
+            (SEASON,),
+        ),
+    }
+    with conn:
+        conn.execute("DELETE FROM player_weeks WHERE season = ? AND week >= 3", (SEASON,))
+        conn.execute("DELETE FROM rosters WHERE season = ? AND week >= 4", (SEASON,))
+        conn.execute(
+            "DELETE FROM touchdown_credits WHERE game_id IN "
+            "(SELECT game_id FROM games WHERE season = ? AND week >= 3)",
+            (SEASON,),
+        )
+        conn.execute("DELETE FROM game_results WHERE season = ? AND week >= 3", (SEASON,))
+    return conn, unplayed
+
+
+def _publish(conn, unplayed, which):
+    """Publish the Thursday game's rows, or everything that follows them.
+
+    Next week's roster is part of "everything that follows": a week-4 snapshot does not
+    exist on the Friday of week 3, and letting one path see it would make the parity
+    comparison pass for the wrong reason.
+    """
+    thursday = which == "thursday"
+    with conn:
+        for table in ("player_weeks", "game_results", "touchdown_credits"):
+            rows = [r for r in unplayed[table] if (r["game_id"] == "g2024-3-AAA") == thursday]
+            _insert(conn, table, rows)
+        if not thursday:
+            _insert(conn, "rosters", unplayed["rosters"])
+
+
+def _advice(proj, now):
+    out = []
+    for a in advise_week(proj, 3, set(), {slot: {} for slot in config.SLOTS}, now=now):
+        out.append(
+            (
+                a.slot,
+                None if a.recommended is None else a.recommended.player_id,
+                None if a.recommended is None else round(a.recommended.cost, 10),
+                a.hold,
+                None if a.hold_alternative is None else a.hold_alternative.player_id,
+                {w: a.plan.players.iloc[r].player_id for w, r in a.plan.assignment.items()},
+            )
+        )
+    return out
+
+
+MODEL_COLUMNS = [
+    "base_rate",
+    "def_mult",
+    "vegas_mult",
+    "home_mult",
+    "avail_mult",
+    "role_mult",
+    "lam",
+]
+
+
+def _model_view(proj):
+    return proj.set_index(["week", "slot", "player_id"])[MODEL_COLUMNS].sort_index()
+
+
+def test_an_observed_early_game_reaches_the_same_decision_live_and_from_snapshots(tmp_path):
+    """Live loading read every stat row it had, including Thursday's; snapshot replay
+    cut at `week < W` and threw the same row away. Same instant, same archive, two
+    different forecasts -- so nothing measured in replay described the live model."""
+    conn, unplayed = _staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    _publish(conn, unplayed, "thursday")
+    for feed in ("player_stats", "touchdowns"):
+        snapshots.archive(conn, SEASON, feed, observed_at=POST_THU)
+
+    now = datetime.fromisoformat(DECISION)
+    live = P.build_projections(P.load_frames(conn, SEASON, input_policy="live"), 3, "usage")
+    live_advice = _advice(live, now)
+
+    # Everything after the decision arrives before the replay is run.
+    _publish(conn, unplayed, "rest")
+    for feed in ("player_stats", "touchdowns"):
+        snapshots.archive(conn, SEASON, feed, observed_at=POST_SUN)
+
+    frames = P.load_frames(conn, SEASON, 3, input_policy="snapshots", decision_at=DECISION)
+    assert sorted(frames.pw_cur.week.unique()) == [1, 2, 3]
+    assert set(frames.pw_cur[frames.pw_cur.week.eq(3)].team) == {"AAA", "BBB"}
+    replayed = P.build_projections(frames, 3, "usage")
+
+    pd.testing.assert_frame_equal(_model_view(live), _model_view(replayed))
+    assert live_advice == _advice(replayed, now)
+    # The Thursday game has locked; its players stay planned for a later week.
+    thursday = replayed[replayed.week.eq(3) & replayed.team.isin(["AAA", "BBB"])]
+    assert not thursday.hard_eligible.any()
+
+
+def test_a_decision_before_the_feed_published_cannot_see_the_early_game(tmp_path):
+    """Availability is the observation time, not the kickoff: one microsecond before
+    the import, the Thursday result does not exist for the decision."""
+    conn, unplayed = _staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    _publish(conn, unplayed, "thursday")
+    for feed in ("player_stats", "touchdowns"):
+        snapshots.archive(conn, SEASON, feed, observed_at=POST_THU)
+
+    just_before = "2024-09-20T11:59:59.999999+00:00"
+    before = P.load_frames(conn, SEASON, 3, input_policy="snapshots", decision_at=just_before)
+    assert sorted(before.pw_cur.week.unique()) == [1, 2]
+    at = P.load_frames(conn, SEASON, 3, input_policy="snapshots", decision_at=POST_THU)
+    assert sorted(at.pw_cur.week.unique()) == [1, 2, 3]
+
+
+def test_later_imports_cannot_change_an_earlier_decision(tmp_path):
+    """A correction published after the pick was made must not rewrite the pick's
+    inputs. Reconstructing the same instant twice, across an import, must not move."""
+    conn, unplayed = _staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    _publish(conn, unplayed, "thursday")
+    for feed in ("player_stats", "touchdowns"):
+        snapshots.archive(conn, SEASON, feed, observed_at=POST_THU)
+    before = P.build_projections(
+        P.load_frames(conn, SEASON, 3, input_policy="snapshots", decision_at=DECISION), 3, "usage"
+    )
+
+    _publish(conn, unplayed, "rest")
+    with conn:
+        conn.execute(
+            "UPDATE player_weeks SET rec_td = rec_td + 3 WHERE season = ? AND week = 3", (SEASON,)
+        )
+    for feed in ("player_stats", "touchdowns"):
+        snapshots.archive(conn, SEASON, feed, observed_at=POST_SUN)
+
+    after = P.build_projections(
+        P.load_frames(conn, SEASON, 3, input_policy="snapshots", decision_at=DECISION), 3, "usage"
+    )
+    pd.testing.assert_frame_equal(before, after)
+
+
+def test_historical_replay_still_stops_at_the_previous_week(tmp_path):
+    """The historical policy has no observation times to consult, so it cannot know
+    which of week W's games had finished. It keeps its documented approximation."""
+    conn, _ = _staged(tmp_path)
+    frames = P.load_frames(conn, SEASON, 3)
+    assert sorted(frames.pw_cur.week.unique()) == [1, 2]
+    assert P._stats_through("historical", 3) == 2
+    assert P._stats_through("legacy-closing", 3) == 2
+    assert P._stats_through("snapshots", 3) == 3
+    assert P._stats_through("live", None) is None

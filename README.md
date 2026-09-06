@@ -167,8 +167,8 @@ Replay commands share these input policies:
 
 | Policy | Inputs and assumptions |
 |---|---|
-| `historical` (default) | Closing lines strictly before week W, masked before team/league averages; stats through W−1; rosters/injuries through W; usage roles. Final schedule revisions, weekly report timing and later stat corrections remain approximations. |
-| `snapshots` | Latest successful archived feed observation at or before an explicit decision timestamp; depth-chart roles by default. Missing essential history fails; absent/stale optional feeds are recorded with fallbacks. |
+| `historical` (default) | Closing lines strictly before week W, masked before team/league averages; stats through W−1; rosters/injuries through W; usage roles. It has no observation times to consult, so it cannot tell which of week W's games had finished; that cut, final schedule revisions, weekly report timing and later stat corrections remain approximations. |
+| `snapshots` | Latest successful archived feed observation at or before an explicit decision timestamp; depth-chart roles by default. Stats from completed games already observed at that timestamp are used, including earlier games in week W, matching the live path. Missing essential history fails; absent/stale optional feeds are recorded with fallbacks. |
 | `legacy-closing` | Prior closing-line horizon, explicitly labeled sensitivity analysis. Only this policy permits `--vegas-horizon`. |
 
 Historical and legacy replay reject the latest depth chart. Live recommendations retain their

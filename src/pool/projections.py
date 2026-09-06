@@ -60,6 +60,27 @@ def validate_policy(
     return role
 
 
+def _stats_through(policy: str, as_of_week: int | None) -> int | None:
+    """Last current-season week of player stats a decision may read. None means all.
+
+    One contract, shared by the live path and snapshot replay: a completed game that
+    was already observed when the decision was made is available to it. A Thursday
+    result is in the record before Sunday's picks lock, and both paths now use it.
+
+    Historical replay keeps `stats < W` because it has no observation times to consult
+    -- it cannot tell which of week W's games had finished -- and that remains an
+    explicit approximation, not a claim about what was knowable.
+    """
+    if as_of_week is None:
+        return None  # live: there is no later week to leak from
+    if policy == "snapshots":
+        # Bounded by W rather than unbounded: the archive resolves to observations at
+        # or before the decision, so a later week can only appear from a mislabelled
+        # feed, and a mislabelled feed should not silently enter a replay.
+        return as_of_week
+    return as_of_week - 1
+
+
 def load_frames(
     conn: sqlite3.Connection,
     season: int,
@@ -69,42 +90,60 @@ def load_frames(
     input_policy: str | None = None,
     decision_at: str | datetime | None = None,
 ) -> Frames:
-    """Historical inputs use stats < W, reports <= W and closing lines < W.
+    """Load the input frames one decision may read, under one input policy.
 
-    Final schedule revisions, weekly report timing and later stat corrections remain
-    historical approximations. Snapshot mode resolves only observed inputs by timestamp.
-    Live loading preserves recommendation defaults.
+    | Policy | Current-season player stats | Closing lines |
+    |---|---|---|
+    | `live` | everything imported | as published |
+    | `snapshots` | weeks `<= W` present in the archive at `decision_at` | as archived |
+    | `historical` | weeks `< W` (approximate) | weeks `< W` |
+    | `legacy-closing` | weeks `< W` (approximate) | through `W + horizon` |
+
+    Weekly roster and injury reports are read through W in every replay policy; both
+    precede kickoff. Final schedule revisions, weekly report timing within a week and
+    later stat corrections remain historical approximations.
     """
     policy = input_policy or ("historical" if as_of_week is not None else "live")
     validate_policy(policy, vegas_horizon=vegas_horizon)
-    if policy == "snapshots":
-        if decision_at is None or as_of_week is None:
-            raise ValueError("Snapshot replay requires a decision timestamp for every week")
-        restored, provenance = snapshots.restore(conn, season, decision_at, as_of_week)
-        try:
-            for yr, weeks in (
-                (season - 1, available_weeks(restored, season - 1)),
-                (season, [w for w in available_weeks(restored, season) if w < as_of_week]),
-            ):
-                if yr < season or weeks:
-                    scoring.require_complete(restored, yr, weeks)
-            out = load_frames(restored, season, as_of_week, input_policy="live")
-            if out.pw_prior.empty:
-                raise ValueError(
-                    f"Missing essential {season - 1} player history in archived inputs"
-                )
-            prior_weeks = set(available_weeks(restored, season - 1))
-            if prior_weeks - set(out.pw_prior.week):
-                raise ValueError("Archived prior-season player history has missing weeks")
-            required = {w for w in available_weeks(restored, season) if w < as_of_week}
-            if required - set(out.pw_cur.week):
-                raise ValueError("Archived current-season player history has missing weeks")
-        finally:
-            restored.close()
-        out.input_policy = policy
-        out.decision_at = snapshots.timestamp(decision_at)
-        out.provenance = provenance
-        return out
+    if policy != "snapshots":
+        return _local_frames(conn, season, as_of_week, vegas_horizon, policy)
+
+    if decision_at is None or as_of_week is None:
+        raise ValueError("Snapshot replay requires a decision timestamp for every week")
+    restored, provenance = snapshots.restore(conn, season, decision_at, as_of_week)
+    try:
+        for yr, weeks in (
+            (season - 1, available_weeks(restored, season - 1)),
+            (season, [w for w in available_weeks(restored, season) if w < as_of_week]),
+        ):
+            if yr < season or weeks:
+                scoring.require_complete(restored, yr, weeks)
+        # Week W itself is deliberately partial -- that is the point of reading it --
+        # so it is never required to be complete.
+        out = _local_frames(restored, season, as_of_week, None, policy)
+        if out.pw_prior.empty:
+            raise ValueError(f"Missing essential {season - 1} player history in archived inputs")
+        prior_weeks = set(available_weeks(restored, season - 1))
+        if prior_weeks - set(out.pw_prior.week):
+            raise ValueError("Archived prior-season player history has missing weeks")
+        required = {w for w in available_weeks(restored, season) if w < as_of_week}
+        if required - set(out.pw_cur.week):
+            raise ValueError("Archived current-season player history has missing weeks")
+    finally:
+        restored.close()
+    out.decision_at = snapshots.timestamp(decision_at)
+    out.provenance = provenance
+    return out
+
+
+def _local_frames(
+    conn: sqlite3.Connection,
+    season: int,
+    as_of_week: int | None,
+    vegas_horizon: int | None,
+    policy: str,
+) -> Frames:
+    """Read one policy's inputs out of whichever database already holds them."""
     prior = season - 1
     games = db.read_df(
         conn, "SELECT * FROM games WHERE season IN (?, ?) AND game_type = 'REG'", (prior, season)
@@ -121,8 +160,9 @@ def load_frames(
     pw = pd.concat(
         [scoring.pool_history(conn, prior), scoring.pool_history(conn, season)], ignore_index=True
     )
-    if as_of_week is not None:
-        pw = pw[(pw.season == prior) | (pw.week < as_of_week)].copy()
+    through = _stats_through(policy, as_of_week)
+    if through is not None:
+        pw = pw[(pw.season == prior) | (pw.week <= through)].copy()
 
     rosters = _as_of(
         db.read_df(conn, "SELECT * FROM rosters WHERE season = ?", (season,)), as_of_week

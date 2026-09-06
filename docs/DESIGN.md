@@ -280,7 +280,11 @@ A web dashboard is a possible Phase 4 nicety, not a requirement.
 
 The shared projection loader implements historical, archived-snapshot and legacy-closing
 policies. Historical lines at weeks ≥ W are removed before every team/league average;
-week-one uses the shipped fallback. Stats stop at W−1, weekly reports at W. Final schedule
+week-one uses the shipped fallback. Historical stats stop at W−1 and weekly reports at W.
+One stats contract covers the two paths that have observation times: a completed game
+already observed when the decision was made is available to it, so an early-week result
+enters both live advice and snapshot replay of the same instant. Historical replay keeps
+its W−1 cut because it cannot tell which of week W's games had finished. Final schedule
 revisions, within-week roster/injury timing and later stat corrections remain approximations.
 Historical roles use usage; only observed snapshots support replay of the depth-chart model.
 
@@ -312,9 +316,8 @@ forecasts, future surfaces, picks, per-seed metrics and reports. Operational pic
 
 Generated reports contain facts, methods and provenance; human/AI interpretation belongs in
 the separately authored [analysis](ANALYSIS.md), which reruns do not refresh. The saved historical
-study supports diagnosis, not calibrated production. Phase 3A tracks remaining GLM guards,
-live/snapshot same-week stats parity, decision-CSV content hashing for resume, and prospective
-full-surface/action capture. Initial 2026 feed snapshots are not completed live validation.
+study supports diagnosis, not calibrated production. Phase 3A tracks decision-CSV content hashing for resume
+and prospective full-surface/action capture. Initial 2026 feed snapshots are not completed live validation.
 
 ## 6. Out of scope (for now)
 
