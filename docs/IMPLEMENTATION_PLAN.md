@@ -13,7 +13,7 @@ after F11. The superseded Phase 2 results remain published for comparison.
 | Weekly reliability (review step 1) | Implemented: F01, F05, F09 |
 | Validation repairs (review step 2) | Implemented: F02–F04, F06, F08, F10; F07 documentation corrected |
 | Candidate-pool repair (review step 2) | Implemented: F11; benchmark rerun on the same frozen dataset |
-| Phase 3: readiness, calibration and shadow validation (review step 3) | Planned below; implementation gaps open, no production calibration or tuning changes |
+| Phase 3: readiness, calibration and shadow validation (review step 3) | 3A implemented: repairs, capture and the readiness note. 3B/3C planned below; no production calibration or tuning changes |
 | Leaderboard strategy (review step 4) | Pending |
 
 ## Weekly reliability
@@ -64,10 +64,13 @@ historical replay. Both 2011–2018 and 2019–2025 summaries are retrospective.
 
 ## Phase 3 — calibration validation
 
-**Status as of 2026-09-05:** planned, not implemented. F07 documentation corrections are
-complete; empirical calibration and the implementation gaps below remain open. The saved
-study is ready for diagnosis, not calibrated production. Its persistent pooled miscalibration
-does not identify a universal correction; see [ANALYSIS.md](ANALYSIS.md) for evidence and limits.
+**Status as of 2026-09-06:** 3A is implemented; 3B and 3C are planned, not implemented.
+The five readiness repairs, the prospective capture and the descriptive diagnostic export
+are in place, with fixtures in `tests/test_phase3a.py` and a dated readiness note. No
+calibration mapping was fitted and no production constant changed. The saved study remains
+ready for diagnosis, not calibrated production. Its persistent pooled miscalibration does not
+identify a universal correction; see [ANALYSIS.md](ANALYSIS.md) for evidence and limits, which
+the 3A export describes by population without resolving.
 
 Scope is to diagnose rate errors, test past-only mappings and validate their decision effects
 without changing the underlying model. Begin prospective input capture now alongside
@@ -77,14 +80,16 @@ there is no requirement to wait a whole prospective season before descriptive re
 
 | Stage | Dependency | Exit Deliverable |
 |---|---|---|
-| 3A: Evidence, capture and readiness | Saved repaired study; can start now | Guarded diagnostics, reproducible capture, regression tests and a dated readiness note |
+| 3A: Evidence, capture and readiness | Implemented 2026-09-06 | Guarded diagnostics, reproducible capture, regression tests and a dated [readiness note](../experiments/results/phase3a-readiness/READINESS.md) |
 | 3B: Chronological train/apply experiment | 3A diagnostic/input contracts pass; prospective capture continues | Frozen specification, fitted artifacts, out-of-fold forecasts, proper metrics and separate policy replays |
 | 3C: Shadow-live transfer and policy validation | 3A capture/parity; a frozen 3B candidate or identity baseline | Matched live/snapshot shadow evidence and a reviewed ship/defer/no-change decision |
 
 ### Phase 3A: Evidence And Readiness
 
-Implement these repairs before treating narrower-stratum fits or shadow comparisons as valid.
-The tests and artifacts below are required deliverables, not claims about current behavior.
+**Implemented.** Each repair below has fixtures in `tests/test_phase3a.py`; the descriptive
+export is `pool diagnose`, saved in
+[experiments/results/phase3a-readiness](../experiments/results/phase3a-readiness). The
+deliverable table records what was required.
 
 | Deliverable | Required Tests And Acceptance |
 |---|---|
@@ -111,6 +116,13 @@ season uncertainty for model/policy comparisons, not row independence. Seed vari
 surface and advice; exclusions, failed fits and missing coverage are explicit. Save the source,
 data and metric identities with a dated readiness note. Descriptive artifacts and authored
 reasoning stay separate. None of these checks by itself authorizes production calibration.
+
+*Met 2026-09-06.* `capture.reconstruct` re-derives a captured decision's advice from its stored
+surface alone; unsupported fits carry a reason and no coefficient; missing outcomes are reported
+as missing, never as zeros; identities are in
+[identities.json](../experiments/results/phase3a-readiness/identities.json) beside the note. The
+export is descriptive: it states no research or deployment conclusion, and production constants
+are unchanged. Interpreting it remains a separate, dated authoring step.
 
 ### Phase 3B: Chronological Experiment
 

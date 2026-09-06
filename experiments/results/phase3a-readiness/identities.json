@@ -1,0 +1,10 @@
+{
+  "artifact schema": 1,
+  "code revision": "9b0525c86b59e15f9238a5fd01abe9f6ff824064",
+  "configuration": "beaf203930155ab8be928b2b09597f9c7db6fe479bf86aa6fbb054578730bfbb",
+  "diagnostics module": "04d543a387e4a6fdd47a1685460380bb789ab5dab1469688ed10f0f16760459a",
+  "experiment": "roster-snapshot-repair",
+  "frozen dataset": "405df67ac6a2d73b1036ffdd483b56f1e9745934af110a1730c84d6e7e93fdf2",
+  "model": "shipped seed -1",
+  "source fingerprint": "08886f8851956059ccb50dace43e2b8af4f0607f724ff8a5d14c04b6e82d5686"
+}

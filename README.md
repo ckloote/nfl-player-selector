@@ -193,7 +193,14 @@ uv run pool backtest --season 2026 --input-policy snapshots --decision-times dec
 uv run pool benchmark --config experiments/phase2-validation.toml --output data/experiments/phase2-validation
 # Continue only when configuration, code, dependencies and frozen dataset match:
 uv run pool benchmark --config experiments/phase2-validation.toml --output data/experiments/phase2-validation --resume
+uv run pool diagnose --run data/experiments/roster-snapshot-repair --out experiments/results/phase3a-readiness
 ```
+
+`diagnose` describes a saved study's rate errors by population, position, rate bin,
+availability and forecast lead horizon, and writes a dated readiness note. Group definitions
+are frozen before any outcome is read, horizons are never pooled — repeated forecasts of one
+target week share its single outcome — and eligible zero rates are counted rather than
+dropped, separately from hard exclusions. It fits no correction and states no conclusion.
 
 Decision CSVs require `season,week,decision_at`, with one timezone-aware timestamp for every
 requested week, such as `2026,1,2026-09-10T18:00:00-04:00`. Observations become available when

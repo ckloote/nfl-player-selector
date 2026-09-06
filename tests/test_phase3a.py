@@ -6,6 +6,7 @@ and a plausible number survives into a published table.
 """
 
 import hashlib
+import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -16,7 +17,7 @@ import pytest
 from scipy import optimize
 from typer.testing import CliRunner
 
-from pool import benchmark, capture, config, db, snapshots, state
+from pool import benchmark, capture, config, db, diagnostics, snapshots, state
 from pool import evaluate as ev
 from pool import projections as P
 from pool.cli import app
@@ -803,3 +804,282 @@ def test_the_cli_captures_a_recommendation_and_can_be_asked_not_to(tmp_path):
     assert runner.invoke(app, [*args, "--no-capture"]).exit_code == 0
     conn = db.connect(path)
     assert len(capture.events(conn, SEASON, 1)) == 4
+
+
+# --- descriptive diagnostics ------------------------------------------------
+def _diagnosable_run(tmp_path, monkeypatch):
+    spec = benchmark.resolve(Path("experiments/phase2-validation.toml"))
+    spec.update(
+        seasons=[SEASON],
+        history_start=PRIOR,
+        models=["shipped", "random"],
+        baseline="shipped",
+        seeds=[0],
+        random_trials=1,
+        workers=1,
+        eras={"test retrospective": [SEASON, SEASON]},
+        expected_games={str(PRIOR): 8, str(SEASON): 8},
+    )
+    monkeypatch.setattr(benchmark, "resolve", lambda path: spec)
+    monkeypatch.setattr(
+        benchmark, "code_identity", lambda: dict(code_hash="t", revision="t", dirty=False)
+    )
+    conn = _seed(db.connect(tmp_path / "diag-source.db"))
+    out = tmp_path / "run"
+    out.mkdir()
+    destination = sqlite3.connect(out / "research.db")
+    conn.backup(destination)
+    destination.close()
+    benchmark.run("unused", out, log=lambda x: None)
+    return out
+
+
+def test_group_definitions_do_not_depend_on_any_outcome(tmp_path, monkeypatch):
+    """A stratum chosen after seeing which rows scored is not a diagnosis. Perturbing
+    every outcome must leave the groups, and their sizes, exactly where they were."""
+    run = _diagnosable_run(tmp_path, monkeypatch)
+    rows = diagnostics.load_run(run)
+    perturbed = rows.assign(actual_tds=rows.actual_tds * 7 + 3)
+
+    before = {name: mask.to_numpy() for name, mask in diagnostics.population_masks(rows).items()}
+    after = diagnostics.population_masks(perturbed)
+    assert sorted(before) == sorted(diagnostics.POPULATIONS)
+    for name, mask in before.items():
+        assert (mask == after[name].to_numpy()).all(), name
+
+    keys = ["population", "axis", "level", "horizon"]
+    a, _ = diagnostics.strata(rows)
+    b, _ = diagnostics.strata(perturbed)
+    pd.testing.assert_frame_equal(a[[*keys, "n", "players"]], b[[*keys, "n", "players"]])
+
+
+def _synthetic_rows():
+    """A surface with the cases the shipped study happens not to contain.
+
+    The saved study has no eligible zero rate at all and no tight end in the four-team
+    fixture, so the groups that matter most to a calibration diagnosis would go
+    untested against real data alone.
+    """
+    base = dict(
+        season=2024,
+        decision_week=1,
+        game_id="g",
+        baseline_spent=False,
+        rank_available=1.0,
+        picked_greedy=False,
+        picked_optimizer=False,
+        played=True,
+    )
+    rows = [
+        # A tight end and a wide receiver in the same FLEX slot, same week.
+        {
+            **base,
+            "week": 1,
+            "player_id": "te",
+            "slot": "FLEX",
+            "position": "TE",
+            "lam": 0.4,
+            "avail_mult": 1.0,
+            "hard_eligible": True,
+            "actual_tds": 1.0,
+        },
+        {
+            **base,
+            "week": 1,
+            "player_id": "wr",
+            "slot": "FLEX",
+            "position": "WR",
+            "lam": 0.5,
+            "avail_mult": 1.0,
+            "hard_eligible": True,
+            "actual_tds": 0.0,
+        },
+        # An eligible zero rate that scored anyway: selectable, forecast at zero.
+        {
+            **base,
+            "week": 1,
+            "player_id": "zero",
+            "slot": "RB",
+            "position": "RB",
+            "lam": 0.0,
+            "avail_mult": 1.0,
+            "hard_eligible": True,
+            "actual_tds": 1.0,
+        },
+        # A ruled-out player who played: a report error, not a calibration error.
+        {
+            **base,
+            "week": 1,
+            "player_id": "out",
+            "slot": "QB",
+            "position": "QB",
+            "lam": 0.0,
+            "avail_mult": 0.0,
+            "hard_eligible": False,
+            "actual_tds": 2.0,
+        },
+        # Questionable, and a future row with no target to score against.
+        {
+            **base,
+            "week": 1,
+            "player_id": "q",
+            "slot": "RB",
+            "position": "RB",
+            "lam": 0.3,
+            "avail_mult": 0.85,
+            "hard_eligible": True,
+            "actual_tds": 0.0,
+        },
+        {
+            **base,
+            "week": 4,
+            "player_id": "gone",
+            "slot": "WR",
+            "position": None,
+            "lam": 0.2,
+            "avail_mult": 1.0,
+            "hard_eligible": True,
+            "actual_tds": None,
+        },
+    ]
+    return diagnostics.prepare(pd.DataFrame(rows))
+
+
+def test_wide_receivers_and_tight_ends_are_never_merged(tmp_path, monkeypatch):
+    """They share the FLEX slot, so a map fitted on them together can reorder them
+    against each other -- which is the one way a shared map changes a pick."""
+    assert "WR" in diagnostics.POSITIONS and "TE" in diagnostics.POSITIONS
+    described, _ = diagnostics.strata(_synthetic_rows())
+    positions = set(described[described.axis.eq("position")].level)
+    assert {"WR", "TE"} <= positions
+    assert not {"FLEX", "WR/TE"} & positions
+    per_position = described[
+        described.axis.eq("position") & described.population.eq("all_eligible")
+    ].set_index("level")
+    assert per_position.loc["WR", "n"] == 1 and per_position.loc["TE", "n"] == 1
+
+    run = _diagnosable_run(tmp_path, monkeypatch)
+    real, _ = diagnostics.strata(diagnostics.load_run(run))
+    assert set(real[real.axis.eq("position")].level) <= set(diagnostics.POSITIONS)
+
+
+def test_no_fit_pools_two_forecast_horizons(tmp_path, monkeypatch):
+    """A week-6 and a week-1 forecast of the same player-week are one outcome seen
+    twice. Every fit is inside one horizon bucket, and the far ones cluster on the
+    target they share rather than on the row."""
+    run = _diagnosable_run(tmp_path, monkeypatch)
+    rows = diagnostics.load_run(run)
+    _, fitted = diagnostics.strata(rows)
+    labels = {label for _, _, label in diagnostics.HORIZON_BUCKETS}
+    assert set(fitted.horizon) <= labels
+    assert fitted.horizon.notna().all()
+
+    current = rows[rows.lead_horizon.eq(0)]
+    future = rows[rows.lead_horizon.gt(0)]
+    assert (
+        len(set(diagnostics._cluster(current))) == current.groupby(["player_id", "season"]).ngroups
+    )
+    assert (
+        len(set(diagnostics._cluster(future)))
+        == future.groupby(["player_id", "season", "week"]).ngroups
+    )
+    # The repetition is real: a target week is forecast from several decision weeks.
+    assert len(future) > future.groupby(["player_id", "season", "week"]).ngroups
+
+
+def test_a_stratum_too_small_to_fit_exports_its_reason(tmp_path, monkeypatch):
+    """The export must say which cells it could not fit and why, rather than leaving a
+    blank that reads as a missing measurement."""
+    run = _diagnosable_run(tmp_path, monkeypatch)
+    _, fitted = diagnostics.strata(diagnostics.load_run(run))
+    unsupported = fitted[fitted.fit_status.eq(ev.FIT_UNSUPPORTED)]
+    assert len(unsupported)
+    assert unsupported.reason.notna().all()
+    assert unsupported.slope.isna().all()
+    assert set(diagnostics.AXES) == set(fitted.axis)
+
+
+def test_zero_rates_are_split_by_what_the_zero_means():
+    """An eligible zero rate is a forecast the fit cannot take, and one that scores is
+    exactly the row it fails on. A hard exclusion is a mask, and a ruled-out player who
+    played is a report error. One number for both would hide whichever is the real one."""
+    table = diagnostics.zero_accounting(_synthetic_rows())
+    assert set(table.zero_class) == {"eligible_zero_rate", "hard_exclusion"}
+    assert (table.excluded_from_fit == table.zero_lam_n).all()
+
+    eligible = table[table.population.eq("all_eligible")].set_index(["position", "horizon"])
+    assert eligible.loc[("RB", "0"), "zero_lam_n"] == 1
+    assert eligible.loc[("RB", "0"), "zero_lam_positive_outcome_n"] == 1
+    assert eligible.loc[("RB", "0"), "zero_lam_outcome_tds"] == 1.0
+
+    excluded = table[table.population.eq("hard_excluded")].set_index(["position", "horizon"])
+    assert excluded.loc[("QB", "0"), "zero_lam_positive_outcome_n"] == 1
+    assert excluded.loc[("QB", "0"), "zero_lam_outcome_tds"] == 2.0
+    # The masked row is in no eligible population, so it reaches no fit.
+    masks = diagnostics.population_masks(_synthetic_rows())
+    assert not any(mask.iloc[3] for mask in masks.values())
+
+
+def test_an_eligible_zero_rate_never_reaches_a_fit_but_is_always_counted():
+    rows = _synthetic_rows()
+    described, fitted = diagnostics.strata(rows)
+    overall = described[
+        described.population.eq("all_eligible")
+        & described.axis.eq("overall")
+        & described.horizon.eq("0")
+    ].iloc[0]
+    assert overall.n == 4 and overall.zero_lam_n == 1
+    assert overall.zero_lam_positive_outcome_n == 1
+    fit = fitted[
+        fitted.population.eq("all_eligible") & fitted.axis.eq("overall") & fitted.horizon.eq("0")
+    ].iloc[0]
+    assert fit.n == 3  # the three positive rates with a known outcome
+
+
+def test_a_forecast_with_no_target_week_is_missing_not_zero(tmp_path, monkeypatch):
+    """A player forecast for a week he had left the pool by has nothing to score
+    against. Counting that as a zero would score the roster feed, not the model."""
+    run = _diagnosable_run(tmp_path, monkeypatch)
+    rows = diagnostics.load_run(run)
+    assert rows.actual_tds[~rows.outcome_known].isna().all()
+    table = diagnostics.coverage(rows)
+    assert (table.rows == table.outcomes_known + table.outcomes_missing).all()
+    described, _ = diagnostics.strata(rows)
+    assert (described.outcomes_known <= described.n).all()
+
+
+def test_the_export_records_identities_and_states_no_conclusion(tmp_path, monkeypatch):
+    """Generated artifacts carry facts, methods and provenance. Choosing a correction,
+    or saying a result is good, belongs to a dated authored analysis."""
+    run = _diagnosable_run(tmp_path, monkeypatch)
+    out = diagnostics.export(run, tmp_path / "readiness", log=lambda x: None)
+    assert {p.name for p in out.iterdir()} == {
+        "strata.csv",
+        "fits.csv",
+        "fits-by-season.csv",
+        "reliability.csv",
+        "zero-accounting.csv",
+        "coverage.csv",
+        "identities.json",
+        "READINESS.md",
+    }
+    identities = json.loads((out / "identities.json").read_text())
+    manifest = json.loads((run / "manifest.json").read_text())
+    assert identities["source fingerprint"] == manifest["code"]["code_hash"]
+    assert identities["frozen dataset"] == manifest["dataset_hash"]
+    assert identities["diagnostics module"] == diagnostics.module_hash()
+
+    note = (out / "READINESS.md").read_text()
+    assert "Production constants are unchanged" in note
+    assert "not fitted correction artifacts" in note
+    for claim in ("recommend", "should apply", "is well calibrated", "ready to ship", "improves"):
+        assert claim not in note
+
+
+def test_the_cli_reports_a_missing_surface_instead_of_a_traceback(tmp_path, monkeypatch):
+    run = _diagnosable_run(tmp_path, monkeypatch)
+    result = CliRunner().invoke(
+        app, ["diagnose", "--run", str(run), "--out", str(tmp_path / "x"), "--model", "no-such"]
+    )
+    assert result.exit_code == 1
+    assert "No saved surface" in result.output

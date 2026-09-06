@@ -12,7 +12,19 @@ from rich.console import Console
 from rich.table import Table
 
 from . import backtest as bt
-from . import capture, config, db, freshness, ingest, models, projections, scoring, snapshots, state
+from . import (
+    capture,
+    config,
+    db,
+    diagnostics,
+    freshness,
+    ingest,
+    models,
+    projections,
+    scoring,
+    snapshots,
+    state,
+)
 from . import evaluate as ev
 from .optimizer import plan_slot
 from .recommend import Candidate, SlotAdvice, advise_week
@@ -952,6 +964,34 @@ def _render_evaluation(df, baseline: str, k: int) -> None:
     console.print(
         ev.replay_summary(pd.DataFrame(df.attrs["replays"]), baseline).to_string(index=False)
     )
+
+
+@app.command()
+def diagnose(
+    run: Annotated[Path, typer.Option("--run", help="A completed benchmark output directory")],
+    out: Annotated[Path, typer.Option("--out", help="Where to write the diagnostic export")],
+    model: str = typer.Option("shipped", help="Model whose saved surface to diagnose"),
+    seed: int = typer.Option(-1, help="Seed; -1 is the deterministic sentinel"),
+    seasons: str | None = typer.Option(None, "--season", help="Season or range, e.g. 2019-2025"),
+):
+    """Describe a saved study's rate errors by population, position, rate, availability
+    and forecast horizon, and write a dated readiness note.
+
+    Descriptive only: it fits no correction and selects no model. Group definitions are
+    frozen before any outcome is read.
+    """
+    try:
+        diagnostics.export(
+            run,
+            out,
+            model=model,
+            seed=seed,
+            seasons=_seasons(seasons) if seasons else None,
+            log=console.print,
+        )
+    except (ValueError, OSError, KeyError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
 
 
 @app.command()
