@@ -20,6 +20,11 @@ class Candidate:
     opponent: str
     home: bool
     kickoff: datetime
+    # Decided when the candidate is built, not read back later. As a property this
+    # answered under whatever policy was current at access time, so advice derived
+    # under a captured decision's settings returned today's deadline once the
+    # restoring override had ended.
+    deadline: datetime
     lam: float
     def_mult: float
     vegas_mult: float
@@ -28,10 +33,6 @@ class Candidate:
     early: bool  # kicks off before the main (Sunday) slate
     report_status: str | None
     planned_week: int | None  # where the optimal plan would otherwise use them
-
-    @property
-    def deadline(self) -> datetime:
-        return self.kickoff - timedelta(minutes=config.PICK_DEADLINE_MINUTES)
 
 
 @dataclass
@@ -77,6 +78,7 @@ def _candidate(
         opponent=info.opponent,
         home=bool(info.home),
         kickoff=kickoff,
+        deadline=kickoff - timedelta(minutes=config.PICK_DEADLINE_MINUTES),
         lam=plan.lam(row, week),
         def_mult=float(info.def_mult),
         vegas_mult=float(info.vegas_mult),

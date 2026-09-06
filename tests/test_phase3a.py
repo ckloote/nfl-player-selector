@@ -955,6 +955,38 @@ def test_a_captured_hold_stays_a_hold_when_the_premium_moves(tmp_path):
     assert drift["constants_changed"]["INFO_PREMIUM_TD"]["recorded"] == 0.10
 
 
+def test_a_reconstructed_deadline_is_the_one_the_decision_was_made_under(tmp_path):
+    """Restoring the recorded settings is not enough if the answer is read afterwards.
+
+    `Candidate.deadline` was a property over `config.PICK_DEADLINE_MINUTES`, and advice
+    is returned after the restoring override has ended, so every reconstructed deadline
+    silently re-derived itself under today's policy -- 19:15 where 18:15 was recorded.
+    The stored event was right the whole time, which is what makes it checkable."""
+    conn, unplayed = _staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    _publish(conn, unplayed, "thursday")
+    with config.override(PICK_DEADLINE_MINUTES=120):
+        decision_id, _, advice = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    assert config.PICK_DEADLINE_MINUTES == 60, "the fixture must reconstruct under a moved setting"
+
+    _, redone, recorded, _ = capture.reconstruct(conn, decision_id)
+    seen = 0
+    for again in redone:
+        detail = recorded[again.slot]
+        for candidate, stored in [
+            (again.recommended, detail["recommended"]),
+            (again.hold_alternative, detail["hold_alternative"]),
+            *zip(again.alternatives, detail["alternatives"], strict=True),
+        ]:
+            if candidate is None:
+                assert stored is None
+                continue
+            assert candidate.player_id == stored["player_id"]
+            assert candidate.deadline.isoformat() == stored["deadline"]
+            seen += 1
+    assert seen, "the fixture must recommend something to compare"
+
+
 def test_reconstruction_refuses_a_source_tree_it_was_not_captured_under(tmp_path):
     """The recommender's behaviour is not carried by the recorded constants alone, so a
     silent substitution of current code would answer a different question."""
