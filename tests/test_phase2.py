@@ -573,13 +573,17 @@ def test_reports_measure_results_without_interpreting_them(seasons):
         prose.append("\n".join(line for line in report.splitlines() if not line.startswith("|")))
     assert prose[0] == prose[1] == prose[2]
     empty_fit = ev.calibration(pd.DataFrame(dict(hard_eligible=[True], lam=[0.0])))
+    assert empty_fit["fit_status"] == "unsupported"
+    assert empty_fit["reason"] == "no positive-rate rows"
     data["calibration"] = pd.DataFrame(
         [dict(season=s, model="shipped", **empty_fit) for s in seasons]
     )
     report = benchmark.render_reports(data, spec, manifest, Path("data/experiments/test"))[
         "EVALUATION.md"
     ]
-    assert f"| {seasons[0]} | NA | NA | NA | NA | 0 | NA | NA |" in report
+    # No coefficient and no interval, but the excluded population is a count, not an
+    # absence: one eligible zero-rate row was dropped and no positive-rate row remained.
+    assert f"| {seasons[0]} | NA | NA | NA | NA | 0 | 0 | 1 |" in report
 
 
 def test_republish_renders_saved_metrics_without_changing_the_run(tmp_path, monkeypatch):

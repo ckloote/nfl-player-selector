@@ -91,6 +91,14 @@ ALTERNATIVES_SHOWN = 6
 # end-of-season snapshot that cannot be rewound to a past week.
 ROLE_SOURCE = "depth"
 
+# --- Diagnostics and inference ---------------------------------------------
+# Predeclared minimum number of clusters for cluster-robust inference. Below it the
+# sandwich estimator is not a usable inferential object — with one cluster the score
+# sum is the gradient at the MLE, which is zero, so the "interval" has no width. Point
+# estimates are still reported; the uncertainty is withheld. Chosen before looking at
+# any stratified fit, so a sparse stratum cannot be promoted by choosing a lower bar.
+MIN_INFERENCE_CLUSTERS = 30
+
 # --- Backtesting ------------------------------------------------------------
 # Closing-line horizon retained only for explicitly labeled legacy-closing sensitivity
 # comparisons. Historical replay masks all current/future closing lines; live defaults

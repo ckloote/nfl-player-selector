@@ -364,8 +364,58 @@ def reliability(df: pd.DataFrame, bins: Sequence[float] = LAMBDA_BINS) -> pd.Dat
     return g.reset_index()
 
 
+# A fit either identifies its coefficients or it does not. The failure modes below all
+# used to return plausible-looking numbers: `pinv` splits a rank-deficient design into a
+# minimum-norm intercept and slope, an all-zero outcome column drives the linear predictor
+# into the clip at -30 and reports a finite interval around it, and a single cluster scores
+# the sandwich at the MLE, where the gradient is zero, producing a zero-width interval.
+# A number that survives into a table is worse than an explicit refusal to fit.
+FIT_OK = "ok"
+FIT_UNSUPPORTED = "unsupported"
+
+FIT_KEYS = (
+    "intercept",
+    "slope",
+    "se_intercept",
+    "se_slope",
+    "slope_lo",
+    "slope_hi",
+    "n",
+    "clusters",
+    "fit_status",
+    "reason",
+    "converged",
+    "iterations",
+    "cluster_se",
+)
+
+
+def _unsupported_fit(reason: str, n: int, clusters: int, iterations: int = 0) -> dict:
+    """An explicit non-fit: every coefficient NaN, with the reason travelling beside it."""
+    return {
+        "intercept": np.nan,
+        "slope": np.nan,
+        "se_intercept": np.nan,
+        "se_slope": np.nan,
+        "slope_lo": np.nan,
+        "slope_hi": np.nan,
+        "n": int(n),
+        "clusters": int(clusters),
+        "fit_status": FIT_UNSUPPORTED,
+        "reason": reason,
+        "converged": False,
+        "iterations": int(iterations),
+        "cluster_se": False,
+    }
+
+
 def poisson_glm(
-    y: np.ndarray, x: np.ndarray, cluster: np.ndarray, max_iter: int = 50, tol: float = 1e-10
+    y: np.ndarray,
+    x: np.ndarray,
+    cluster: np.ndarray,
+    max_iter: int = 50,
+    tol: float = 1e-10,
+    min_clusters: int | None = None,
 ) -> dict[str, float]:
     """Fit E[Y] = exp(a + b*x) by IRLS, with cluster-robust standard errors.
 
@@ -379,17 +429,57 @@ def poisson_glm(
     Player-season clustering groups a player's repeated weekly errors. It does
     not also account for shared teammate/game effects or the same player across
     seasons. The caller must choose a clustering scheme for its inference target.
+
+    Every return carries `fit_status`, `reason`, `converged`, `iterations` and
+    `cluster_se`, so a caller can never mistake a refusal for an estimate. Empty
+    inputs, non-finite inputs, negative outcomes, `n <= 2`, a rank-deficient design
+    (a constant log rate), all-zero outcomes and exhausted iterations are
+    unsupported and return NaN coefficients. Fewer than `min_clusters` clusters
+    keeps the point estimates and suppresses the cluster-robust uncertainty:
+    the coefficients are still identified, the sandwich is not.
     """
+    min_clusters = config.MIN_INFERENCE_CLUSTERS if min_clusters is None else min_clusters
+    y = np.asarray(y, dtype=float)
+    x = np.asarray(x, dtype=float)
+    cluster = np.asarray(cluster)
+    if not len(y) == len(x) == len(cluster):
+        raise ValueError("poisson_glm needs outcomes, log rates and clusters of equal length")
+    n = len(y)
+    n_groups = int(pd.Series(cluster).nunique()) if n else 0
+
+    if n == 0:
+        return _unsupported_fit("empty input", n, n_groups)
+    if not (np.isfinite(y).all() and np.isfinite(x).all()):
+        return _unsupported_fit("non-finite inputs", n, n_groups)
+    if (y < 0).any():
+        return _unsupported_fit("negative outcomes", n, n_groups)
+    if n <= 2:
+        # The finite-sample correction divides by n - k with k = 2, and two points
+        # cannot separate an intercept from a slope in any case.
+        return _unsupported_fit("n <= 2 for a two-parameter fit", n, n_groups)
     design = np.column_stack([np.ones_like(x), x])
+    if np.linalg.matrix_rank(design) < 2:
+        return _unsupported_fit("design rank 1 (constant log rate)", n, n_groups)
+    if y.sum() == 0:
+        return _unsupported_fit("all-zero outcomes", n, n_groups)
+
     beta = np.zeros(2)
-    for _ in range(max_iter):
+    converged, iterations = False, 0
+    for iterations in range(1, max_iter + 1):
         mu = np.exp(np.clip(design @ beta, -30, 30))
         grad = design.T @ (y - mu)
         hess = design.T @ (design * mu[:, None])
+        if not (np.isfinite(grad).all() and np.isfinite(hess).all()):
+            return _unsupported_fit("non-finite IRLS step", n, n_groups, iterations)
         step = np.linalg.pinv(hess) @ grad
+        if not np.isfinite(step).all():
+            return _unsupported_fit("non-finite IRLS step", n, n_groups, iterations)
         beta = beta + step
         if np.max(np.abs(step)) < tol:
+            converged = True
             break
+    if not converged:
+        return _unsupported_fit("iterations exhausted before convergence", n, n_groups, iterations)
 
     mu = np.exp(np.clip(design @ beta, -30, 30))
     bread = np.linalg.pinv(design.T @ (design * mu[:, None]))
@@ -399,29 +489,51 @@ def poisson_glm(
     for _, idx in groups.groupby(groups, sort=False).indices.items():
         s = resid[idx].sum(axis=0)
         meat += np.outer(s, s)
-    n_groups = groups.nunique()
-    n, k = len(y), 2
+    k = 2
     correction = (n_groups / max(n_groups - 1, 1)) * ((n - 1) / (n - k))
     cov = bread @ meat @ bread * correction
     se = np.sqrt(np.diag(cov))
+    # One cluster reduces the meat to the score at the MLE, which is zero: the
+    # "interval" would have no width. Below the predeclared minimum the sandwich
+    # is not a usable inferential object, so it is withheld rather than shown.
+    cluster_se = n_groups >= min_clusters
     return {
         "intercept": float(beta[0]),
         "slope": float(beta[1]),
-        "se_intercept": float(se[0]),
-        "se_slope": float(se[1]),
-        "slope_lo": float(beta[1] - 1.96 * se[1]),
-        "slope_hi": float(beta[1] + 1.96 * se[1]),
+        "se_intercept": float(se[0]) if cluster_se else np.nan,
+        "se_slope": float(se[1]) if cluster_se else np.nan,
+        "slope_lo": float(beta[1] - 1.96 * se[1]) if cluster_se else np.nan,
+        "slope_hi": float(beta[1] + 1.96 * se[1]) if cluster_se else np.nan,
         "n": int(n),
         "clusters": int(n_groups),
+        "fit_status": FIT_OK,
+        "reason": None if cluster_se else f"cluster SEs suppressed: {n_groups} < {min_clusters}",
+        "converged": True,
+        "iterations": int(iterations),
+        "cluster_se": bool(cluster_se),
     }
 
 
-def calibration(df: pd.DataFrame, cluster_on: str = "player_season") -> dict[str, float]:
-    """Calibration slope/intercept for one model's forecasts."""
+def calibration(
+    df: pd.DataFrame, cluster_on: str = "player_season", min_clusters: int | None = None
+) -> dict[str, float]:
+    """Calibration slope/intercept for one model's forecasts.
+
+    Eligible zero rates cannot enter a fit on `log(lambda)`, but dropping them
+    silently would hide the population the fit does not describe — including the
+    zero forecasts that went on to score. They are counted, not disappeared.
+    """
     df = eligible_rows(df)
     sub = df[df.lam > 0]
+    dropped = df[~(df.lam > 0)]
+    outcomes = dropped["actual_tds"] if "actual_tds" in dropped else pd.Series(dtype=float)
+    zero_counts = {
+        "dropped_zero_lam": int(len(df) - len(sub)),
+        "zero_lam_n": int(len(dropped)),
+        "zero_lam_positive_outcome_n": int((outcomes > 0).sum()),
+    }
     if not len(sub):
-        return {"intercept": np.nan, "slope": np.nan, "n": 0}
+        return {**_unsupported_fit("no positive-rate rows", 0, 0), **zero_counts}
     if cluster_on == "player_season":
         cluster = sub.player_id.astype(str) + "|" + sub.season.astype(str)
     elif cluster_on == "season":
@@ -432,9 +544,9 @@ def calibration(df: pd.DataFrame, cluster_on: str = "player_season") -> dict[str
         sub.actual_tds.to_numpy(dtype=float),
         np.log(sub.lam.to_numpy(dtype=float)),
         cluster.to_numpy(),
+        min_clusters=min_clusters,
     )
-    out["dropped_zero_lam"] = int(len(df) - len(sub))
-    return out
+    return {**out, **zero_counts}
 
 
 def poisson_deviance(actual: np.ndarray, lam: np.ndarray) -> float:

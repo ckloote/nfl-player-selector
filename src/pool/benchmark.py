@@ -285,6 +285,19 @@ def save_frame(path, frame):
     tmp.replace(path)
 
 
+CALIBRATION_COLUMNS = (
+    "intercept",
+    "slope",
+    "se_intercept",
+    "se_slope",
+    "slope_lo",
+    "slope_hi",
+    "n",
+    "clusters",
+    "dropped_zero_lam",
+)
+
+
 def evaluate_season(conn, season, spec, directory, log):
     directory.mkdir(parents=True, exist_ok=True)
     chosen = {name: models.get(name) for name in spec["models"]}
@@ -355,9 +368,22 @@ def evaluate_season(conn, season, spec, directory, log):
                         ev.paired_ranking_seasons(paired, spec["baseline"], k, rank)
                     )
         if spec["calibration"]:
+            # Artifact schema 1 columns only. The guarded fit's status, reason and
+            # zero-rate breakdown belong to the Phase 3A diagnostics export; widening a
+            # published artifact's schema in place would leave two different files both
+            # claiming to be schema 1.
             fit = ev.calibration(df)
             metrics["calibration"].append(
-                pd.DataFrame([dict(model=model, seed=seed, season=season, **fit)])
+                pd.DataFrame(
+                    [
+                        dict(
+                            model=model,
+                            seed=seed,
+                            season=season,
+                            **{k: fit[k] for k in CALIBRATION_COLUMNS},
+                        )
+                    ]
+                )
             )
             rel = ev.reliability(df)
             rel["bin"] = rel["bin"].astype(str)
