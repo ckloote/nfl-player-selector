@@ -1112,6 +1112,19 @@ def _synthetic_rows():
             "hard_eligible": False,
             "actual_tds": 2.0,
         },
+        # Excluded because his deadline has passed, not because anything was wrong with
+        # the forecast: available, positive rate, and unpickable all the same.
+        {
+            **base,
+            "week": 1,
+            "player_id": "late",
+            "slot": "QB",
+            "position": "QB",
+            "lam": 0.6,
+            "avail_mult": 1.0,
+            "hard_eligible": False,
+            "actual_tds": 1.0,
+        },
         # Questionable, and a future row with no target to score against.
         {
             **base,
@@ -1194,11 +1207,18 @@ def test_a_stratum_too_small_to_fit_exports_its_reason(tmp_path, monkeypatch):
 
 
 def test_zero_rates_are_split_by_what_the_zero_means():
-    """An eligible zero rate is a forecast the fit cannot take, and one that scores is
-    exactly the row it fails on. A hard exclusion is a mask, and a ruled-out player who
-    played is a report error. One number for both would hide whichever is the real one."""
-    table = diagnostics.zero_accounting(_synthetic_rows())
-    assert set(table.zero_class) == {"eligible_zero_rate", "hard_exclusion"}
+    """Three different things used to share one number. An eligible zero rate is a
+    forecast the fit cannot take, and one that scores is exactly the row it fails on.
+    A ruled-out player masked to zero who plays anyway is a report error. A player
+    excluded because his deadline passed keeps a perfectly good positive forecast --
+    calling his touchdowns a report error, as the note did, describes neither."""
+    rows = _synthetic_rows()
+    table = diagnostics.zero_accounting(rows)
+    assert set(table.zero_class) == {
+        "eligible_zero_rate",
+        "exclusion: ruled out",
+        "exclusion: deadline or kickoff",
+    }
     assert (table.excluded_from_fit == table.zero_lam_n).all()
 
     eligible = table[table.population.eq("all_eligible")].set_index(["position", "horizon"])
@@ -1206,12 +1226,22 @@ def test_zero_rates_are_split_by_what_the_zero_means():
     assert eligible.loc[("RB", "0"), "zero_lam_positive_outcome_n"] == 1
     assert eligible.loc[("RB", "0"), "zero_lam_outcome_tds"] == 1.0
 
-    excluded = table[table.population.eq("hard_excluded")].set_index(["position", "horizon"])
-    assert excluded.loc[("QB", "0"), "zero_lam_positive_outcome_n"] == 1
-    assert excluded.loc[("QB", "0"), "zero_lam_outcome_tds"] == 2.0
-    # The masked row is in no eligible population, so it reaches no fit.
-    masks = diagnostics.population_masks(_synthetic_rows())
-    assert not any(mask.iloc[3] for mask in masks.values())
+    ruled_out = table[table.population.eq("excluded_unavailable")].set_index("position")
+    assert ruled_out.loc["QB", "zero_lam_n"] == 1
+    assert ruled_out.loc["QB", "zero_lam_positive_outcome_n"] == 1
+
+    # The deadline exclusion carries a positive rate, so it is not a zero at all and
+    # its touchdown is not evidence about the injury report.
+    late = table[table.population.eq("excluded_undecidable")].set_index("position")
+    assert late.loc["QB", "n"] == 1 and late.loc["QB", "zero_lam_n"] == 0
+    assert late.loc["QB", "outcome_tds"] == 1.0
+
+    # Neither exclusion is in any eligible population, so neither reaches a fit.
+    masks = diagnostics.population_masks(rows)
+    indexed = rows.reset_index(drop=True)
+    for pid in ("out", "late"):
+        where = int(indexed.index[indexed.player_id.eq(pid)][0])
+        assert not any(mask.iloc[where] for mask in masks.values())
 
 
 def test_an_eligible_zero_rate_never_reaches_a_fit_but_is_always_counted():
@@ -1228,6 +1258,93 @@ def test_an_eligible_zero_rate_never_reaches_a_fit_but_is_always_counted():
         fitted.population.eq("all_eligible") & fitted.axis.eq("overall") & fitted.horizon.eq("0")
     ].iloc[0]
     assert fit.n == 3  # the three positive rates with a known outcome
+
+
+@pytest.mark.skipif(not STUDY.exists(), reason="saved study artifacts are not checked in")
+def test_a_forecast_is_grouped_by_the_position_it_was_made_under():
+    """Position came from the target week, so a player who changed position had his
+    earlier forecasts reclassified using information that did not exist when they were
+    made. 563 rows of the saved study moved that way: B.J. Daniels was forecast as a
+    quarterback in 2015 and diagnosed as a receiver."""
+    rows = diagnostics.load_run(STUDY)
+    forecasts = pd.concat(
+        [
+            pd.read_parquet(STUDY / str(year) / "forecasts.parquet")[
+                ["model", "seed", "season", "week", "player_id", "position"]
+            ]
+            for year in sorted(int(p.name) for p in STUDY.iterdir() if p.name.isdigit())
+        ],
+        ignore_index=True,
+    )
+    at_decision = (
+        forecasts[forecasts.model.eq("shipped") & forecasts.seed.eq(-1)]
+        .drop_duplicates(["season", "week", "player_id"])
+        .rename(columns={"week": "decision_week", "position": "expected"})[
+            ["season", "decision_week", "player_id", "expected"]
+        ]
+    )
+    known = rows[rows.position.ne("unknown")]
+    check = known.merge(at_decision, on=["season", "decision_week", "player_id"], how="left")
+    assert check.expected.notna().all()
+    assert (check.position == check.expected).all()
+    # Forecast-time position is also the more complete join, not a trade for accuracy.
+    assert rows.position.eq("unknown").mean() < 0.06
+
+
+def test_available_means_not_yet_spent(tmp_path, monkeypatch):
+    """`avail_mult > 0` is already required by hard eligibility, so `available` was a
+    copy of `all_eligible` -- 962,332 identical rows in the saved study, every depleted
+    one included. The split that means something is against the baseline's own walk."""
+    run = _diagnosable_run(tmp_path, monkeypatch)
+    rows = diagnostics.load_run(run)
+    masks = diagnostics.population_masks(rows)
+    assert not masks["available"].equals(masks["all_eligible"])
+    assert not (masks["available"] & masks["depleted"]).any()
+
+    # Both are decision-week statements; a future cell has no depletion to report.
+    current = rows.lead_horizon.eq(0)
+    assert (masks["available"] | masks["depleted"]).loc[~current].sum() == 0
+    assert int((masks["available"] | masks["depleted"]).sum()) == int(
+        (masks["all_eligible"] & current).sum()
+    )
+
+
+def test_position_strata_account_for_every_row_in_their_population():
+    """Enumerating only QB/RB/WR/TE dropped the explicit `unknown` group, so at horizon
+    7+ of the saved study the position rows summed to 304,284 against an overall
+    363,276, each reporting full outcome coverage. The rows that vanished were exactly
+    the ones with no outcome to report."""
+    rows = _synthetic_rows()
+    assert "unknown" in set(rows.position), "fixture must contain a row with no position"
+    described, _ = diagnostics.strata(rows)
+    overall = described[described.axis.eq("overall")].set_index(["population", "horizon"]).n
+    by_position = (
+        described[described.axis.eq("position")].groupby(["population", "horizon"]).n.sum()
+    )
+    assert not overall.empty
+    pd.testing.assert_series_equal(
+        overall.sort_index(), by_position.sort_index(), check_names=False
+    )
+
+
+def test_a_zero_forecast_is_counted_whether_or_not_its_outcome_resolved():
+    """Counting zeros only among resolved outcomes made a stratum of one unscored zero
+    forecast report n=1 and zero_lam_n=0, contradicting the population it describes."""
+    rows = _synthetic_rows()
+    unresolved = rows[rows.player_id.eq("gone")].assign(lam=0.0, actual_tds=np.nan)
+    unresolved["outcome_known"] = False
+    combined = pd.concat([rows, unresolved], ignore_index=True)
+
+    described, _ = diagnostics.strata(combined)
+    horizon3 = described[
+        described.population.eq("all_eligible")
+        & described.axis.eq("overall")
+        & described.horizon.eq("2-3")
+    ].iloc[0]
+    assert horizon3.n == 2 and horizon3.outcomes_known == 0
+    assert horizon3.zero_lam_n == 1
+    assert horizon3.zero_lam_outcomes_known == 0
+    assert horizon3.zero_lam_positive_outcome_n == 0
 
 
 def test_a_forecast_with_no_target_week_is_missing_not_zero(tmp_path, monkeypatch):

@@ -77,11 +77,17 @@ def availability(avail_mult: pd.Series) -> pd.Series:
 def load_run(run: Path, model: str = "shipped", seed: int = -1, seasons=None) -> pd.DataFrame:
     """Join a study's future surface to the outcomes recorded on its forecast rows.
 
-    The surface carries no position and no outcome, and the forecast export keeps only
-    each week's own decision row. Player-week facts -- position, touchdowns, whether a
-    row exists at all -- come from the forecast row for the *target* week. Decision-week
-    facts -- depletion, rank, which policy picked the player -- are attached only where
-    the target week is the decision week; a later decision's rank says nothing about an
+    The surface carries neither position nor outcome, and the forecast export keeps
+    only each week's own decision row, so both have to be joined back.
+
+    Outcomes belong to the target week: whether the player scored, and whether he has a
+    row at all. Everything describing the forecast belongs to the *decision* week --
+    position included. Grouping a week-1 forecast by the position the player held in
+    week 5 classifies it with information that did not exist when it was made, and 563
+    rows of the saved study move that way: B.J. Daniels was forecast as a quarterback
+    in 2015 and diagnosed as a receiver, Daniel Brown forecast as a receiver in 2016
+    and diagnosed as a tight end. Depletion, rank and the pick indicators are likewise
+    attached only at the decision week; a later decision's rank says nothing about an
     earlier decision's plan.
     """
     run = Path(run)
@@ -99,22 +105,27 @@ def load_run(run: Path, model: str = "shipped", seed: int = -1, seasons=None) ->
         surface = pd.read_parquet(path)
         forecasts = pd.read_parquet(directory / "forecasts.parquet")
         forecasts = forecasts[forecasts.model.eq(model) & forecasts.seed.eq(seed)]
-        player_week = forecasts[
-            ["season", "week", "player_id", "position", "actual_tds", "played"]
+        outcome = forecasts[
+            ["season", "week", "player_id", "actual_tds", "played"]
         ].drop_duplicates(["season", "week", "player_id"])
-        decision = forecasts[
-            [
-                "season",
-                "week",
-                "player_id",
-                "baseline_spent",
-                "rank_available",
-                "picked_greedy",
-                "picked_optimizer",
+        decision = (
+            forecasts[
+                [
+                    "season",
+                    "week",
+                    "player_id",
+                    "position",
+                    "baseline_spent",
+                    "rank_available",
+                    "picked_greedy",
+                    "picked_optimizer",
+                ]
             ]
-        ].drop_duplicates(["season", "week", "player_id"])
-        joined = surface.merge(player_week, on=["season", "week", "player_id"], how="left").merge(
-            decision, on=["season", "week", "player_id"], how="left"
+            .drop_duplicates(["season", "week", "player_id"])
+            .rename(columns={"week": "decision_week"})
+        )
+        joined = surface.merge(outcome, on=["season", "week", "player_id"], how="left").merge(
+            decision, on=["season", "decision_week", "player_id"], how="left"
         )
         parts.append(joined)
     return prepare(pd.concat(parts, ignore_index=True))
@@ -134,6 +145,10 @@ def prepare(rows: pd.DataFrame) -> pd.DataFrame:
     # Decision-week facts describe the decision, not the player-week: a later decision's
     # depletion or rank says nothing about an earlier decision's plan for that week.
     # Nullable dtypes so "not a decision-week row" stays distinct from False.
+    # Depletion, rank and the pick indicators describe the decision week itself. They
+    # are joined there, so a future row inherits the decision's own values; blank them,
+    # because "this player was already spent" is a statement about week W, not about
+    # the week-17 cell the same decision was planning.
     future = rows.lead_horizon > 0
     for column in ("baseline_spent", "picked_greedy", "picked_optimizer"):
         rows[column] = rows[column].astype("boolean")
@@ -141,9 +156,9 @@ def prepare(rows: pd.DataFrame) -> pd.DataFrame:
     rows["rank_available"] = rows.rank_available.astype("Float64")
     rows.loc[future, "rank_available"] = pd.NA
     rows["outcome_known"] = rows.actual_tds.notna()
-    # A player forecast for a week he was no longer in the pool for has no forecast row
-    # and therefore no position. Label it rather than leave it null, or every groupby
-    # would drop it and the missing coverage would disappear from the tables reporting it.
+    # A player with no forecast row at his decision week has no forecast-time position.
+    # Label it rather than leave it null: a groupby drops nulls, and the strata that
+    # exist to report missing coverage would be the ones hiding it.
     rows["position"] = rows.position.fillna("unknown")
     return rows
 
@@ -155,10 +170,15 @@ def population_masks(rows: pd.DataFrame) -> dict[str, pd.Series]:
         return rows[column].fillna(False).astype(bool)
 
     eligible = flag("hard_eligible")
+    # Depletion is a decision-week fact, so `available` and `depleted` only mean
+    # anything where it is known. `avail_mult > 0` would not do: hard eligibility
+    # already requires it, which is why `available` was byte-identical to
+    # `all_eligible` across all 962,332 rows of the saved study, depleted ones included.
+    known_depletion = rows.baseline_spent.notna()
     masks = {
         "all_eligible": eligible,
-        "available": eligible & rows.avail_mult.gt(0),
-        "depleted": eligible & flag("baseline_spent"),
+        "available": eligible & known_depletion & ~flag("baseline_spent"),
+        "depleted": eligible & known_depletion & flag("baseline_spent"),
         "selected_greedy": eligible & flag("picked_greedy"),
         "selected_optimizer": eligible & flag("picked_optimizer"),
     }
@@ -193,7 +213,16 @@ def _stratum_rows(rows: pd.DataFrame, masks: dict[str, pd.Series]):
                 if axis == "overall":
                     yield population, axis, "all", horizon, by_horizon
                     continue
-                levels = POSITIONS if axis == "position" else sorted(by_horizon[axis].unique())
+                if axis == "position":
+                    # Every level present, not just the four expected ones. Enumerating
+                    # POSITIONS dropped the `unknown` group, so at horizon 7+ the
+                    # position rows summed to 304,284 against an overall 363,276 and
+                    # each claimed full outcome coverage.
+                    present = set(by_horizon[axis].unique())
+                    levels = [p for p in POSITIONS if p in present]
+                    levels += sorted(present - set(POSITIONS))
+                else:
+                    levels = sorted(by_horizon[axis].unique())
                 for level in levels:
                     sub = by_horizon[by_horizon[axis].eq(level)]
                     if not sub.empty:
@@ -203,7 +232,12 @@ def _stratum_rows(rows: pd.DataFrame, masks: dict[str, pd.Series]):
 def _describe(sub: pd.DataFrame) -> dict:
     scored = sub[sub.outcome_known]
     positive = scored[scored.lam > 0]
-    zero = scored[~(scored.lam > 0)]
+    # Zero rates are counted over the whole stratum. Counting only the ones with a
+    # resolved outcome made a stratum of a single unscored zero forecast report
+    # `n=1, zero_lam_n=0`, which contradicts the population it describes; how many of
+    # them have an outcome, and what they scored, are separate columns.
+    zero = sub[~(sub.lam > 0)]
+    zero_scored = zero[zero.outcome_known]
     return {
         "n": int(len(sub)),
         "outcomes_known": int(len(scored)),
@@ -226,8 +260,9 @@ def _describe(sub: pd.DataFrame) -> dict:
             else np.nan
         ),
         "zero_lam_n": int(len(zero)),
-        "zero_lam_positive_outcome_n": int((zero.actual_tds > 0).sum()),
-        "zero_lam_outcome_tds": float(zero.actual_tds.sum()) if len(zero) else 0.0,
+        "zero_lam_outcomes_known": int(len(zero_scored)),
+        "zero_lam_positive_outcome_n": int((zero_scored.actual_tds > 0).sum()),
+        "zero_lam_outcome_tds": float(zero_scored.actual_tds.sum()) if len(zero_scored) else 0.0,
     }
 
 
@@ -286,37 +321,50 @@ def reliability(rows: pd.DataFrame) -> pd.DataFrame:
 
 
 def zero_accounting(rows: pd.DataFrame) -> pd.DataFrame:
-    """Every zero rate, in the two classes that mean different things.
+    """Every zero rate and every exclusion, in the classes that mean different things.
 
-    An *eligible* zero rate is a candidate the tool would let you pick and forecasts at
-    zero; it cannot enter a fit on `log(lambda)` and is the population such a fit does
-    not describe. A *hard exclusion* is a player ruled out by the injury report, whose
-    zero is a mask rather than a forecast; it never enters any fit or any eligible
-    population. Reporting one number for both would hide whichever is the real one, and
-    a ruled-out player who scores anyway is not a calibration error.
+    An *eligible zero rate* is a candidate the tool would let you pick and forecasts at
+    zero; it cannot enter a fit on `log(lambda)` and is exactly the population such a
+    fit does not describe.
+
+    An exclusion is a mask, not a forecast, and there are two kinds. A player the
+    injury report rules out has his rate zeroed, and scoring anyway is a report error
+    rather than a calibration error. A player excluded because his deadline has passed
+    or his kickoff is unconfirmed keeps a positive rate: the forecast was fine, it just
+    could not be acted on, and his touchdowns say nothing about either the model or the
+    report. Reporting one number across all three would hide whichever is the real one.
     """
     out = []
+    eligible = rows.hard_eligible.fillna(False).astype(bool)
     groups = dict(population_masks(rows))
-    groups["hard_excluded"] = ~rows.hard_eligible.fillna(False).astype(bool)
+    groups["excluded_unavailable"] = ~eligible & rows.avail_mult.le(0)
+    groups["excluded_undecidable"] = ~eligible & rows.avail_mult.gt(0)
+    classes = {
+        "excluded_unavailable": "exclusion: ruled out",
+        "excluded_undecidable": "exclusion: deadline or kickoff",
+    }
     for population, mask in groups.items():
         base = rows[mask]
         for (position, horizon), sub in base.groupby(["position", "horizon"], sort=True):
             scored = sub[sub.outcome_known]
-            zero = scored[~(scored.lam > 0)]
+            zero = sub[~(sub.lam > 0)]
+            zero_scored = zero[zero.outcome_known]
             out.append(
                 dict(
                     population=population,
                     position=position,
                     horizon=horizon,
-                    zero_class=(
-                        "hard_exclusion" if population == "hard_excluded" else "eligible_zero_rate"
-                    ),
+                    zero_class=classes.get(population, "eligible_zero_rate"),
                     n=int(len(sub)),
                     outcomes_known=int(len(scored)),
                     zero_lam_n=int(len(zero)),
-                    zero_lam_share=float(len(zero) / len(scored)) if len(scored) else np.nan,
-                    zero_lam_positive_outcome_n=int((zero.actual_tds > 0).sum()),
-                    zero_lam_outcome_tds=float(zero.actual_tds.sum()) if len(zero) else 0.0,
+                    zero_lam_share=float(len(zero) / len(sub)) if len(sub) else np.nan,
+                    zero_lam_outcomes_known=int(len(zero_scored)),
+                    zero_lam_positive_outcome_n=int((zero_scored.actual_tds > 0).sum()),
+                    zero_lam_outcome_tds=(
+                        float(zero_scored.actual_tds.sum()) if len(zero_scored) else 0.0
+                    ),
+                    outcome_tds=float(scored.actual_tds.sum()) if len(scored) else 0.0,
                     excluded_from_fit=int(len(zero)),
                 )
             )
@@ -372,11 +420,16 @@ def readiness_note(run: Path, rows: pd.DataFrame, fits: pd.DataFrame, identities
         f"{int((rows.hard_eligible & ~rows.lam.gt(0)).sum()):,}. These are the rows a fit on "
         "`log(lambda)` cannot take; they are excluded from every fit and from the deviance, "
         "and counted in `zero-accounting.csv`.",
-        f"- Hard exclusions (ruled out, so masked to zero rather than forecast at zero): "
-        f"{int((~rows.hard_eligible & rows.outcome_known).sum()):,} with a known outcome, of "
-        f"which {int((~rows.hard_eligible & rows.actual_tds.gt(0)).sum()):,} scored anyway. "
-        "These never enter an eligible population or a fit; a player who was ruled out and "
-        "played is a report error, not a calibration error.",
+        f"- Excluded as unavailable (ruled out, so masked to zero rather than forecast at "
+        f"zero): {int((~rows.hard_eligible & rows.avail_mult.le(0)).sum()):,}, of which "
+        f"{int((~rows.hard_eligible & rows.avail_mult.le(0) & rows.actual_tds.gt(0)).sum()):,} "
+        "scored anyway. A player who was ruled out and played is a report error, not a "
+        "calibration error.",
+        f"- Excluded as undecidable (deadline elapsed or kickoff unconfirmed): "
+        f"{int((~rows.hard_eligible & rows.avail_mult.gt(0)).sum()):,}. These keep a positive "
+        "rate: the forecast was usable, the cell was not, and their touchdowns are evidence "
+        "about neither the model nor the injury report.",
+        "- Neither kind of exclusion enters an eligible population or any fit.",
         "",
         "## Group definitions",
         "",
