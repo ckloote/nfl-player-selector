@@ -14,10 +14,12 @@ import numpy as np
 import pandas as pd
 import pytest
 from scipy import optimize
+from typer.testing import CliRunner
 
-from pool import benchmark, config, db, snapshots
+from pool import benchmark, capture, config, db, snapshots, state
 from pool import evaluate as ev
 from pool import projections as P
+from pool.cli import app
 from pool.recommend import advise_week
 from tests.test_backtest import PRIOR, SEASON, WEEKS, _seed
 from tests.test_phase2 import archive_all
@@ -521,7 +523,9 @@ def test_a_missing_week_fails_before_any_worker_starts(tmp_path, monkeypatch):
     """A fifteen-season run should not discover a gap in season eleven."""
     spec = _snapshot_spec(_times_csv(tmp_path / "times.csv", weeks=[1, 2]))
     monkeypatch.setattr(benchmark, "resolve", lambda path: spec)
-    monkeypatch.setattr(benchmark, "code_identity", lambda: dict(code_hash="t", revision="t", dirty=False))
+    monkeypatch.setattr(
+        benchmark, "code_identity", lambda: dict(code_hash="t", revision="t", dirty=False)
+    )
     monkeypatch.setattr(
         benchmark, "evaluate_season", lambda *a: pytest.fail("started a worker anyway")
     )
@@ -552,7 +556,9 @@ def test_workers_read_the_frozen_timestamps_not_the_path(tmp_path, monkeypatch):
     path there. The frozen records travel in the pickled specification instead."""
     spec = _snapshot_spec(_times_csv(tmp_path / "times.csv"))
     monkeypatch.setattr(benchmark, "resolve", lambda path: spec)
-    monkeypatch.setattr(benchmark, "code_identity", lambda: dict(code_hash="t", revision="t", dirty=False))
+    monkeypatch.setattr(
+        benchmark, "code_identity", lambda: dict(code_hash="t", revision="t", dirty=False)
+    )
     monkeypatch.setattr(
         snapshots, "decision_times", lambda path: pytest.fail("re-read the mutable path")
     )
@@ -566,7 +572,9 @@ def test_resume_rejects_an_edited_decision_csv_at_the_same_path(tmp_path, monkey
     csv = _times_csv(tmp_path / "times.csv")
     spec = _snapshot_spec(csv)
     monkeypatch.setattr(benchmark, "resolve", lambda path: spec)
-    monkeypatch.setattr(benchmark, "code_identity", lambda: dict(code_hash="t", revision="t", dirty=False))
+    monkeypatch.setattr(
+        benchmark, "code_identity", lambda: dict(code_hash="t", revision="t", dirty=False)
+    )
     out = _research_db(tmp_path, "resume")
     benchmark.run("unused", out, log=lambda x: None)
 
@@ -582,3 +590,216 @@ def test_resume_rejects_an_edited_decision_csv_at_the_same_path(tmp_path, monkey
     monkeypatch.setattr(benchmark, "resolve", lambda path: edited)
     with pytest.raises(ValueError, match="fingerprint"):
         benchmark.run("unused", out, resume=True, log=lambda x: None)
+
+
+# --- append-only decision capture -------------------------------------------
+def _decide(conn, week, decided, used=None, locked=None):
+    used = set() if used is None else used
+    locked = {slot: {} for slot in config.SLOTS} if locked is None else locked
+    now = state.eastern_now(decided)
+    proj = P.projections_for(conn, SEASON, from_week=week)
+    advice = advise_week(proj, week, used, locked, now=now)
+    decision_id = capture.record_decision(
+        conn, SEASON, week, proj, advice, used, locked, decision_at=decided
+    )
+    return decision_id, proj, advice
+
+
+def test_the_capture_stores_the_whole_surface_not_the_shortlist(tmp_path):
+    """The optimizer prunes to eighty candidates and the recommender shows six. A
+    diagnostic asking about eligible zero rates, or about a player at a four-week
+    horizon, has to find them here, because nothing downstream keeps them."""
+    conn, unplayed = _staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    _publish(conn, unplayed, "thursday")
+    decision_id, proj, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+
+    frame, _, _ = capture.reconstruct(conn, decision_id)
+    assert len(frame) == len(proj)
+    assert set(frame.columns) >= set(P.PROJECTION_COLUMNS) | set(capture.SURFACE_EXTRAS)
+    assert sorted(frame.week.unique()) == [3, 4]  # the future surface, not just this week
+    assert sorted(frame.slot.unique()) == sorted(config.SLOTS)
+    assert set(frame.lead_horizon) == {0, 1}
+    # The elapsed Thursday cells are kept and labelled, not dropped: live loading puts
+    # the deadline in the recommender rather than in `hard_eligible`.
+    assert frame.hard_eligible.all()
+    assert set(frame.decision_status) == {"available", "deadline passed"}
+    elapsed = frame[frame.decision_status.eq("deadline passed")]
+    assert set(elapsed.week) == {3} and set(elapsed.team) == {"AAA", "BBB"}
+    assert (frame.mapped_lam == frame.original_lam).all()  # identity calibrator in 3A
+
+
+def test_a_captured_decision_reconstructs_its_advice_from_the_surface_alone(tmp_path):
+    """The 3A acceptance case. If the re-derived advice differs from the recorded
+    advice, something the decision depended on was never written down."""
+    conn, unplayed = _staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    _publish(conn, unplayed, "thursday")
+    decision_id, _, advice = _decide(conn, 3, datetime.fromisoformat(DECISION))
+
+    _, redone, recorded = capture.reconstruct(conn, decision_id)
+    assert sorted(recorded) == sorted(config.SLOTS)
+    for original, again in zip(advice, redone, strict=True):
+        detail = recorded[original.slot]
+        assert detail["recommended"]["player_id"] == again.recommended.player_id
+        assert detail["recommended"]["cost"] == pytest.approx(again.recommended.cost)
+        assert detail["hold"] == again.hold
+        assert detail["plan"] == {
+            str(w): again.plan.players.iloc[r].player_id for w, r in again.plan.assignment.items()
+        }
+        assert [c["player_id"] for c in detail["alternatives"]] == [
+            c.player_id for c in again.alternatives
+        ]
+
+
+def test_hold_and_commit_are_events_in_their_own_right(tmp_path):
+    """The early deadline is the decision the pool actually forces; recording only the
+    pick would lose whether the tool said to wait for Sunday's news."""
+    conn, unplayed = _staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    _publish(conn, unplayed, "thursday")
+    # Before the Thursday kickoff, so its players are still live and early.
+    _decide(conn, 3, datetime.fromisoformat("2024-09-19T18:30:00+00:00"))
+    kinds = set(capture.events(conn, SEASON).kind)
+    assert {"surface", "advice"} <= kinds
+    assert kinds & {"hold", "commit"}
+
+
+def test_captured_inputs_name_the_observations_the_decision_could_see(tmp_path):
+    conn, unplayed = _staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    _publish(conn, unplayed, "thursday")
+    for feed in ("player_stats", "touchdowns"):
+        snapshots.archive(conn, SEASON, feed, observed_at=POST_THU)
+    decision_id, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+
+    inputs = db.read_df(conn, "SELECT * FROM decision_inputs WHERE decision_id = ?", (decision_id,))
+    assert set(inputs.feed) == set(snapshots.TABLES)
+    assert inputs.missing.eq(0).all()
+    stats = inputs[inputs.season.eq(SEASON) & inputs.feed.eq("player_stats")].iloc[0]
+    assert stats.observed_at == snapshots.timestamp(POST_THU)
+    stored = conn.execute(
+        "SELECT content_hash FROM input_observations WHERE observation_id = ?",
+        (int(stats.observation_id),),
+    ).fetchone()
+    assert stored["content_hash"] == stats.content_hash
+
+
+def test_a_decision_survives_a_later_feed_correction(tmp_path):
+    """The reason outcomes are joined at read time and never stored on an event."""
+    conn, unplayed = _staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    _publish(conn, unplayed, "thursday")
+    decision_id, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    before, advice_before, recorded = capture.reconstruct(conn, decision_id)
+
+    _publish(conn, unplayed, "rest")
+    with conn:
+        conn.execute("UPDATE player_weeks SET rec_td = rec_td + 5 WHERE season = ?", (SEASON,))
+    for feed in ("player_stats", "touchdowns"):
+        snapshots.archive(conn, SEASON, feed, observed_at=POST_SUN)
+
+    after, advice_after, recorded_after = capture.reconstruct(conn, decision_id)
+    pd.testing.assert_frame_equal(before, after)
+    assert recorded == recorded_after
+    assert [a.recommended.player_id for a in advice_before] == [
+        a.recommended.player_id for a in advice_after
+    ]
+
+
+@pytest.mark.parametrize("table", ["decision_events", "decision_inputs"])
+def test_captured_events_cannot_be_edited_or_deleted(tmp_path, table):
+    conn, unplayed = _staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    _publish(conn, unplayed, "thursday")
+    _decide(conn, 3, datetime.fromisoformat(DECISION))
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        with conn:
+            conn.execute(f"UPDATE {table} SET season = 1999")
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        with conn:
+            conn.execute(f"DELETE FROM {table}")
+
+
+def test_repeating_a_decision_on_unchanged_inputs_stores_one_surface(tmp_path):
+    """Content-addressed like the feed archive: re-running `recommend` should cost an
+    event, not another copy of the whole surface."""
+    conn, unplayed = _staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    _publish(conn, unplayed, "thursday")
+    first, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    second, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+
+    assert first != second
+    hashes = {
+        r[0]
+        for r in conn.execute("SELECT surface_hash FROM decision_events WHERE kind = 'surface'")
+    }
+    assert len(hashes) == 1
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM input_payloads WHERE codec = ?", (capture.CODEC,)
+        ).fetchone()[0]
+        == 1
+    )
+
+
+def test_outcomes_are_joined_separately_and_absence_is_not_a_zero(tmp_path):
+    conn, unplayed = _staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    _publish(conn, unplayed, "thursday")
+    _decide(conn, 3, datetime.fromisoformat(DECISION))
+
+    joined = capture.outcomes(conn, SEASON)
+    assert "actual_tds" in joined and "outcome_complete" in joined
+    # Only the Thursday game has been played, so week 3 is not fully scored and week 4
+    # has not started; neither may be read as a zero.
+    assert not joined.outcome_complete.any()
+    assert joined.actual_tds.isna().all()
+
+    _publish(conn, unplayed, "rest")
+    complete = capture.outcomes(conn, SEASON)
+    assert complete.outcome_complete.all()
+    assert complete.actual_tds.notna().all()
+
+
+def test_the_cli_records_submissions_and_corrections_without_editing_history(tmp_path):
+    """`my_picks` holds the current answer and is overwritten in place. The capture log
+    has to hold every answer, or a corrected pick erases the one it replaced."""
+    path = tmp_path / "pool.db"
+    conn = _seed(db.connect(path))
+    conn.close()
+    runner = CliRunner()
+    for args in (
+        ["record", "--week", "1", "--rb", "AAA RB1", "--season", str(SEASON), "--db", str(path)],
+        ["record", "--week", "1", "--rb", "BBB RB1", "--season", str(SEASON), "--db", str(path)],
+        ["unrecord", "1", "RB", "--season", str(SEASON), "--db", str(path)],
+    ):
+        result = runner.invoke(app, args)
+        assert result.exit_code == 0, (result.output, result.exception)
+
+    conn = db.connect(path)
+    log = capture.events(conn, SEASON, 1)
+    assert list(zip(log.kind, log.player_id, strict=True)) == [
+        ("submitted", "AAA-RB1"),
+        ("correction", "AAA-RB1"),
+        ("submitted", "BBB-RB1"),
+        ("correction", "BBB-RB1"),
+    ]
+    assert conn.execute("SELECT COUNT(*) FROM my_picks").fetchone()[0] == 0
+
+
+def test_the_cli_captures_a_recommendation_and_can_be_asked_not_to(tmp_path):
+    path = tmp_path / "pool.db"
+    conn = _seed(db.connect(path))
+    conn.close()
+    runner = CliRunner()
+    args = ["recommend", "--week", "1", "--season", str(SEASON), "--db", str(path)]
+    assert runner.invoke(app, args).exit_code == 0
+    conn = db.connect(path)
+    assert len(capture.events(conn, SEASON, 1)) == 4  # one surface, three slots
+    conn.close()
+
+    assert runner.invoke(app, [*args, "--no-capture"]).exit_code == 0
+    conn = db.connect(path)
+    assert len(capture.events(conn, SEASON, 1)) == 4

@@ -154,6 +154,40 @@ def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
 
 # Migrations deliberately do not infer scoring completeness from legacy totals.
 MIGRATIONS = {
+    3: [
+        # Prospective decision capture. Append-only for the same reason observations
+        # are: a decision is something that happened at a time, and a record you can
+        # edit afterwards cannot evidence what was known when it was made. Corrections
+        # are new events. The pre-pruning surface is content-addressed in the existing
+        # payload table, so re-deciding on unchanged inputs stores one copy.
+        """CREATE TABLE decision_identities (
+            identity_hash TEXT PRIMARY KEY, schema_version INTEGER NOT NULL,
+            payload TEXT NOT NULL)""",
+        """CREATE TABLE decision_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT, decision_id TEXT NOT NULL,
+            recorded_at TEXT NOT NULL, decision_at TEXT NOT NULL,
+            season INTEGER NOT NULL, week INTEGER NOT NULL, slot TEXT,
+            kind TEXT NOT NULL CHECK(kind IN
+                ('surface', 'advice', 'hold', 'commit', 'submitted', 'correction')),
+            player_id TEXT, detail TEXT NOT NULL,
+            surface_hash TEXT REFERENCES input_payloads(content_hash),
+            identity_hash TEXT NOT NULL REFERENCES decision_identities(identity_hash),
+            schema_version INTEGER NOT NULL)""",
+        "CREATE INDEX decision_events_lookup ON decision_events(season, week, decision_id)",
+        """CREATE TABLE decision_inputs (
+            decision_id TEXT NOT NULL, season INTEGER NOT NULL, feed TEXT NOT NULL,
+            observation_id INTEGER, content_hash TEXT, observed_at TEXT,
+            missing INTEGER NOT NULL, age_hours REAL, stale INTEGER,
+            PRIMARY KEY (decision_id, season, feed))""",
+        """CREATE TRIGGER decision_events_no_update BEFORE UPDATE ON decision_events
+            BEGIN SELECT RAISE(ABORT, 'decision events are append-only'); END""",
+        """CREATE TRIGGER decision_events_no_delete BEFORE DELETE ON decision_events
+            BEGIN SELECT RAISE(ABORT, 'decision events are append-only'); END""",
+        """CREATE TRIGGER decision_inputs_no_update BEFORE UPDATE ON decision_inputs
+            BEGIN SELECT RAISE(ABORT, 'decision inputs are append-only'); END""",
+        """CREATE TRIGGER decision_inputs_no_delete BEFORE DELETE ON decision_inputs
+            BEGIN SELECT RAISE(ABORT, 'decision inputs are append-only'); END""",
+    ],
     2: [
         """CREATE TABLE input_payloads (
             content_hash TEXT PRIMARY KEY, schema_version INTEGER NOT NULL,

@@ -316,8 +316,10 @@ forecasts, future surfaces, picks, per-seed metrics and reports. Operational pic
 
 Generated reports contain facts, methods and provenance; human/AI interpretation belongs in
 the separately authored [analysis](ANALYSIS.md), which reruns do not refresh. The saved historical
-study supports diagnosis, not calibrated production. Phase 3A tracks decision-CSV content hashing for resume
-and prospective full-surface/action capture. Initial 2026 feed snapshots are not completed live validation.
+study supports diagnosis, not calibrated production. Live decisions are captured append-only beside the feed archive: the pre-pruning current and
+future surface, each slot's advice and hold/commit call, used/locked state, the resolved input
+observations and the code/constant/model identity. Corrections are new events and outcomes are
+joined at read time, so nothing already recorded changes. Initial 2026 feed snapshots are not completed live validation.
 
 ## 6. Out of scope (for now)
 

@@ -106,6 +106,15 @@ including inactive players. Every supplied slot is validated before one atomic
 write. Replacing a player clears the slot's score; re-recording the same player
 preserves it. Removing a pick removes its contribution to totals.
 
+`recommend` also records the decision: the whole pre-pruning surface for every slot and
+remaining week, the advice and hold-or-commit call per slot, the used and locked state, the
+feed observations that were visible, and the code, constants and model that produced it. The
+log is append-only — a correction is a new event, and `record`/`unrecord` append their own —
+so a captured decision can be reconstructed later even after the feeds have moved on.
+Outcomes are never stored beside it; they are joined from finalized scoring when read. Use
+`--no-capture` to skip recording. This evidence is what
+[Phase 3](docs/IMPLEMENTATION_PLAN.md) needs and is not used to make picks.
+
 Scoring counts every touchdown thrown or scored, including returns and recoveries.
 The importer uses nflverse's explicit scorer identifier and separately credits the
 passer on a credited passing touchdown, excluding negated plays and conversions.

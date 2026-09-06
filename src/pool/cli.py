@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import backtest as bt
-from . import config, db, freshness, ingest, models, projections, scoring, snapshots, state
+from . import capture, config, db, freshness, ingest, models, projections, scoring, snapshots, state
 from . import evaluate as ev
 from .optimizer import plan_slot
 from .recommend import Candidate, SlotAdvice, advise_week
@@ -129,15 +129,26 @@ def refresh(season: int = SeasonOpt, db_path: Path | None = DbOpt):
 
 
 @app.command()
-def recommend(week: int | None = WeekOpt, season: int = SeasonOpt, db_path: Path | None = DbOpt):
+def recommend(
+    week: int | None = WeekOpt,
+    season: int = SeasonOpt,
+    db_path: Path | None = DbOpt,
+    capture_decision: bool = typer.Option(
+        True, "--capture/--no-capture", help="Record this decision's inputs, surface and advice"
+    ),
+):
     """Recommend picks for every open slot this week."""
     conn = _conn(db_path)
+    # One instant for the whole decision: the Eastern form compares against kickoffs,
+    # the aware form identifies which feed observations were available.
     now = state.eastern_now()
+    decided = state.decision_instant(now)
     wk = _week(conn, season, week, now)
     proj = _projections(conn, season, wk)
-    advice = advise_week(
-        proj, wk, state.used_ids(conn, season), state.locked_by_slot(conn, season), now=now
-    )
+    used, locked = state.used_ids(conn, season), state.locked_by_slot(conn, season)
+    advice = advise_week(proj, wk, used, locked, now=now)
+    if capture_decision:
+        capture.record_decision(conn, season, wk, proj, advice, used, locked, decision_at=decided)
     console.print(f"[bold]Week {wk} — {season}[/bold]")
     _status(conn, season, wk, now)
     recorded_names = state.picks(conn, season).set_index("player_id").player_name.to_dict()
@@ -248,11 +259,34 @@ def record(
                 team=m.team,
             )
         )
+    replaced = {
+        r["slot"]: r["player_id"]
+        for r in conn.execute(
+            "SELECT slot, player_id FROM my_picks WHERE season = ? AND week = ?", (season, wk)
+        )
+    }
     try:
         warnings = state.record_picks(conn, season, wk, entries, now=now)
     except state.PickError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1) from e
+    # `my_picks` holds the current answer; the capture log holds every answer. A slot
+    # that replaces a different player records the correction as well as the entry.
+    for e in entries:
+        prior = replaced.get(e["slot"])
+        if prior is not None and prior != e["player_id"]:
+            capture.record_action(
+                conn, season, wk, e["slot"], "correction", prior, dict(replaced_by=e["player_id"])
+            )
+        capture.record_action(
+            conn,
+            season,
+            wk,
+            e["slot"],
+            "submitted",
+            e["player_id"],
+            dict(player_name=e["player_name"], team=e.get("team"), replaced=prior),
+        )
     for warning in warnings:
         console.print(f"[yellow]Warning: {warning}[/yellow]")
     for e in entries:
@@ -264,11 +298,19 @@ def unrecord(week: int, slot: str, season: int = SeasonOpt, db_path: Path | None
     """Remove a recorded pick (slot: QB, RB, FLEX)."""
     conn = _conn(db_path)
     _week(conn, season, week)
+    removed = conn.execute(
+        "SELECT player_id FROM my_picks WHERE season = ? AND week = ? AND slot = ?",
+        (season, week, slot.upper()),
+    ).fetchone()
     try:
         ok = state.remove_pick(conn, season, week, slot.upper())
     except state.PickError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1) from e
+    if ok:
+        capture.record_action(
+            conn, season, week, slot.upper(), "correction", removed["player_id"], dict(removed=True)
+        )
     console.print("removed" if ok else "[yellow]nothing to remove[/yellow]")
 
 

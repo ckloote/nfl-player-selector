@@ -216,6 +216,19 @@ def eastern_now(now: datetime | None = None) -> datetime:
     return now
 
 
+def decision_instant(now: datetime | None = None) -> datetime:
+    """The timezone-aware instant behind an Eastern wall-clock decision time.
+
+    Deadlines compare against kickoffs, which are stored as Eastern wall clock, but
+    which feed observations were available is a question about an instant. Both must
+    describe the same moment, so derive one from the other rather than reading the
+    clock twice. An ambiguous hour on the fall-back boundary resolves to the earlier
+    offset, which can only make a decision look older than it was.
+    """
+    eastern = eastern_now(now)
+    return eastern.replace(tzinfo=ZoneInfo(config.TIMEZONE)).astimezone(UTC)
+
+
 def current_week(conn: sqlite3.Connection, season: int, now: datetime | None = None) -> int:
     """First week whose games haven't all finished (kickoff + 4h).
 
