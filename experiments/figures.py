@@ -165,8 +165,17 @@ def slope_by_season(data, baseline):
         return "\n".join(out)
     spread = cal.se_slope.fillna(0.0)
     no_interval = int(cal.se_slope.isna().sum())
-    w, h = 720, 320
-    left, right, top, bottom = 62, 24, 66, 44
+    # Both warnings on one line ran about 77px past the 720px canvas, so the reader lost
+    # the end of whichever notice came second. They get their own line, and the plot
+    # starts lower to make room rather than being drawn over.
+    notes = []
+    if unsupported:
+        notes.append(f"{unsupported} unsupported fit(s) omitted")
+    if no_interval:
+        notes.append(f"{no_interval} plotted without cluster SEs")
+    w, h = 720, 320 + (15 if notes else 0)
+    left, right, bottom = 62, 24, 44
+    top = 66 + (15 if notes else 0)
     # Both bounds follow the plotted intervals. A hardcoded top clipped every
     # supported baseline above it: `vegas-environment` reaches a slope of 1.137
     # and an upper bound of 1.234, outside a viewport that stopped at 1.03.
@@ -182,10 +191,9 @@ def slope_by_season(data, baseline):
         h,
         "Poisson calibration slope by season",
         [
-            f"`{baseline}`; estimate +/-1.96 SE, player-season clusters."
-            + (f" {unsupported} unsupported fit(s) omitted." if unsupported else "")
-            + (f" {no_interval} without cluster SEs." if no_interval else ""),
+            f"`{baseline}`; estimate +/-1.96 SE, player-season clusters.",
             f"Dashed: slope 1 reference. Dotted: mean {cal.slope.mean():.3f}. Intercepts in table.",
+            *(["; ".join(notes) + "."] if notes else []),
         ],
     )
     for tick in _ticks(lo, hi, 0.05):
