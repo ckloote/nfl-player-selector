@@ -2,7 +2,8 @@
 
 Rendering, not computation: these live in the publishing layer so a change to a
 label cannot invalidate a run's checkpoints, and so the numbers in a figure come
-from the same exported CSVs the tables and findings are read from.
+from the same exported CSVs as the tables. Captions describe measurements and
+methods, not model-selection conclusions or significance verdicts.
 
 Plain SVG with computed geometry, no plotting dependency. Colours are chosen to
 carry on both a light and a dark page, because GitHub's theme is not the same
@@ -64,7 +65,7 @@ def _bin_label(raw):
 
 
 def reliability(data, baseline):
-    """Projected/actual by forecast bin: the shape a pooled ratio of 1.0 hides."""
+    """Ratio of summed forecasts to summed outcomes within each forecast bin."""
     rows = data["reliability"]
     rows = rows[rows.model.eq(baseline)]
     pooled = rows.groupby("bin", sort=False).apply(
@@ -110,7 +111,7 @@ def reliability(data, baseline):
         f'<line x1="{left}" y1="{y(1.0):.1f}" x2="{w - right}" y2="{y(1.0):.1f}" '
         f'stroke="{GRID}" stroke-width="1.5" stroke-dasharray="5 4"/>'
     )
-    out.append(_text(w - right - 4, y(1.0) - 8, "calibrated", size=10, anchor="end"))
+    out.append(_text(w - right - 4, y(1.0) - 8, "forecast = outcome", size=10, anchor="end"))
 
     # One polyline per run of defined bins: a segment drawn across an undefined one
     # would imply a value the bin does not have.
@@ -145,7 +146,7 @@ def reliability(data, baseline):
 
 
 def slope_by_season(data, baseline):
-    """Calibration slope per season: the point is how little it moves."""
+    """Saved calibration slopes and their normal-approximation intervals by season."""
     cal = data["calibration"]
     cal = cal[cal.model.eq(baseline)].sort_values("season")
     w, h = 720, 320
@@ -165,8 +166,8 @@ def slope_by_season(data, baseline):
         h,
         "Poisson calibration slope by season",
         [
-            f"`{baseline}`, with 95% cluster-robust intervals. 1.0 is calibrated;",
-            f"below 1 the forecasts are too extreme. Dotted: mean {cal.slope.mean():.3f}.",
+            f"`{baseline}`; estimate +/-1.96 SE, player-season clusters.",
+            f"Dashed: slope 1 reference. Dotted: mean {cal.slope.mean():.3f}. Intercepts in table.",
         ],
     )
     for tick in _ticks(lo, hi, 0.05):
@@ -196,26 +197,19 @@ def slope_by_season(data, baseline):
     return "\n".join(out)
 
 
-def bakeoff(data, baseline, floor=None):
+def bakeoff(data, baseline):
     """Paired season deltas with their own standard errors.
 
-    `floor` is twice the median paired SE across every comparison in the run. It is
-    a typical scale, not a threshold each comparison must clear: shading it as the
-    band "these replays cannot resolve" put `within-player` inside it at -3.14 when
-    its own SE is 1.46, which the report's own two-SE criterion resolves. A run with
-    one season has no cross-season SE at all, so it is drawn without a band.
-
     The comparison set is whatever the run configured against the baseline, down to
-    `random` alone or to nothing.
+    `random` alone or to nothing. No shared detection threshold or significance
+    classification is inferred from these measurements.
     """
     wide = data["replays"]
     wide = wide[wide.strategy.eq("greedy")].pivot_table(
         index="season", columns="model", values="total", aggfunc="mean"
     )
     delta = wide.sub(wide[baseline], axis=0).drop(columns=[baseline])
-    # `random` sits an order of magnitude out and would squash every real comparison.
-    # A run whose only challenger is `random` has no real comparison left to squash,
-    # and setting it aside there left nothing to plot at all.
+    # Omit the shuffled comparison when others are present; report its mean in the caption.
     aside = delta.pop("random") if "random" in delta and delta.shape[1] > 1 else None
     if delta.columns.empty:
         out = _frame(
@@ -233,7 +227,6 @@ def bakeoff(data, baseline, floor=None):
             "won": (delta > 0).sum(),
         }
     ).sort_values("mean")
-    banded = floor is not None and np.isfinite(floor)
     spread = stats.se.fillna(0.0)
 
     row_h = 26
@@ -244,41 +237,26 @@ def bakeoff(data, baseline, floor=None):
     # single season whose comparisons all lose put that line at x=819.9 on a 720 canvas.
     lo = min(0.0, (stats["mean"] - spread).min()) - 1.0
     hi = max(0.0, (stats["mean"] + spread).max()) + 1.0
-    if banded:
-        lo, hi = min(lo, -floor - 1.0), max(hi, floor + 1.0)
     x = _scale(lo, hi, left, w - right)
 
     note = f" `random` omitted at {aside.mean():+.1f}." if aside is not None else ""
     seasons = f"{len(delta)} season" + ("s" if len(delta) != 1 else "")
     measured = "Mean and standard error over" if len(delta) > 1 else "Season score over"
-    subtitle = [f"{measured} {seasons}; seasons better at right.{note}"]
-    if banded:
-        subtitle.append(
-            f"Shaded: \u00b1{floor:.1f} TDs \u2014 twice the median paired SE, a typical scale"
-        )
-        subtitle.append("rather than a threshold each comparison must clear.")
+    subtitle = [f"{measured} {seasons}; positive season deltas at right.{note}"]
     out = _frame(w, h, f"Season score vs `{baseline}`, greedy replay", subtitle)
-    if banded:
-        out.append(
-            f'<rect x="{x(-floor):.1f}" y="{top - 10:.1f}" width="{x(floor) - x(-floor):.1f}" '
-            f'height="{row_h * len(stats) + 12:.1f}" fill="{GRID}" fill-opacity="0.12"/>'
-        )
     out.append(
         f'<line x1="{x(0):.1f}" y1="{top - 10:.1f}" x2="{x(0):.1f}" '
         f'y2="{top + row_h * len(stats) + 2:.1f}" stroke="{GRID}" stroke-width="1.5"/>'
     )
     for i, row in enumerate(stats.itertuples()):
         cy = top + row_h * i + 8
-        # Each comparison against its own uncertainty, the same two-SE bar the report uses.
-        resolved = np.isfinite(row.se) and row.se > 0 and abs(row.mean) >= 2 * row.se
-        colour = OVER if resolved and row.mean < 0 else INK
         if np.isfinite(row.se):
             lo_x, hi_x = x(row.mean - row.se), x(row.mean + row.se)
             out.append(
                 f'<line x1="{lo_x:.1f}" y1="{cy:.1f}" x2="{hi_x:.1f}" y2="{cy:.1f}" '
-                f'stroke="{colour}" stroke-width="1.5" stroke-opacity="0.6"/>'
+                f'stroke="{INK}" stroke-width="1.5" stroke-opacity="0.6"/>'
             )
-        out.append(f'<circle cx="{x(row.mean):.1f}" cy="{cy:.1f}" r="4" fill="{colour}"/>')
+        out.append(f'<circle cx="{x(row.mean):.1f}" cy="{cy:.1f}" r="4" fill="{INK}"/>')
         out.append(_text(left - 12, cy + 4, row.Index, size=11, anchor="end"))
         readout = (
             f"{row.mean:+.2f}\u00b1{row.se:.2f}" if np.isfinite(row.se) else f"{row.mean:+.2f}"
@@ -299,7 +277,7 @@ def bakeoff(data, baseline, floor=None):
         _text(
             left,
             h - 14,
-            "TDs per season vs baseline (mean, SE, seasons better)",
+            "TDs per season vs baseline (mean, SE, positive season deltas)",
             size=10,
             anchor="start",
         )
@@ -309,7 +287,7 @@ def bakeoff(data, baseline, floor=None):
 
 
 def optimizer_by_season(data, baseline):
-    """Per-season optimizer minus greedy: the scatter behind a mean worth doubting."""
+    """Actual optimizer-minus-greedy scores by season, with a mean and SE."""
     rows = data["replays"]
     rows = rows[rows.model.eq(baseline) & rows.strategy.isin(["greedy", "optimizer"])]
     piv = rows.pivot_table(index="season", columns="strategy", values="total", aggfunc="mean")
@@ -330,8 +308,8 @@ def optimizer_by_season(data, baseline):
         [
             f"`{baseline}`. Dashed: mean {mean:+.2f}"
             + (f" ({se:.2f} SE)" if np.isfinite(se) else "")
-            + f", better in {int((diff > 0).sum())} of {len(diff)}.",
-            "The spread, not the mean, is the finding.",
+            + f", positive in {int((diff > 0).sum())} of {len(diff)}.",
+            "Bars: optimizer minus greedy in actual TDs per season.",
         ],
     )
     for tick in range(-int(span // 5) * 5, int(span) + 1, 5):
@@ -362,11 +340,11 @@ def optimizer_by_season(data, baseline):
     return "\n".join(out)
 
 
-def render(data, baseline, floor=None):
+def render(data, baseline):
     """Every figure, keyed by the file stem it is written to."""
     return {
         "reliability": reliability(data, baseline),
         "calibration-slope": slope_by_season(data, baseline),
-        "bakeoff": bakeoff(data, baseline, floor),
+        "bakeoff": bakeoff(data, baseline),
         "optimizer-by-season": optimizer_by_season(data, baseline),
     }

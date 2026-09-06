@@ -51,11 +51,14 @@ Artifact schema version 1:
 | `*_summary.csv` | Seeds/trials averaged within season, then equally weighted seasons; cross-season SE and separate within-season shuffle/trial SD, including retrospective era summaries |
 | `input-provenance.json` | Decision timestamps and, for snapshot policy, resolved observation identities, hashes, absence, age and staleness |
 | `coverage.csv` | Each scheduled game in every required history/evaluation season, with completion and reason |
+| `presentation.json` | Publication-only source hashes for the report/figure renderers, plus the original metric source and dataset identities; does not replace the metric manifest |
 
 Seed −1 identifies a deterministic forecast/strategy. Seeds 0–19 identify shuffled projections
 or shipped random-strategy trials; the `model` and `strategy` columns distinguish them.
 Shuffled seeds do not multiply the number of independent seasons. An empty common comparison
 cell is excluded from the mean and reported, not silently turned into a zero observation.
+The `played` field means a player-stat row or TD credit exists. It is not an independently
+verified game-day active or snap-participation label.
 
 The candidate pool is the QB/RB/WR/TE players listed active on their own team's most recent
 weekly roster snapshot at or before the decision week (latest visible stat teams are the
@@ -64,8 +67,9 @@ snapshot rather than the union of every week to date keeps released players out 
 moved players their current team; it also confines the one cutdown-era snapshot the feed
 mislabels as a game week (2016 week 1) to that week. Per team rather than league-wide, because
 from 2016 on the feed publishes no roster for a team on its bye, and one league-wide latest
-week would drop those teams from every remaining week of the plan. A team's fallback is never
-more than one week old. Out/Doubtful and expired/unconfirmed current-week cells are hard
+week would drop those teams from every remaining week of the plan. In the saved 2011-2025
+study, no team's fallback exceeds one week; the code does not impose that age limit.
+Out/Doubtful and expired/unconfirmed current-week cells are hard
 exclusions. Questionable scales forecasts by 0.85; zero forecasts can still be eligible.
 Player ID breaks ties. Each actual strategy replay depletes its own pool. The hindsight
 population is historical eligible scorer identities, so it is a retrospective scoring ceiling
@@ -87,7 +91,52 @@ uv run python experiments/publish.py <experiment>
 ```
 
 The verification script reconciles every configured seed, candidate/mask population, pick
-history and score total, then records the matching implementation commit. Publication copies
-compact metrics, compresses the exact individual-pick CSV with a deterministic gzip header,
-and generates report appendices from that verification record. Raw forecasts and databases
-remain in the ignored output directory.
+history and score total, then records the matching implementation commit. Verification and
+model resume still require the recorded metric implementation and inputs. Raw forecasts and
+databases remain in the ignored output directory.
+
+## Measurements And Interpretation
+
+Each run produces one `EVALUATION.md`, published beside its metrics and as
+[`docs/EVALUATION.md`](../docs/EVALUATION.md). It presents season replay results, ranking
+diagnostics and calibration diagnostics as distinct sections, with shared methods,
+reproducibility and verification recorded once. All four figures remain in their matching
+results sections. The three metric tables retain their separate units and populations.
+
+The generated report contains measured tables, plots, counts, uncertainty estimates, metric
+definitions, input assumptions and recorded provenance. It does not select a winning model,
+attribute effects to player identity or timing, turn a standard error into a detection floor,
+or recommend a research/deployment decision. Undefined statistics are explicit. Plot colors
+and reference lines do not classify statistical significance. Calibration reports show both
+intercept and slope; a unit slope alone does not establish calibration.
+
+[docs/ANALYSIS.md](../docs/ANALYSIS.md) is separately authored human/AI interpretation, dated
+and tied to a specific study and its source/dataset identities. A new result requires an
+explicit review of that analysis, not automatic prose selected by thresholds in a renderer.
+Publication never overwrites the analysis or the implementation plan. Superseded experiments
+and archived reports retain their original historical record, including the older split
+report filenames.
+
+To update presentation for an already verified run, use only:
+
+```bash
+uv run python experiments/publish.py roster-snapshot-repair
+```
+
+Publication validates the saved completion, verification, manifest, configuration and frozen
+dataset identities. It copies the compact metrics, compresses the exact pick CSV with a
+deterministic gzip header, and renders the report text anew from the saved metric tables,
+not from previously generated Markdown. Compact Markdown is not copied into the publication;
+only the current rendered report is written. After publishing successfully, the two retired
+`BACKTEST.md` and `PROJECTION_BENCHMARK.md` files are removed from the current experiment's
+published directory and `docs/`, not from saved compact inputs, archives or other experiments.
+It does not run forecasts, calibration fits or
+season replays, and does not rewrite the original verification record or compact inputs.
+The original metric source need not match the current renderer: `presentation.json` records
+the current rendering-source hashes separately. This permits presentation changes without
+claiming a new model run or weakening the benchmark's resume identity checks.
+
+Changes anywhere under `src`, including report code or docstrings, still change the benchmark
+source fingerprint. Do not rerun verification or rewrite a manifest to make old checkpoints
+appear compatible with a newer source tree. Recompute in a new experiment when model/metric
+changes require it; use the recorded implementation to resume the original computation.

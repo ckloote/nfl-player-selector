@@ -20,7 +20,7 @@ CANCELED_2022 = (
 
 
 def run_verification(verification):
-    """The `## Run verification` appendix for one verified benchmark run."""
+    """Recorded verification under the evaluation report's reproducibility section."""
     seasons = [row["season"] for row in verification["seasons"]]
     counts = {
         key: sum(row[key] for row in verification["seasons"])
@@ -37,28 +37,22 @@ def run_verification(verification):
         if complete == scheduled
         else f"{complete:,} of {scheduled:,} required games have"
     )
-    omitted = "No season was omitted." if len(seasons) > 1 else "It was the only season configured."
     return (
-        "\n\n## Run verification\n\n"
-        f"Implementation commit matching every recorded source-file hash: "
-        f"`{verification['implementation_commit']}`. The run began from that source tree before "
-        "its implementation commit; the manifest preserves the original parent revision and dirty "
-        "fingerprint.\n\n"
+        "\n\n### Recorded Verification\n\n"
+        f"Recorded metric implementation commit: `{verification['implementation_commit']}`. "
+        "The original manifest records the metric source and dataset identities.\n\n"
         f"{completed}: {counts['model_seed_runs']:,} model/seed/season runs, "
         f"{counts['forecast_rows']:,} forecast rows, "
         f"{counts['season_scores']:,} achieved season scores, "
         f"and {counts['picks']:,} individual replay picks. {games} complete "
-        f"scoring and player-stat coverage for both teams. {omitted}\n\n"
+        "scoring and player-stat coverage for both teams.\n\n"
         f"{CANCELED_2022 if 2022 in seasons else ''}"
-        f"Verification: {verification['pytest_passed']} pytest tests passed; Ruff lint and "
-        "formatting passed. Saved forecasts were checked for identical candidate/mask "
-        "populations, hard exclusions, timestamps and outcomes. Pick histories contain no player "
-        "reuse; pick sums equal reported scores; selected-player flags and unique-player counts "
-        "reconcile. A full `--resume` verified all checkpoint hashes. Synthetic "
-        "interrupted/resumed and uninterrupted runs produced identical artifacts.\n\n"
-        "This run used `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1`; keep these environment "
-        "variables when resuming. The pinned dependencies and exact environment are recorded in "
-        "the manifest. See [experiment instructions](../experiments/README.md) for the full "
-        "command and schema. Reports are generated from saved metrics and this verification "
-        "record.\n"
+        f"Original verification record: {verification['pytest_passed']} pytest tests passed. "
+        f"Lint: {verification['lint']}. Formatting: {verification['format']}. "
+        "These are recorded results, not checks executed by the presentation step.\n\n"
+        "Recorded checks:\n\n"
+        + "\n".join(f"- {check}" for check in verification["checks"])
+        + "\n\nThe pinned dependencies and thread environment are recorded in the metric "
+        "manifest; retain that environment when resuming model computation. "
+        "See [experiment instructions](../experiments/README.md) for commands and schema.\n"
     )

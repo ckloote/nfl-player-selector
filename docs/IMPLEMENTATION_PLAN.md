@@ -13,7 +13,7 @@ after F11. The superseded Phase 2 results remain published for comparison.
 | Weekly reliability (review step 1) | Implemented: F01, F05, F09 |
 | Validation repairs (review step 2) | Implemented: F02–F04, F06, F08, F10; F07 documentation corrected |
 | Candidate-pool repair (review step 2) | Implemented: F11; benchmark rerun on the same frozen dataset |
-| Calibration validation (review step 3) | Pending; no production calibration or tuning changes |
+| Phase 3: readiness, calibration and shadow validation (review step 3) | Planned below; implementation gaps open, no production calibration or tuning changes |
 | Leaderboard strategy (review step 4) | Pending |
 
 ## Weekly reliability
@@ -53,7 +53,9 @@ migrations preserve picks and imported history.
   upstream duplicate-TD correction has strict preconditions and preserves original observations.
 - Checkpoints, resolved configuration, source/dataset/dependency fingerprints, feed provenance,
   coverage, forecasts, future surfaces, picks and seed/season metrics make results reviewable.
-  Resume rejects incompatible inputs. Reports are generated from saved metrics.
+  Resume checks recorded identities; hashing the actual decision-times CSV contents remains
+  an open Phase 3A gap. Reports are generated from saved metrics and contain facts, methods
+  and provenance; dated human/AI interpretation is separate in [ANALYSIS.md](ANALYSIS.md).
 
 Acceptance requires full coverage and all configured seasons, models and seeds. A favorable
 model result or production parameter change is not an acceptance criterion. Final schedule
@@ -62,22 +64,132 @@ historical replay. Both 2011–2018 and 2019–2025 summaries are retrospective.
 
 ## Phase 3 — calibration validation
 
-F07's documentation corrections are complete; its empirical calibration work remains open.
-The shipped Poisson calibration slope now sits between 0.817 and 0.892 in all fifteen seasons
-(mean 0.867, SD 0.022) once F11 is repaired, so forecasts are too extreme by a consistent and
-replicable amount rather than by an amount that varies with the season. That is the quantity
-Phase 3 has to explain before it corrects anything.
-Validate by position, projected-rate range and selected/available population. Check transfer
-from historical usage roles to the live depth-chart model. Evaluate changes in assignment
-and hold/commit choices when forecast scale changes. Positive monotone corrections preserve
-greedy ranking but do not generally preserve sum-maximizing assignment.
+**Status as of 2026-09-05:** planned, not implemented. F07 documentation corrections are
+complete; empirical calibration and the implementation gaps below remain open. The saved
+study is ready for diagnosis, not calibrated production. Its persistent pooled miscalibration
+does not identify a universal correction; see [ANALYSIS.md](ANALYSIS.md) for evidence and limits.
 
-Keep production constants fixed until a separately specified experiment supports a change.
-Joint context ablations do not identify defense's marginal contribution. Comparing the current
-models does not establish that their input information is exhausted. Pooled Poisson diagnostics
-do not validate conditional tails or independence. Separate per-type rates, alternative usage
-features and negative-binomial dispersion remain research options, without claims of either
-proven benefit or permanent rejection based on the superseded experiments.
+Scope is to diagnose rate errors, test past-only mappings and validate their decision effects
+without changing the underlying model. Begin prospective input capture now alongside
+retrospective work using existing refresh archives; full projection/action logging is the first
+new implementation deliverable. Initial 2026 snapshots are not completed live validation, but
+there is no requirement to wait a whole prospective season before descriptive research.
+
+| Stage | Dependency | Exit Deliverable |
+|---|---|---|
+| 3A: Evidence, capture and readiness | Saved repaired study; can start now | Guarded diagnostics, reproducible capture, regression tests and a dated readiness note |
+| 3B: Chronological train/apply experiment | 3A diagnostic/input contracts pass; prospective capture continues | Frozen specification, fitted artifacts, out-of-fold forecasts, proper metrics and separate policy replays |
+| 3C: Shadow-live transfer and policy validation | 3A capture/parity; a frozen 3B candidate or identity baseline | Matched live/snapshot shadow evidence and a reviewed ship/defer/no-change decision |
+
+### Phase 3A: Evidence And Readiness
+
+Implement these repairs before treating narrower-stratum fits or shadow comparisons as valid.
+The tests and artifacts below are required deliverables, not claims about current behavior.
+
+| Deliverable | Required Tests And Acceptance |
+|---|---|
+| Guard `evaluate.poisson_glm` and calibration summaries | Check design rank/identifiability, finite inputs, convergence and iteration exhaustion. Constant log rates, all-zero outcomes, empty inputs and `n <= 2` must yield explicit unsupported-fit reasons, not plausible coefficients/intervals. Insufficient clusters (including one) must suppress cluster SEs; predeclare a minimum for inferential use. Test an identifiable converged fixture against a trusted reference. |
+| Separate hold policy from display truncation in `recommend.advise_slot` | Evaluate the best feasible later alternative within the solver candidate pool before truncating display. Vary `n_alternatives` from zero through small/default/large values in a fixture whose best later option is outside the displayed set: recommended pick, hold flag, hold alternative and its cost must agree. Preserve deadline, hard-mask and locked-slot tests. |
+| Align live/snapshot same-week stats policy in `projections.load_frames` | Define whether already-observed completed early-game stats enter later decisions, then use that rule in both paths. At the same timestamp, archived inputs, role source and used/locked state must produce equal current/future forecasts and advice. Test a post-Thursday/pre-Sunday decision, timestamp boundaries and later-import noninterference. Historical `stats < W` remains explicitly approximate. |
+| Freeze decision-time inputs for `benchmark` resume | Copy and hash actual `season,week,decision_at` CSV contents into the run identity before workers start; workers use the frozen copy, not a mutable path. Same-path content edits must reject resume; missing/duplicate/invalid timestamps must fail. Verify unchanged inputs resume and a resumed run matches an uninterrupted run. |
+| Append-only prospective decision capture | Store the full pre-pruning current/future surface, not just selected/displayed rows: decision/event ID and timestamp; player/season/target-week keys, position/slot and lead time; original and mapped rates; hard eligibility, availability adjustment and used/locked state; model/calibrator identity, code/config hashes, fitted-artifact hash and input observation identities/hashes. Record plan/advice, hold/commit, submitted actions and later corrections as append-only events, with outcomes joined separately. Test full-surface coverage, event linkage, no overwrite and replay after later feed corrections. |
+
+Deliver a descriptive diagnostic export for all eligible, available/depleted, common-pool top-k
+and each policy's own selected populations. Include position (WR and TE separately), rate bins,
+availability status, selection and forecast lead horizon; freeze diagnostic group definitions
+without selecting on future TDs or participation. Report counts, outcome coverage, intercept
+and slope with fit status/uncertainty, forecast/actual levels, reliability and proper metrics.
+Keep eligible zero rates visible: explicitly define their scoring and positive-rate GLM
+exclusion/counts, including zero forecasts with positive outcomes; never silently drop them.
+
+Current-week fits do not establish future-horizon calibration. Diagnose raw future rates
+separately from fixed-discount planning values. Repeated future forecasts share target outcomes;
+predeclare weighting and use appropriate outcome/player-season or season clusters, with paired
+season uncertainty for model/policy comparisons, not row independence. Seed variation is separate.
+
+**3A acceptance:** all repair fixtures pass; one captured decision reconstructs its complete
+surface and advice; exclusions, failed fits and missing coverage are explicit. Save the source,
+data and metric identities with a dated readiness note. Descriptive artifacts and authored
+reasoning stay separate. None of these checks by itself authorizes production calibration.
+
+### Phase 3B: Chronological Experiment
+
+1. **Freeze the specification before fitting.** Deliver a dated
+   `experiments/phase3-calibration.toml` with source/data/input hashes, candidate families,
+   populations/weights, rate and lead-horizon strata, cutoffs, refit schedule, minimum samples,
+   unsupported-fit fallback, seeds and multiplicity policy. Use expanding folds: train on
+   forecast/outcome pairs from 2011 through Y-1, apply to Y for Y=2016,...,2025; 2010 supplies
+   base-model history. No target outcome from Y enters its fit. Future-surface training rows
+   must also have target outcomes before the cutoff, not merely early forecast timestamps.
+   Record historical final-stat/timing approximations. All these seasons have been explored;
+   this is retrospective walk-forward evaluation, not an untouched holdout. Reserve subsequent
+   prospective/shadow data for confirmation and date any amendments before their evaluation.
+2. **Predeclare estimands and decision margins.** Primary forecast metric: paired change in
+   season-mean Poisson deviance on a fixed all-eligible current-week population, with zero-rate
+   scoring specified. Declare horizon-specific proper-score diagnostics and population weights;
+   slope/intercept, level ratios and common-pool ranks are diagnostics, not substitutes for
+   proper scores. Separately estimate achieved TD/season changes for each policy versus its
+   own identity replay. Put numeric practical improvement and acceptable policy-loss margins,
+   uncertainty method, coverage requirements and promotion/defer rules in the dated config
+   before fitting; a missing margin blocks execution. Non-significance is not equivalence,
+   and a median SE across comparisons is not a universal detection threshold.
+3. **Fit only the declared small families.** Identity/no change is mandatory. Compare level-only
+   `c * lam` (`c > 0`) and log-affine `exp(a) * lam**b` (`b > 0`) candidates for positive rates;
+   map eligible zeros to zero and preserve hard exclusions. Declare any position/lead-time
+   grouping and sparse-group fallback before fitting, rather than choosing them on evaluation
+   labels. Save coefficients, fit status, training keys/cutoff, model/input identity and artifact
+   hash per fold. Fit on past data only; applying the artifact must not require evaluation labels.
+4. **Apply to the full surface, then replay.** Map current and future rates before optimizer
+   discount/pruning, leaving the discount, information premium and base-model constants fixed.
+   Preserve keys, hard masks, availability semantics, zeros and used/locked state. Export raw
+   and mapped surfaces and run independent no-reuse greedy/optimizer histories per candidate.
+   A shared strictly increasing map preserves within-slot ranks; separate WR/TE maps can change
+   FLEX ordering. Nonlinear mapping can change assignments and rate scaling can change fixed-TD
+   hold comparisons. Report static `advise_slot` sensitivity separately, not as waiting-policy TDs.
+
+**Tests and acceptance:** with forecast inputs held fixed, perturb every evaluation scoring
+label and prove fitted coefficients, mapped forecasts and decisions stay unchanged. Observations
+after the training cutoff must not affect the fit; imports after a decision must not alter that
+decision's reconstructed forecasts or advice. Legitimate past-game updates to later base-model
+inputs remain allowed. Identity must reproduce unchanged rates, picks and scores. Test
+zero/mask/key preservation, current/future application order, sparse/failed fits, cross-position
+FLEX rank changes and deterministic resume. Reconcile pick sums, no reuse, matched coverage and
+paired season metrics. Deliver the frozen config, fold artifacts, out-of-fold surfaces, picks,
+metric tables and a separately authored decision note, including negative/inconclusive results.
+A favorable result is not required to complete 3B; production remains unchanged pending 3C.
+
+### Phase 3C: Shadow-Live Validation
+
+Continue timestamped capture at real decision events while running identity and any frozen
+candidate in shadow, without changing submitted picks. Fix the candidate, live role policy,
+training cutoff and review schedule before observing shadow outcomes; amendments start a new
+evaluation window. Compare historical usage-role findings with the actual depth-role/current-line
+surface by position, availability, selection and horizon. Record forecast/proper-score changes,
+assignment/hold disagreements and coverage with appropriate paired/clustered uncertainty.
+
+Current replay makes one decision per week and calls `plan_slot`, not `advise_slot`. Static
+hold/commit sensitivity and matched snapshots can test mechanics, but cannot measure the dynamic
+value of waiting for news. A later multi-event policy replay is required for that claim: process
+timestamped observations and hold/commit events in order, preserve each policy's used/locked
+state, and never expose later news or outcomes early. Include Thursday-to-Sunday news changes,
+no-news controls, elapsed deadlines and irreversible submitted-lock fixtures. A shadow advice
+log alone is not a counterfactual achieved season score.
+
+**3C acceptance:** demonstrate live/snapshot parity and faithful reconstruction of captured
+events; meet the predeclared coverage and practical-evidence criteria for the intended deployment
+population/horizons. If promotion relies on waiting-policy benefit, multi-event replay is an
+additional prerequisite. Publish factual shadow comparisons plus a dated authored ship/defer/
+no-change decision. Initial snapshots or a non-significant policy difference do not pass this
+gate. Production changes require a separate review with appropriate live-transfer and policy
+evidence; keeping the model unchanged is a valid completed outcome.
+
+### Non-Goals
+
+Do not simultaneously add usage features, separate TD-type models, alternative distributions,
+information-premium tuning or future-discount tuning. Do not infer defense alone from joint
+ablations, exhausted input information from this model set, or validated tails/independence
+from pooled Poisson fits. Those questions remain open. Leaderboard tails, joint outcomes,
+opponent modeling and win-probability optimization belong to later work, not Phase 3.
 
 ## Later — leaderboard strategy and optional interface work
 

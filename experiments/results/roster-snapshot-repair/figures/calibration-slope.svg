@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 320" width="720" height="320" role="img" aria-label="Poisson calibration slope by season">
 <text x="16.0" y="22.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#6e7781" text-anchor="start" font-weight="bold">Poisson calibration slope by season</text>
-<text x="16.0" y="40.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="start" font-weight="normal">`shipped`, with 95% cluster-robust intervals. 1.0 is calibrated;</text>
-<text x="16.0" y="55.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="start" font-weight="normal">below 1 the forecasts are too extreme. Dotted: mean 0.867.</text>
+<text x="16.0" y="40.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="start" font-weight="normal">`shipped`; estimate +/-1.96 SE, player-season clusters.</text>
+<text x="16.0" y="55.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="start" font-weight="normal">Dashed: slope 1 reference. Dotted: mean 0.867. Intercepts in table.</text>
 <line x1="62" y1="263.1" x2="696" y2="263.1" stroke="#8b949e" stroke-opacity="0.25" stroke-width="1"/>
 <text x="52.0" y="267.1" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#6e7781" text-anchor="end" font-weight="normal">0.75</text>
 <line x1="62" y1="227.9" x2="696" y2="227.9" stroke="#8b949e" stroke-opacity="0.25" stroke-width="1"/>

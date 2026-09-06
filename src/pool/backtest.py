@@ -161,7 +161,7 @@ def weekly_projections(
     `projections.build_projections`; it must return the same frame contract
     (`projections.PROJECTION_COLUMNS`). Comparing a candidate model against the
     shipped one on identical frozen data is the whole point of the harness — see
-    the experiment branches referenced in `docs/BACKTEST.md`.
+    the experiment branches referenced in `docs/archive/BACKTEST.md`.
     """
     role_source = projections.validate_policy(input_policy, role_source, vegas_horizon)
     loaded = weekly_inputs(

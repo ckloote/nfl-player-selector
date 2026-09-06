@@ -12,7 +12,7 @@ identical frozen data.
 Every model shares the shipped model's candidate universe, availability handling
 and bye-week treatment — they differ only in how `lam` is computed. That is
 deliberate: a difference in eligibility would confound the comparison, and the
-comparison is the entire point. See `docs/PROJECTION_BENCHMARK.md`.
+comparison is the entire point. See `docs/EVALUATION.md`.
 """
 
 from __future__ import annotations

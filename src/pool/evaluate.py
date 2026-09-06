@@ -56,10 +56,10 @@ DEVIANCE_FLOOR = 0.30
 
 # --- the forecast set -------------------------------------------------------
 def played_pairs(conn: sqlite3.Connection, season: int) -> set[tuple[int, str]]:
-    """(week, player_id) that have a stat line — i.e. the player was on the field.
+    """(week, player_id) with a stat row or touchdown credit.
 
-    Distinguishing "projected and scored zero" from "was never active" is what
-    separates a real tail defect from a did-not-play artifact.
+    This exported `played` flag is a data-presence proxy, not an independently
+    observed game-day active status or snap-participation label.
     """
     return {
         (int(w), p)
@@ -106,10 +106,10 @@ def forecasts(
 ) -> pd.DataFrame:
     """One row per (player, week) forecast for `season`, with the realised outcome.
 
-    Only the week being forecast is kept from each frozen frame: the later weeks
-    a frame also carries are forecasts the model will revise before they are
-    picked, so scoring them would double-count and would not match any decision
-    anyone actually makes.
+    This export keeps only the current decision-week slice. The benchmark saves
+    later-week surfaces separately: they inform assignment now, even though later
+    decisions revise them. Evaluating those surfaces requires an explicit horizon
+    and weighting scheme because repeated forecasts share target outcomes.
     """
     weeks = list(weeks) if weeks is not None else projections.available_weeks(conn, season)
     scoring.require_complete(conn, season, weeks)
@@ -372,14 +372,13 @@ def poisson_glm(
     `log(actual + eps) ~ a + b*log(lambda)` would be the easy thing to write and
     the wrong thing to report: touchdowns are zero-heavy counts, so the answer
     would depend on an arbitrary eps. A Poisson GLM on the log scale needs no
-    such fudge — b = 1 means calibrated, b < 1 means the forecasts are too
-    extreme.
+    such fudge. The identity reference is a = 0 and b = 1; slope alone does not
+    establish calibration, and these coefficients do not test nonlinear departures.
 
     The standard errors must be clustered, not merely heteroskedasticity-robust.
-    A player's rate error persists across every week of their season and
-    team-mates share `vegas_mult` and game script, so the ~113k rows carry far
-    less information than 113k independent observations; naive errors would make
-    everything significant.
+    Player-season clustering groups a player's repeated weekly errors. It does
+    not also account for shared teammate/game effects or the same player across
+    seasons. The caller must choose a clustering scheme for its inference target.
     """
     design = np.column_stack([np.ones_like(x), x])
     beta = np.zeros(2)
