@@ -35,9 +35,12 @@ from . import evaluate as ev
 
 SCHEMA_VERSION = 1
 
-# Frozen before any outcome is read. `depleted`, the common-pool top-k and the two
-# selected populations are properties of a decision week, so they exist only at
-# horizon 0; the surface carries no rank or pick indicator for a future week.
+# Frozen before any outcome is read. Every one but `all_eligible` rests on a
+# decision-week fact -- depletion, common-pool rank, a policy's own pick -- so they
+# exist only at horizon 0; the surface carries none of those for a future week.
+# `available` is the eligible rows the baseline had *not* yet spent: defining it by
+# availability instead made it a copy of `all_eligible`, since hard eligibility
+# already requires a positive availability multiplier.
 POPULATIONS = (
     "all_eligible",
     "available",
@@ -159,13 +162,11 @@ def prepare(rows: pd.DataFrame, discount: float | None = None) -> pd.DataFrame:
     # the optimizer compares. Diagnosing one as the other conflates a rate error with
     # a discount that was never claimed to be calibrated.
     rows["planning_lam"] = rows.lam * discount ** rows.lead_horizon.clip(lower=0)
-    # Decision-week facts describe the decision, not the player-week: a later decision's
-    # depletion or rank says nothing about an earlier decision's plan for that week.
-    # Nullable dtypes so "not a decision-week row" stays distinct from False.
-    # Depletion, rank and the pick indicators describe the decision week itself. They
-    # are joined there, so a future row inherits the decision's own values; blank them,
-    # because "this player was already spent" is a statement about week W, not about
-    # the week-17 cell the same decision was planning.
+    # Depletion, rank and the pick indicators describe the decision week itself, and are
+    # joined there, so a future row would otherwise inherit the decision's own values.
+    # Blank them: "this player was already spent" is a statement about week W, not about
+    # the week-17 cell the same decision was planning. Nullable dtypes, so "not a
+    # decision-week row" stays distinct from False.
     future = rows.lead_horizon > 0
     for column in ("baseline_spent", "picked_greedy", "picked_optimizer"):
         rows[column] = rows[column].astype("boolean")
@@ -493,11 +494,14 @@ def readiness_note(run: Path, rows: pd.DataFrame, fits: pd.DataFrame, identities
         "",
         "## Group definitions",
         "",
-        f"- Populations: {', '.join(POPULATIONS)}. Depletion, common-pool rank and the two "
-        "selected populations are decision-week properties and exist only at horizon 0.",
+        f"- Populations: {', '.join(POPULATIONS)}. All of them except `all_eligible` rest on "
+        "a decision-week fact -- whether the baseline had already spent the player, his rank "
+        "in the common pool, whether a policy picked him -- so they exist only at horizon 0. "
+        "`available` and `depleted` partition the eligible current-week rows between them.",
         f"- Positions: {', '.join(POSITIONS)}, WR and TE separately throughout.",
         f"- Rate bins: {list(ev.LAMBDA_BINS)}.",
-        "- Availability: excluded, questionable, full, from the availability multiplier.",
+        "- Availability: questionable or full, from the availability multiplier. A ruled-out "
+        "player is not eligible, so no eligible population contains one.",
         f"- Lead horizons: {', '.join(label for _, _, label in HORIZON_BUCKETS)}, never pooled.",
         "- Every definition is fixed before any outcome is read; none selects on future "
         "touchdowns or on participation.",
