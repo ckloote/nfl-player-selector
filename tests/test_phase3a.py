@@ -741,6 +741,106 @@ def test_captured_inputs_name_the_observations_the_decision_could_see(tmp_path):
     assert stored["content_hash"] == stats.content_hash
 
 
+def test_a_snapshot_transaction_holds_its_reads_before_the_body_runs(tmp_path):
+    """A SAVEPOINT is deferred: SQLite fixes what a connection sees at its first read,
+    not when the savepoint opens. So a transaction that has not read yet is no defence
+    at all, and a timestamp taken beside one describes data nobody has looked at."""
+    path = tmp_path / "pool.db"
+    _seed(db.connect(path)).close()
+    row = ("g-late", SEASON, 9, "REG", "2024-11-03T13:00", "Sun", "AAA", "BBB")
+    insert = (
+        "INSERT OR REPLACE INTO games (game_id, season, week, game_type, kickoff, weekday,"
+        " home_team, away_team) VALUES (?,?,?,?,?,?,?,?)"
+    )
+
+    def writes_through(snapshot):
+        holder, writer = db.connect(path), db.connect(path)
+        writer.execute("PRAGMA busy_timeout = 50")
+        try:
+            with db.transaction(holder, snapshot=snapshot):
+                try:
+                    writer.execute(insert, row)
+                    writer.commit()
+                    return True
+                except sqlite3.OperationalError:
+                    return False
+        finally:
+            holder.close()
+            writer.close()
+
+    assert writes_through(snapshot=False), "the savepoint alone was expected to hold nothing"
+    assert not writes_through(snapshot=True)
+
+
+def test_a_refresh_cannot_land_between_the_decision_clock_and_the_data_it_names(
+    tmp_path, monkeypatch
+):
+    """The half of the one-transaction fix that was missing.
+
+    `recommend` timestamped the decision, then opened a transaction whose first read
+    came later. A refresh committing in that window fed the forecast an injury that
+    `observed_inputs` -- everything at or before the timestamp -- did not contain, and
+    the command reported success. Here the refresh tries to commit at exactly the
+    instant the clock is read, which is the worst case the ordering has to survive.
+    """
+    path = tmp_path / "pool.db"
+    conn = _seed(db.connect(path))
+    archive_all(conn, PRE_WEEK3)
+    conn.commit()
+    conn.close()
+
+    refresher = db.connect(path)  # a concurrent `pool refresh`
+    refresher.execute("PRAGMA busy_timeout = 50")
+    landed = []
+
+    def refresh():
+        """Rule BBB WR1 out and archive the feed, as `pool refresh` would."""
+        with db.transaction(refresher):
+            refresher.execute(
+                "INSERT OR REPLACE INTO injuries VALUES (?,?,?,?,?,?,?,?)",
+                (SEASON, 1, "BBB-WR1", "BBB WR1", "BBB", "WR", "Out", "DNP"),
+            )
+            snapshots.archive(refresher, SEASON, "injuries")  # observed now, after the clock
+        refresher.commit()
+
+    real_clock = state.eastern_now
+
+    def clock(value=None):
+        if not landed:
+            landed.append("committed")
+            try:
+                refresh()
+            except sqlite3.OperationalError:
+                landed[0] = "blocked"
+                refresher.rollback()  # the refresh gives up, as a real one would
+        return real_clock(value)
+
+    monkeypatch.setattr(state, "eastern_now", clock)
+    result = CliRunner().invoke(
+        app, ["recommend", "--week", "1", "--season", str(SEASON), "--db", str(path)]
+    )
+    monkeypatch.undo()
+    refresher.close()
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert landed == ["blocked"], "a refresh reached the window between the clock and the reads"
+
+    conn = db.connect(path)
+    head = conn.execute(
+        "SELECT decision_id, surface_hash FROM decision_events WHERE kind = 'surface'"
+    ).fetchone()
+    surface = capture.load_surface(conn, head["surface_hash"])
+    ruled_out = surface[surface.player_id.eq("BBB-WR1") & surface.week.eq(1)]
+    assert len(ruled_out) and ruled_out.avail_mult.eq(1.0).all(), (
+        "the forecast used an injury report the capture does not reference"
+    )
+    inputs = db.read_df(
+        conn, "SELECT * FROM decision_inputs WHERE decision_id = ?", (head["decision_id"],)
+    )
+    injuries = inputs[inputs.feed.eq("injuries") & inputs.season.eq(SEASON)].iloc[0]
+    assert injuries.observed_at == snapshots.timestamp(PRE_WEEK3)
+    conn.close()
+
+
 def test_a_decision_survives_a_later_feed_correction(tmp_path):
     """The reason outcomes are joined at read time and never stored on an event."""
     conn, unplayed = _staged(tmp_path)

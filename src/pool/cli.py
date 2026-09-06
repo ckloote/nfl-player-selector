@@ -86,7 +86,12 @@ def _projections(conn, season: int, wk: int):
 
 
 def _status(conn, season: int, week: int, now: datetime, detail: bool = False):
-    rows, warnings = freshness.report(conn, season, week, now)
+    _print_freshness(*freshness.report(conn, season, week, now), detail=detail)
+
+
+def _print_freshness(rows, warnings, detail: bool = False):
+    """Render a freshness report. Split from reading it so a caller holding a snapshot
+    can gather inside it and print outside, rather than re-reading after it is gone."""
     if detail:
         t = Table(
             "Feed",
@@ -151,16 +156,19 @@ def recommend(
 ):
     """Recommend picks for every open slot this week."""
     conn = _conn(db_path)
-    # One instant for the whole decision: the Eastern form compares against kickoffs,
-    # the aware form identifies which feed observations were available.
-    now = state.eastern_now()
-    decided = state.decision_instant(now)
-    wk = _week(conn, season, week, now)
-    # One transaction over the whole decision. The forecast reads mutable feed tables
-    # and the capture then names the observations behind them; a refresh landing
-    # between the two would file this forecast against the previous feed. Holding the
-    # read means a concurrent refresh waits, or fails loudly, rather than interleaving.
-    with db.transaction(conn):
+    # One snapshot over the whole decision, taken before the clock. The forecast reads
+    # mutable feed tables and the capture then names the observations behind them by
+    # asking for everything at or before this instant; a refresh landing between the
+    # timestamp and the reads would feed the forecast data the reference excludes.
+    # `snapshot=True` fixes what this connection sees first, because a SAVEPOINT on its
+    # own does not -- so the clock below is now read against data already held. A
+    # concurrent refresh waits, or fails loudly, rather than interleaving.
+    with db.transaction(conn, snapshot=True):
+        # One instant for the whole decision: the Eastern form compares against
+        # kickoffs, the aware form identifies which feed observations were available.
+        now = state.eastern_now()
+        decided = state.decision_instant(now)
+        wk = _week(conn, season, week, now)
         proj = _projections(conn, season, wk)
         used, locked = state.used_ids(conn, season), state.locked_by_slot(conn, season)
         advice = advise_week(proj, wk, used, locked, now=now)
@@ -168,9 +176,12 @@ def recommend(
             capture.record_decision(
                 conn, season, wk, proj, advice, used, locked, decision_at=decided
             )
+        # Read inside the snapshot too: a data-age line or a pick name drawn from a
+        # feed the advice never saw would describe a decision that was not made.
+        freshness_rows, freshness_warnings = freshness.report(conn, season, wk, now)
+        recorded_names = state.picks(conn, season).set_index("player_id").player_name.to_dict()
     console.print(f"[bold]Week {wk} — {season}[/bold]")
-    _status(conn, season, wk, now)
-    recorded_names = state.picks(conn, season).set_index("player_id").player_name.to_dict()
+    _print_freshness(freshness_rows, freshness_warnings)
     for a in advice:
         if a.locked_player in recorded_names:
             a.locked_player = recorded_names[a.locked_player]

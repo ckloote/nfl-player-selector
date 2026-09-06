@@ -273,10 +273,22 @@ def backfill_game_ids(conn: sqlite3.Connection) -> None:
 
 
 @contextmanager
-def transaction(conn: sqlite3.Connection):
-    """Nestable atomic write; an inner operation cannot commit its caller's work."""
+def transaction(conn: sqlite3.Connection, *, snapshot: bool = False):
+    """Nestable atomic write; an inner operation cannot commit its caller's work.
+
+    `snapshot` also fixes what this connection can see, before the body runs. SQLite
+    does that at the first read, not at the SAVEPOINT, so a caller whose timestamp has
+    to describe its own data must force the read itself: with a savepoint open and
+    nothing read yet, another connection still commits freely. `PRAGMA user_version`
+    reads the header page and takes the lock; a bare `SELECT 1` is optimised away and
+    takes nothing. Under the rollback journal a concurrent writer then waits out its
+    busy timeout and fails; under WAL it commits into a later snapshot than this one.
+    Either way what this connection reads stays consistent with when it started.
+    """
     name = "sp_" + uuid4().hex
     conn.execute(f"SAVEPOINT {name}")
+    if snapshot:
+        conn.execute("PRAGMA user_version").fetchone()
     try:
         yield
         conn.execute(f"RELEASE SAVEPOINT {name}")
