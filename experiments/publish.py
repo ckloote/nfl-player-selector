@@ -13,24 +13,17 @@ import pandas as pd
 
 from pool import benchmark
 
-# Which figures go where, and the section each is inserted above. The markers come
-# from `benchmark.reports`; a missing one means the report changed shape and the
-# figure would land somewhere arbitrary, so it is an error rather than a silent skip.
+# Insert each figure group before the following section. Missing or duplicate headings
+# indicate a renderer mismatch rather than a valid publication.
 PLACEMENT = {
-    "PROJECTION_BENCHMARK.md": (
-        "## Common-pool paired ranking diagnostics",
-        [
-            ("reliability", "Forecast over outcome by projection bin"),
-            ("calibration-slope", "Poisson calibration slope by season"),
-        ],
-    ),
-    "BACKTEST.md": (
-        "## Achieved season scores",
-        [
-            ("bakeoff", "Season score against the baseline, with standard errors"),
-            ("optimizer-by-season", "Rolling assignment minus greedy, by season"),
-        ],
-    ),
+    "## Ranking Diagnostics": [
+        ("bakeoff", "Season score against the baseline, with standard errors"),
+        ("optimizer-by-season", "Rolling assignment minus greedy, by season"),
+    ],
+    "## Methods And Limitations": [
+        ("reliability", "Forecast over outcome by projection bin"),
+        ("calibration-slope", "Poisson calibration slope by season"),
+    ],
 }
 
 experiment = sys.argv[1] if len(sys.argv) > 1 else "phase2-validation"
@@ -65,6 +58,9 @@ if (
 published = Path("experiments/results") / experiment
 published.mkdir(parents=True, exist_ok=True)
 for path in sorted((output / "compact").iterdir()):
+    # Markdown is rendered below. Saved compact inputs may still contain retired reports.
+    if path.suffix == ".md":
+        continue
     if path.name == "picks.csv":
         with path.open("rb") as source, (published / "picks.csv.gz").open("wb") as target:
             with gzip.GzipFile(filename="", mode="wb", fileobj=target, mtime=0) as compressed:
@@ -112,31 +108,37 @@ benchmark.write_json(
 )
 
 
-def with_figures(text, name, prefix):
-    marker, wanted = PLACEMENT[name]
-    if marker not in text:
-        raise SystemExit(f"{name}: no '{marker}' section to place figures above")
-    block = "".join(f"![{alt}]({prefix}{stem}.svg)\n\n" for stem, alt in wanted)
-    return text.replace(marker, block + marker, 1)
+def with_figures(text, prefix):
+    for marker, wanted in PLACEMENT.items():
+        if text.count(marker) != 1:
+            raise SystemExit(f"Expected one '{marker}' section to place figures above")
+        block = "".join(f"![{alt}]({prefix}{stem}.svg)\n\n" for stem, alt in wanted)
+        text = text.replace(marker, block + marker, 1)
+    return text
 
 
 for name, text in benchmark.render_reports(metrics, spec, manifest, output).items():
     text += appendix.run_verification(verification)
     text += (
-        "\n## Presentation\n\n"
+        "\n### Presentation\n\n"
         "Rendered from saved compact metrics; no forecasts, replays, or calibration fits "
         "were recomputed. `presentation.json` records the rendering-source hashes. "
         "The metric manifest and original verification record are unchanged.\n"
     )
-    beside = with_figures(text, name, "figures/")
-    (published / name).write_text(beside.replace("(../experiments/README.md)", "(../../README.md)"))
+    beside = with_figures(text, "figures/")
+    (published / name).write_text(
+        beside.replace("(../experiments/README.md)", "(../../README.md)").replace(
+            "(ANALYSIS.md)", "(../../../docs/ANALYSIS.md)"
+        )
+    )
     (Path("docs") / name).write_text(
-        with_figures(text, name, f"../experiments/results/{experiment}/figures/")
+        with_figures(text, f"../experiments/results/{experiment}/figures/")
     )
 
 (published / "README.md").write_text(
     f"# Verified results: {experiment}\n\n"
-    "These compact metrics and generated reports correspond to the resolved configuration and "
+    "These compact metrics and the generated [evaluation report](EVALUATION.md) "
+    "correspond to the resolved configuration and "
     "manifest in this directory. Individual picks are stored as deterministic `picks.csv.gz` "
     "(the exact exported CSV, compressed). Forecast matrices and the research/frozen "
     "databases remain in "
@@ -150,4 +152,8 @@ for name, text in benchmark.render_reports(metrics, spec, manifest, output).item
     "separately in [docs/ANALYSIS.md](../../../docs/ANALYSIS.md), not generated here. "
     "Historical input timing remains approximate; all reported eras are retrospective.\n"
 )
+# Retire only the current presentation copies, never the saved inputs or other experiments.
+for directory in (published, Path("docs")):
+    for name in ("BACKTEST.md", "PROJECTION_BENCHMARK.md"):
+        (directory / name).unlink(missing_ok=True)
 print(f"Published {len(list(published.iterdir()))} artifacts to {published} and docs/")

@@ -11,8 +11,7 @@ appetite change with your position on the leaderboard?
 
 - [`docs/DESIGN.md`](docs/DESIGN.md) — the pool rules, the model, and the system architecture
 - [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — phased build plan and status
-- [`docs/BACKTEST.md`](docs/BACKTEST.md) - generated replay facts, methods and provenance
-- [`docs/PROJECTION_BENCHMARK.md`](docs/PROJECTION_BENCHMARK.md) - generated forecast metrics, methods and provenance
+- [`docs/EVALUATION.md`](docs/EVALUATION.md) - generated season scores, forecast diagnostics, methods and provenance
 - [`docs/ANALYSIS.md`](docs/ANALYSIS.md) - dated, authored interpretation and research limits; not refreshed by reruns
 - [`docs/REVIEW.md`](docs/REVIEW.md) — September 2026 review: open defects, validation limitations, and recommended priorities
 
@@ -25,10 +24,11 @@ The saved study supports further diagnosis, not a production calibration change.
 experiments and live-policy validation are planned in [Phase 3](docs/IMPLEMENTATION_PLAN.md);
 leaderboard strategy comes later.
 
-The corrected [projection benchmark](docs/PROJECTION_BENCHMARK.md) reports common-pool
-ranking diagnostics in TDs per ranked candidate. The separate [backtest report](docs/BACKTEST.md)
-reports actual season scores from each model's greedy and optimizer pick history. Both cover
-2011–2025 with 2010 prior history; both era summaries are retrospective. Their saved configuration,
+The [evaluation report](docs/EVALUATION.md) combines actual season scores from each model's
+greedy and optimizer pick history with ranking and calibration diagnostics. Its
+[ranking section](docs/EVALUATION.md#ranking-diagnostics) retains the distinct unit of TDs per
+ranked candidate, not achieved season scores. The study covers 2011–2025 with 2010 prior history;
+both era summaries are retrospective. Its saved configuration,
 scoring coverage, seeds, source hashes and provenance accompany the results in
 [`experiments/results/roster-snapshot-repair`](experiments/results/roster-snapshot-repair), which
 reran the identical frozen dataset after the F11 candidate-pool repair. The superseded

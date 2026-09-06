@@ -1,6 +1,6 @@
 # Verified results: roster-snapshot-repair
 
-These compact metrics and generated reports correspond to the resolved configuration and manifest in this directory. Individual picks are stored as deterministic `picks.csv.gz` (the exact exported CSV, compressed). Forecast matrices and the research/frozen databases remain in the ignored `data/experiments/roster-snapshot-repair` directory.
+These compact metrics and the generated [evaluation report](EVALUATION.md) correspond to the resolved configuration and manifest in this directory. Individual picks are stored as deterministic `picks.csv.gz` (the exact exported CSV, compressed). Forecast matrices and the research/frozen databases remain in the ignored `data/experiments/roster-snapshot-repair` directory.
 
 Published with `uv run python experiments/publish.py roster-snapshot-repair` after `uv run python experiments/verify.py roster-snapshot-repair` and a benchmark resume check. See [schema and reproduction instructions](../../README.md).
 

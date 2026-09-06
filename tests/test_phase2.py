@@ -290,6 +290,7 @@ def test_benchmark_resume_and_fingerprint_rejection(seeded, tmp_path, monkeypatc
         benchmark.run("unused", out, log=lambda x: None)
     monkeypatch.setattr(benchmark, "evaluate_season", lambda *a: pytest.fail("recomputed season"))
     compact = benchmark.run("unused", out, resume=True, log=lambda x: None)
+    assert {p.name for p in compact.glob("*.md")} == {"EVALUATION.md"}
     before = {p.name: benchmark.digest(p) for p in compact.iterdir()}
     benchmark.run("unused", out, resume=True, log=lambda x: None)
     assert before == {p.name: benchmark.digest(p) for p in compact.iterdir()}
@@ -301,10 +302,10 @@ def test_benchmark_resume_and_fingerprint_rejection(seeded, tmp_path, monkeypatc
     destination.close()
     monkeypatch.setattr(benchmark, "evaluate_season", original)
     independent = benchmark.run("unused", other, log=lambda x: None)
-    # Saved metrics must match byte for byte. The two reports differ only where they
+    # Saved metrics must match byte for byte. The reports from the two runs differ where they
     # name their own experiment, which is the point of naming it: a generated report
     # that cites another run's config sends its reader to the wrong numbers.
-    docs = {"BACKTEST.md", "PROJECTION_BENCHMARK.md"}
+    docs = {"EVALUATION.md"}
     after = {p.name: benchmark.digest(p) for p in independent.iterdir()}
     assert {k: v for k, v in before.items() if k not in docs} == {
         k: v for k, v in after.items() if k not in docs
@@ -312,8 +313,10 @@ def test_benchmark_resume_and_fingerprint_rejection(seeded, tmp_path, monkeypatc
 
     def anonymise(path, run, name):
         text = (path / name).read_text()
-        return text.replace(str(run), "<run>").replace(
-            f"experiments/results/{run.name}", "<results>"
+        return (
+            text.replace(str(run), "<run>")
+            .replace(f"experiments/results/{run.name}", "<results>")
+            .replace(f"Experiment: `{run.name}`", "Experiment: `<experiment>`")
         )
 
     for name in docs:
@@ -533,15 +536,27 @@ def test_reports_measure_results_without_interpreting_them(seasons):
         data, spec = _report_data(scores, {"within-player": delta / 100, "random": -0.9})
         data["calibration"]["slope"] = slope
         reports = benchmark.render_reports(data, spec, manifest, Path("data/experiments/test"))
-        replay = reports["BACKTEST.md"]
-        ranking = reports["PROJECTION_BENCHMARK.md"]
-        assert f"| within-player | greedy | {50 + delta:.4f}" in replay
-        assert f"| {seasons[0]} | -0.1000 | {slope:.4f}" in ranking
-        assert "original-run" in replay and "original-source" in ranking
-        assert "The recorded input policy." in ranking
-        assert "docs/ANALYSIS.md" in replay
-        assert "NA" in replay if len(seasons) == 1 else "| 0.0000 |" in replay
-        combined = replay + ranking
+        assert set(reports) == {"EVALUATION.md"}
+        report = reports["EVALUATION.md"]
+        assert f"| within-player | greedy | {50 + delta:.4f}" in report
+        assert f"| within-player | 10 | {delta / 100:.4f}" in report
+        assert f"| {seasons[0]} | -0.1000 | {slope:.4f}" in report
+        assert report.count("original-run") == report.count("original-source") == 1
+        assert report.count("The recorded input policy.") == 1
+        assert "(ANALYSIS.md)" in report
+        assert "NA" in report if len(seasons) == 1 else "| 0.0000 |" in report
+        assert "Actual TDs per season" in report
+        assert "TDs per ranked candidate, not achieved season scores" in report
+        headings = [
+            "## Study Overview",
+            "## Season Replay Results",
+            "## Ranking Diagnostics",
+            "## Calibration Diagnostics",
+            "## Methods And Limitations",
+            "## Reproducibility And Verification",
+        ]
+        assert [line for line in report.splitlines() if line.startswith("## ")] == headings
+        assert report.index("original-source") > report.index(headings[-1])
         for claim in (
             "What the replays show",
             "What the diagnostics show",
@@ -554,17 +569,17 @@ def test_reports_measure_results_without_interpreting_them(seasons):
             "ahead of every",
             "**behind**",
         ):
-            assert claim not in combined
-        prose.append("\n".join(line for line in combined.splitlines() if not line.startswith("|")))
+            assert claim not in report
+        prose.append("\n".join(line for line in report.splitlines() if not line.startswith("|")))
     assert prose[0] == prose[1] == prose[2]
     empty_fit = ev.calibration(pd.DataFrame(dict(hard_eligible=[True], lam=[0.0])))
     data["calibration"] = pd.DataFrame(
         [dict(season=s, model="shipped", **empty_fit) for s in seasons]
     )
-    ranking = benchmark.render_reports(data, spec, manifest, Path("data/experiments/test"))[
-        "PROJECTION_BENCHMARK.md"
+    report = benchmark.render_reports(data, spec, manifest, Path("data/experiments/test"))[
+        "EVALUATION.md"
     ]
-    assert f"| {seasons[0]} | NA | NA | NA | NA | 0 | NA | NA |" in ranking
+    assert f"| {seasons[0]} | NA | NA | NA | NA | 0 | NA | NA |" in report
 
 
 def test_republish_renders_saved_metrics_without_changing_the_run(tmp_path, monkeypatch):
@@ -573,6 +588,12 @@ def test_republish_renders_saved_metrics_without_changing_the_run(tmp_path, monk
     compact = output / "compact"
     compact.mkdir(parents=True)
     (tmp_path / "docs").mkdir()
+    published = tmp_path / "experiments/results/test"
+    published.mkdir(parents=True)
+    archive = tmp_path / "docs/archive"
+    archive.mkdir()
+    superseded = tmp_path / "experiments/results/phase2-validation"
+    superseded.mkdir()
     analysis = tmp_path / "docs/ANALYSIS.md"
     analysis.write_text("Separately reviewed interpretation.\n")
     dataset = output / "dataset.sqlite"
@@ -609,6 +630,13 @@ def test_republish_renders_saved_metrics_without_changing_the_run(tmp_path, monk
         frame.to_csv(compact / f"{name}.csv", index=False)
     for name in ("BACKTEST.md", "PROJECTION_BENCHMARK.md"):
         (compact / name).write_text("Stale generated conclusion.\n")
+        for directory in (published, tmp_path / "docs", archive, superseded):
+            (directory / name).write_text("Previous presentation.\n")
+    (compact / "EVALUATION.md").write_text("Stale combined report.\n")
+    (compact / "unrelated.md").write_text("Not publisher-owned output.\n")
+    (tmp_path / "docs/unrelated.md").write_text("Keep unrelated documentation.\n")
+    (published / "unrelated.md").write_text("Keep experiment notes.\n")
+    historical = {p: benchmark.digest(p) for d in (archive, superseded) for p in d.iterdir()}
     originals = {p: benchmark.digest(p) for p in output.rglob("*") if p.is_file()}
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["publish.py", "test"])
@@ -619,12 +647,38 @@ def test_republish_renders_saved_metrics_without_changing_the_run(tmp_path, monk
     monkeypatch.setattr(benchmark, "evaluate_season", lambda *a: pytest.fail("reran models"))
     script = str(benchmark.ROOT / "experiments/publish.py")
     runpy.run_path(script, run_name="__main__")
-    published = tmp_path / "experiments/results/test"
-    text = (published / "BACKTEST.md").read_text()
+    text = (published / "EVALUATION.md").read_text()
     assert "Stale generated conclusion" not in text
+    assert "Stale combined report" not in text
     assert "| within-player | greedy | 42.0000" in text
+    assert "| within-player | 10 | -0.1000" in text
+    assert "| 2025 | -0.1000 | 0.8600" in text
     assert "original-run" in text and "recorded-model-source" in text
     assert "presentation.json" in text
+    assert text.count("### Recorded Verification") == text.count("### Presentation") == 1
+    assert text.count("Recorded methodology.") == text.count("Frozen dataset SHA-256") == 1
+    for stem in ("bakeoff", "optimizer-by-season", "reliability", "calibration-slope"):
+        assert text.count(f"(figures/{stem}.svg)") == 1
+    assert text.index("## Season Replay Results") < text.index("figures/bakeoff.svg")
+    assert text.index("figures/optimizer-by-season.svg") < text.index("## Ranking Diagnostics")
+    assert text.index("## Calibration Diagnostics") < text.index("figures/reliability.svg")
+    assert text.index("figures/calibration-slope.svg") < text.index("## Methods And Limitations")
+    docs_text = (tmp_path / "docs/EVALUATION.md").read_text()
+    assert (
+        docs_text.replace("../experiments/results/test/figures/", "figures/")
+        .replace("(../experiments/README.md)", "(../../README.md)")
+        .replace("(ANALYSIS.md)", "(../../../docs/ANALYSIS.md)")
+        == text
+    )
+    for directory in (published, tmp_path / "docs"):
+        assert {p.name for p in directory.glob("*.md")} == {
+            "EVALUATION.md",
+            "unrelated.md",
+            "README.md" if directory == published else "ANALYSIS.md",
+        }
+    assert (tmp_path / "docs/unrelated.md").read_text() == "Keep unrelated documentation.\n"
+    assert (published / "unrelated.md").read_text() == "Keep experiment notes.\n"
+    assert historical == {p: benchmark.digest(p) for p in historical}
     presentation = json.loads((published / "presentation.json").read_text())
     assert presentation["metric_source_hash"] == identity["code_hash"]
     assert presentation["source_hashes"]["src/pool/benchmark.py"] == benchmark.digest(
@@ -634,7 +688,11 @@ def test_republish_renders_saved_metrics_without_changing_the_run(tmp_path, monk
     assert analysis.read_text() == "Separately reviewed interpretation.\n"
     before = {p: benchmark.digest(p) for p in published.rglob("*") if p.is_file()}
     runpy.run_path(script, run_name="__main__")
-    assert before == {p: benchmark.digest(p) for p in before}
+    assert before == {p: benchmark.digest(p) for p in published.rglob("*") if p.is_file()}
+    assert historical == {p: benchmark.digest(p) for p in historical}
+    assert originals == {p: benchmark.digest(p) for p in originals}
+    assert not (tmp_path / "docs/BACKTEST.md").exists()
+    assert not (tmp_path / "docs/PROJECTION_BENCHMARK.md").exists()
     benchmark.write_json(compact / "resolved-config.json", dict(spec, baseline="different"))
     with pytest.raises(SystemExit, match="Compact configuration"):
         runpy.run_path(script, run_name="__main__")

@@ -1,6 +1,6 @@
 # Archived results — superseded definitions
 
-This report is preserved as research history. Its numbers use the previous offensive-only scoring, closing-line replay horizon and earlier evaluation semantics. Its season-gain, confirmatory-gate, untouched-holdout and model-ceiling interpretations are superseded. Do not combine these results with the corrected Phase 2 artifacts. Two headline claims below are specifically refuted: dropping the Vegas multiplier is sized at −8.56 TDs per season here and −3.11 on the identical nine seasons once future closing lines are masked, and “the optimizer is not worth it” (−0.73, better in 8 of 15) becomes +2.87 (better in 10 of 15) under the corrected input policy. Neither the old nor the new optimizer figure clears two standard errors. See [REVIEW.md](../REVIEW.md) F02 and the current [backtest report](../BACKTEST.md).
+This report is preserved as research history. Its numbers use the previous offensive-only scoring, closing-line replay horizon and earlier evaluation semantics. Its season-gain, confirmatory-gate, untouched-holdout and model-ceiling interpretations are superseded. Do not combine these results with the corrected Phase 2 artifacts. Two headline claims below are specifically refuted: dropping the Vegas multiplier is sized at −8.56 TDs per season here and −3.11 on the identical nine seasons once future closing lines are masked, and “the optimizer is not worth it” (−0.73, better in 8 of 15) becomes +2.87 (better in 10 of 15) under the corrected input policy. Neither the old nor the new optimizer figure clears two standard errors. See [REVIEW.md](../REVIEW.md) F02 and the current [evaluation report](../EVALUATION.md).
 
 ---
 
@@ -10,7 +10,7 @@ This report is preserved as research history. Its numbers use the previous offen
 > definition (passing + rushing + receiving TDs). They have not been rerun with
 > the complete throwing/scoring credits now used by the application. Refresh
 > each prior/replay season before new comparisons. The evaluation limitations
-> in [REVIEW.md](REVIEW.md) remain open; this workflow change makes no model
+> in [REVIEW.md](../REVIEW.md) remain open; this workflow change makes no model
 > performance claim.
 
 The tool has always been able to produce a confident pick sheet. This is the

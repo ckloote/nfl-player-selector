@@ -97,8 +97,14 @@ databases remain in the ignored output directory.
 
 ## Measurements And Interpretation
 
-Generated reports contain measured tables, plots, counts, uncertainty estimates, metric
-definitions, input assumptions and recorded provenance. They do not select a winning model,
+Each run produces one `EVALUATION.md`, published beside its metrics and as
+[`docs/EVALUATION.md`](../docs/EVALUATION.md). It presents season replay results, ranking
+diagnostics and calibration diagnostics as distinct sections, with shared methods,
+reproducibility and verification recorded once. All four figures remain in their matching
+results sections. The three metric tables retain their separate units and populations.
+
+The generated report contains measured tables, plots, counts, uncertainty estimates, metric
+definitions, input assumptions and recorded provenance. It does not select a winning model,
 attribute effects to player identity or timing, turn a standard error into a detection floor,
 or recommend a research/deployment decision. Undefined statistics are explicit. Plot colors
 and reference lines do not classify statistical significance. Calibration reports show both
@@ -108,7 +114,8 @@ intercept and slope; a unit slope alone does not establish calibration.
 and tied to a specific study and its source/dataset identities. A new result requires an
 explicit review of that analysis, not automatic prose selected by thresholds in a renderer.
 Publication never overwrites the analysis or the implementation plan. Superseded experiments
-and archived reports retain their original historical record.
+and archived reports retain their original historical record, including the older split
+report filenames.
 
 To update presentation for an already verified run, use only:
 
@@ -119,7 +126,11 @@ uv run python experiments/publish.py roster-snapshot-repair
 Publication validates the saved completion, verification, manifest, configuration and frozen
 dataset identities. It copies the compact metrics, compresses the exact pick CSV with a
 deterministic gzip header, and renders the report text anew from the saved metric tables,
-not from previously generated Markdown. It does not run forecasts, calibration fits or
+not from previously generated Markdown. Compact Markdown is not copied into the publication;
+only the current rendered report is written. After publishing successfully, the two retired
+`BACKTEST.md` and `PROJECTION_BENCHMARK.md` files are removed from the current experiment's
+published directory and `docs/`, not from saved compact inputs, archives or other experiments.
+It does not run forecasts, calibration fits or
 season replays, and does not rewrite the original verification record or compact inputs.
 The original metric source need not match the current renderer: `presentation.json` records
 the current rendering-source hashes separately. This permits presentation changes without

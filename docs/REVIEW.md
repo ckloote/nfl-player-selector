@@ -217,8 +217,8 @@ If the pool excludes return touchdowns, document that exception instead.
 
 **Phase 2 status:** Addressed in Phase 2: both era summaries are retrospective. The dated TOML specification, source/dataset/dependency fingerprints, seeds, coverage, per-season checkpoints and saved exports record the research configuration. No untouched-holdout claim is made.
 
-**Evidence:** [`BACKTEST.md` §5](BACKTEST.md) records model searches on 2017–2025.
-The later [`PROJECTION_BENCHMARK.md`](PROJECTION_BENCHMARK.md) calls 2019–2025 an
+**Evidence:** [`BACKTEST.md` §5](archive/BACKTEST.md) records model searches on 2017–2025.
+The later [`PROJECTION_BENCHMARK.md`](archive/PROJECTION_BENCHMARK.md) calls 2019–2025 an
 untouched holdout. Those seasons were already examined, and the earlier ablation
 results helped select the benchmark metrics.
 
@@ -406,7 +406,7 @@ Per-type rates and alternative count distributions remain later research options
 claims of established benefit or definitive rejection. No new verification of implementation
 repairs or benchmark rerun is implied by this documentation update.
 
-Current evidence is in [the benchmark](PROJECTION_BENCHMARK.md), [actual replays](BACKTEST.md),
+Current evidence is in the [evaluation report](EVALUATION.md),
 [`experiments/roster-snapshot-repair.toml`](../experiments/roster-snapshot-repair.toml), and its
 [saved compact artifacts](../experiments/results/roster-snapshot-repair). Superseded Phase 2
 results remain available. The research dataset audits all 4,175 scheduled regular-season games from 2010–2025

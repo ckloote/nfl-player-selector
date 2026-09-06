@@ -431,7 +431,7 @@ def markdown_table(frame, columns):
 
 
 def reports(output, spec, manifest, config_path=None):
-    """Generate compact exports and replacement reports solely from saved season metrics."""
+    """Generate compact exports and an evaluation report from saved season metrics."""
     compact = output / "compact"
     compact.mkdir(exist_ok=True)
     names = (
@@ -478,7 +478,7 @@ def reports(output, spec, manifest, config_path=None):
 
 
 def render_reports(data, spec, manifest, output, config_path=None):
-    """Render saved measurements and methods, without model-selection interpretations.
+    """Render one evaluation report, without model-selection interpretations.
 
     This pure presentation step is also used to republish existing metrics without
     rerunning models or changing their recorded source/dataset identity.
@@ -487,38 +487,59 @@ def render_reports(data, spec, manifest, output, config_path=None):
     # wrong numbers, so both names come from the run rather than from a constant.
     experiment = Path(output).name
     config = config_path or f"experiments/{experiment}.toml"
-    intro = (
+    report = (
+        "# Evaluation Report\n\n"
         "Generated measurements and methodological notes. Interpretation is maintained "
-        "separately in `docs/ANALYSIS.md`, is tied to a named experiment, and is not updated "
-        "by report generation. NA denotes an unavailable metric.\n\n"
-        f"Specification: {spec['specification_date']}. "
-        f"Artifact schema {manifest['schema_version']}; "
-        f"scoring version {manifest['scoring_version']}; "
-        f"database schema {manifest['database_schema']}.\n\n"
-        f"Code revision `{manifest['code']['revision']}`; source fingerprint "
-        f"`{manifest['code']['code_hash']}`; dirty tree: {manifest['code']['dirty']}. "
-        f"Frozen dataset SHA-256 `{manifest['dataset_hash']}`.\n\n"
+        "separately in [the authored analysis](ANALYSIS.md), is tied to a named experiment, "
+        "and is not updated by report generation. NA denotes an unavailable metric.\n\n"
+        "## Study Overview\n\n"
+        f"Experiment: `{experiment}`. Specification: {spec['specification_date']}. "
+        f"Seasons: {', '.join(map(str, spec['seasons']))}.\n\n"
         f"Models: {', '.join(spec['models'])}. Baseline: `{spec['baseline']}`; "
         f"shuffled seeds: {spec['seeds']}; deterministic seed sentinel: -1. "
         f"Policy: `{spec['input_policy']}`; roles: `{spec['role_source']}`.\n\n"
-        f"Reproduce: `pool benchmark --config {config} "
-        f"--output {output} --resume`. Checkpoints require matching "
-        "code, configuration, dependencies and frozen dataset. Saved compact artifacts are in "
-        f"`experiments/results/{experiment}`; detailed forecasts and future surfaces remain "
-        "in the ignored output directory.\n\n"
-        + "\n".join(f"- {a}" for a in manifest["assumptions"])
-        + "\n\n"
+        "## Season Replay Results\n\n"
+        "Actual TDs per season from each model/strategy's own no-reuse history. "
+        "Differences and paired SEs are relative to the baseline's greedy replay; "
+        "seeds/trials are averaged within season before computing SEs across seasons.\n\n"
+    )
+    replays = data["replay_summary"]
+    replays = replays[replays.era == "all retrospective"]
+    report += markdown_table(
+        replays,
+        [
+            "model",
+            "strategy",
+            "tds_per_season",
+            "se",
+            "shuffle_sd",
+            "delta_vs_baseline_greedy",
+            "paired_se",
+        ],
+    )
+    report += (
+        "\n\n`replays.csv` records actual TDs, empty slots and unique players for every "
+        "seed/trial and season; `picks.csv` records every choice. Hindsight uses actual scorer "
+        "identities and the full feasible scoring history; it is a reference ceiling with a "
+        "different candidate population.\n\n"
+        "## Ranking Diagnostics\n\n"
+        "Challenger minus baseline in the common pool: TDs per ranked candidate, "
+        "not achieved season scores. SEs are across seasons.\n\n"
     )
     paired = data["paired_ranking_summary"]
     paired = paired[(paired.era == "all retrospective") & (paired["rank"] == "rank_available")]
-    ranking_report = "# Corrected projection benchmark\n\n" + intro
-    ranking_report += "## Common-pool paired ranking diagnostics\n\n"
-    ranking_report += "Challenger minus baseline, TDs per ranked candidate; SE across seasons.\n\n"
-    ranking_report += markdown_table(paired, ["model", "k", "mean", "se", "shuffle_sd", "seasons"])
+    report += markdown_table(paired, ["model", "k", "mean", "se", "shuffle_sd", "seasons"])
+    rank = data["ranking"]
+    report += (
+        "\n\nPer-seed coverage, jointly empty cells and per-season diagnostics are saved "
+        "in `ranking.csv` and `paired_ranking.csv`. "
+        f"Across exported ranking metric rows: {int(rank.empty_cells.sum())} empty cells "
+        "(repeated across k, pools and seeds; not independent observations).\n\n"
+        "## Calibration Diagnostics\n\n"
+    )
     cal = data["calibration"]
     cal = cal[cal.model.eq(spec["baseline"])].sort_values("season")
-    ranking_report += (
-        f"\n\n## Baseline calibration estimates\n\n"
+    report += (
         f"`{spec['baseline']}`; hard-eligible forecasts with positive lambda, including "
         "baseline-spent players. Separate diagnostic fits on each evaluated season: "
         "`E[Y] = exp(intercept) * lambda ** slope`. SEs use player-season clusters. "
@@ -537,42 +558,33 @@ def render_reports(data, spec, manifest, output, config_path=None):
         "dropped_zero_lam",
     ]
     # Fits with no positive-rate rows do not export uncertainty or cluster fields.
-    ranking_report += markdown_table(cal.reindex(columns=cal_columns), cal_columns)
-    rank = data["ranking"]
-    ranking_report += (
-        f"\n\nPer-seed coverage, jointly empty cells and per-season diagnostics are saved "
-        "in `ranking.csv` and `paired_ranking.csv`. "
-        f"Across exported ranking metric rows: {int(rank.empty_cells.sum())} empty cells "
-        "(repeated across k, pools and seeds; not independent observations). "
-        "Calibration slopes/intercepts, reliability bins, tail deviance and within-slot "
-        "Spearman results are saved separately by seed and season. They are diagnostics, "
-        "not evidence of an achieved season gain or simulation readiness.\n"
+    report += markdown_table(cal.reindex(columns=cal_columns), cal_columns)
+    report += (
+        "\n\nCalibration slopes/intercepts, reliability bins, tail deviance and within-slot "
+        "Spearman results are saved separately by model, seed and season in `calibration.csv`, "
+        "`reliability.csv`, `deviance.csv` and `spearman.csv`.\n\n"
+        "## Methods And Limitations\n\n"
+        + "\n".join(f"- {a}" for a in manifest["assumptions"])
+        + "\n\n"
     )
-    replays = data["replay_summary"]
-    replays = replays[replays.era == "all retrospective"]
-    backtest_report = "# Corrected season replays\n\n" + intro
-    backtest_report += "## Achieved season scores\n\n"
-    backtest_report += markdown_table(
-        replays,
-        [
-            "model",
-            "strategy",
-            "tds_per_season",
-            "se",
-            "shuffle_sd",
-            "delta_vs_baseline_greedy",
-            "paired_se",
-        ],
-    )
-    backtest_report += (
-        "\n\n`replays.csv` records actual TDs, empty slots and unique players for every "
-        "seed/trial and season; `picks.csv` records every choice. Era summaries remain "
-        "retrospective. Hindsight uses actual scorer identities and the full feasible "
-        "scoring history; it is a reference ceiling with a different candidate population. "
+    report += (
         "The solver is exact for the pruned fixed matrix, which does not establish an "
-        "advantage for its rolling policy. No production parameter was changed.\n"
+        "advantage for its rolling policy. Forecast diagnostics are not evidence of an "
+        "achieved season gain or simulation readiness. No production parameter was changed.\n\n"
+        "## Reproducibility And Verification\n\n"
+        f"Artifact schema {manifest['schema_version']}; "
+        f"scoring version {manifest['scoring_version']}; "
+        f"database schema {manifest['database_schema']}.\n\n"
+        f"Code revision `{manifest['code']['revision']}`; source fingerprint "
+        f"`{manifest['code']['code_hash']}`; dirty tree: {manifest['code']['dirty']}. "
+        f"Frozen dataset SHA-256 `{manifest['dataset_hash']}`.\n\n"
+        f"Reproduce: `pool benchmark --config {config} "
+        f"--output {output} --resume`. Checkpoints require matching "
+        "code, configuration, dependencies and frozen dataset. Saved compact artifacts are in "
+        f"`experiments/results/{experiment}`; detailed forecasts and future surfaces remain "
+        "in the ignored output directory.\n"
     )
-    return {"PROJECTION_BENCHMARK.md": ranking_report, "BACKTEST.md": backtest_report}
+    return {"EVALUATION.md": report}
 
 
 def _season_worker(frozen, season, spec, directory):

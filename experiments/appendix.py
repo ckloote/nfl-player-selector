@@ -20,7 +20,7 @@ CANCELED_2022 = (
 
 
 def run_verification(verification):
-    """The `## Run verification` appendix for one verified benchmark run."""
+    """Recorded verification under the evaluation report's reproducibility section."""
     seasons = [row["season"] for row in verification["seasons"]]
     counts = {
         key: sum(row[key] for row in verification["seasons"])
@@ -38,7 +38,7 @@ def run_verification(verification):
         else f"{complete:,} of {scheduled:,} required games have"
     )
     return (
-        "\n\n## Run verification\n\n"
+        "\n\n### Recorded Verification\n\n"
         f"Recorded metric implementation commit: `{verification['implementation_commit']}`. "
         "The original manifest records the metric source and dataset identities.\n\n"
         f"{completed}: {counts['model_seed_runs']:,} model/seed/season runs, "

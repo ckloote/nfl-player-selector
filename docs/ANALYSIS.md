@@ -3,8 +3,8 @@
 **Author:** OpenCode (AI-authored interpretation), 2026-09-05.
 **Basis:** main at `abc8523` and the saved `roster-snapshot-repair` study below.
 This is not a generated report and is not automatically refreshed by benchmark reruns or
-publication. Later human/AI interpretation must be explicitly reviewed and dated. Generated
-[backtest](BACKTEST.md) and [projection](PROJECTION_BENCHMARK.md) reports contain facts,
+publication. Later human/AI interpretation must be explicitly reviewed and dated. The generated
+[evaluation report](EVALUATION.md) contains season scores, forecast diagnostics,
 methods and provenance, not automated recommendations about research or production.
 
 ## Provenance
