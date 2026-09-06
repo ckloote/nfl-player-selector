@@ -1351,7 +1351,13 @@ def test_zero_rates_are_split_by_what_the_zero_means():
         "exclusion: ruled out",
         "exclusion: deadline or kickoff",
     }
-    assert (table.excluded_from_fit == table.zero_lam_n).all()
+    # What a stratum contributes to no fit is a different count in the two cases. An
+    # eligible stratum loses its zero rates; an excluded one loses all of itself, rate
+    # or no rate. This assertion used to be `excluded_from_fit == zero_lam_n` for every
+    # row, which is the defect written down: a positive-rate exclusion then reported 0.
+    excluded = table.zero_class.str.startswith("exclusion")
+    assert (table.excluded_from_fit[excluded] == table.n[excluded]).all()
+    assert (table.excluded_from_fit[~excluded] == table.zero_lam_n[~excluded]).all()
 
     eligible = table[table.population.eq("all_eligible")].set_index(["position", "horizon"])
     assert eligible.loc[("RB", "0"), "zero_lam_n"] == 1
@@ -1367,6 +1373,8 @@ def test_zero_rates_are_split_by_what_the_zero_means():
     late = table[table.population.eq("excluded_undecidable")].set_index("position")
     assert late.loc["QB", "n"] == 1 and late.loc["QB", "zero_lam_n"] == 0
     assert late.loc["QB", "outcome_tds"] == 1.0
+    # It is still excluded from every fit. Counting only zeros reported nothing here.
+    assert late.loc["QB", "excluded_from_fit"] == 1
 
     # Neither exclusion is in any eligible population, so neither reaches a fit.
     masks = diagnostics.population_masks(rows)

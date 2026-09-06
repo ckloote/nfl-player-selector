@@ -17,7 +17,7 @@ Generated 2026-09-06 from `data/experiments/roster-snapshot-repair`. Measurement
 
 **Implementation describing them**
 
-- diagnostics_module: `f243940762c5cc5d72ada1bb31725a8c5a0c188e261de37d0b92106f188a6cfe`
+- diagnostics_module: `75e2f9ff6e21ff839c8a9615aca2822a2edbfdc78e32550fc02b467a6465cb1c`
 - evaluate_module: `2e5019c8c707aa5148816084db9c719809c9fa725c8462091ac5dc93512b72c7`
 - min_inference_clusters: `30`
 - lambda_bins: `['0.0', '0.05', '0.1', '0.15', '0.2', '0.3', '0.4', '0.6', '0.8', '1.0', 'inf']`

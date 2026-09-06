@@ -351,6 +351,12 @@ def zero_accounting(rows: pd.DataFrame) -> pd.DataFrame:
     or his kickoff is unconfirmed keeps a positive rate: the forecast was fine, it just
     could not be acted on, and his touchdowns say nothing about either the model or the
     report. Reporting one number across all three would hide whichever is the real one.
+
+    `excluded_from_fit` counts what the stratum contributes to no fit, which is not the
+    same question in the two cases. An eligible stratum loses only its zero rates, which
+    `log(lambda)` cannot take. An excluded stratum loses all of it: the rows are not
+    eligible, so no fit sees them whatever their rate. Counting zeros there reported 0
+    against 12 excluded rows, because a deadline exclusion keeps a positive forecast.
     """
     out = []
     eligible = rows.hard_eligible.fillna(False).astype(bool)
@@ -383,7 +389,7 @@ def zero_accounting(rows: pd.DataFrame) -> pd.DataFrame:
                         float(zero_scored.actual_tds.sum()) if len(zero_scored) else 0.0
                     ),
                     outcome_tds=float(scored.actual_tds.sum()) if len(scored) else 0.0,
-                    excluded_from_fit=int(len(zero)),
+                    excluded_from_fit=int(len(sub) if population in classes else len(zero)),
                 )
             )
     return pd.DataFrame(out)
