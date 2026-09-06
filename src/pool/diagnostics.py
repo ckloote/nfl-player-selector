@@ -74,6 +74,18 @@ def availability(avail_mult: pd.Series) -> pd.Series:
     )
 
 
+def study_constants(run: Path) -> dict:
+    """The production constants the run recorded, so a diagnostic describes that study.
+
+    A saved study's forecasts were planned under the discount in force when it ran. A
+    later edit to `config` must not silently restate its planning values.
+    """
+    path = Path(run) / "resolved-config.json"
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text()).get("production_constants", {})
+
+
 def load_run(run: Path, model: str = "shipped", seed: int = -1, seasons=None) -> pd.DataFrame:
     """Join a study's future surface to the outcomes recorded on its forecast rows.
 
@@ -128,11 +140,16 @@ def load_run(run: Path, model: str = "shipped", seed: int = -1, seasons=None) ->
             decision, on=["season", "decision_week", "player_id"], how="left"
         )
         parts.append(joined)
-    return prepare(pd.concat(parts, ignore_index=True))
+    saved = study_constants(run)
+    return prepare(
+        pd.concat(parts, ignore_index=True),
+        discount=saved.get("FUTURE_DISCOUNT", config.FUTURE_DISCOUNT),
+    )
 
 
-def prepare(rows: pd.DataFrame) -> pd.DataFrame:
+def prepare(rows: pd.DataFrame, discount: float | None = None) -> pd.DataFrame:
     """Derive the frozen grouping axes from a joined surface."""
+    discount = config.FUTURE_DISCOUNT if discount is None else discount
     rows = rows.copy()
     rows["lead_horizon"] = rows.week.astype(int) - rows.decision_week.astype(int)
     rows["horizon"] = horizon_bucket(rows.lead_horizon)
@@ -141,7 +158,7 @@ def prepare(rows: pd.DataFrame) -> pd.DataFrame:
     # The raw rate is what a calibration map would act on; the planning value is what
     # the optimizer compares. Diagnosing one as the other conflates a rate error with
     # a discount that was never claimed to be calibrated.
-    rows["planning_lam"] = rows.lam * config.FUTURE_DISCOUNT ** rows.lead_horizon.clip(lower=0)
+    rows["planning_lam"] = rows.lam * discount ** rows.lead_horizon.clip(lower=0)
     # Decision-week facts describe the decision, not the player-week: a later decision's
     # depletion or rank says nothing about an earlier decision's plan for that week.
     # Nullable dtypes so "not a decision-week row" stays distinct from False.
@@ -389,8 +406,45 @@ def coverage(rows: pd.DataFrame) -> pd.DataFrame:
     ).reset_index()
 
 
-def module_hash() -> str:
-    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+def module_hash(name: str = "diagnostics") -> str:
+    """Fingerprint a module of this package by name."""
+    return hashlib.sha256((Path(__file__).parent / f"{name}.py").read_bytes()).hexdigest()
+
+
+def provenance(run: Path, model: str, seed: int) -> dict:
+    """Two identities, because two different pieces of code decide these numbers.
+
+    The study's fingerprints say which forecasts are being described. They say nothing
+    about the implementation computing the description: changing MIN_INFERENCE_CLUSTERS
+    changed whether intervals were reported at all and left the recorded identity byte
+    for byte the same.
+    """
+    manifest = json.loads((Path(run) / "manifest.json").read_text())
+    saved = study_constants(run)
+    return {
+        "forecast_provenance": {
+            "experiment": Path(run).name,
+            "model": f"{model} seed {seed}",
+            "source_fingerprint": manifest["code"]["code_hash"],
+            "code_revision": manifest["code"].get("revision"),
+            "frozen_dataset": manifest["dataset_hash"],
+            "configuration": manifest["identity"]["config_hash"],
+            "future_discount": saved.get("FUTURE_DISCOUNT", config.FUTURE_DISCOUNT),
+            "future_discount_source": (
+                "study" if "FUTURE_DISCOUNT" in saved else "current configuration"
+            ),
+        },
+        "diagnostic_provenance": {
+            "diagnostics_module": module_hash("diagnostics"),
+            "evaluate_module": module_hash("evaluate"),
+            "min_inference_clusters": config.MIN_INFERENCE_CLUSTERS,
+            "lambda_bins": [str(b) for b in ev.LAMBDA_BINS],
+            "horizon_buckets": [label for _, _, label in HORIZON_BUCKETS],
+            "populations": list(POPULATIONS),
+            "positions": list(POSITIONS),
+            "artifact_schema": SCHEMA_VERSION,
+        },
+    }
 
 
 def readiness_note(run: Path, rows: pd.DataFrame, fits: pd.DataFrame, identities: dict) -> str:
@@ -406,7 +460,13 @@ def readiness_note(run: Path, rows: pd.DataFrame, fits: pd.DataFrame, identities
         "## Identities",
         "",
     ]
-    lines += [f"- {k}: `{v}`" for k, v in identities.items()]
+    for block, label in (
+        ("forecast_provenance", "Forecasts described"),
+        ("diagnostic_provenance", "Implementation describing them"),
+    ):
+        lines += [f"**{label}**", ""]
+        lines += [f"- {k}: `{v}`" for k, v in identities[block].items()]
+        lines += [""]
     lines += [
         "",
         "## Population",
@@ -489,17 +549,7 @@ def export(
         frame.to_csv(out / name, index=False, float_format="%.12g")
         log(f"  {name}: {len(frame):,} rows")
 
-    manifest = json.loads((run / "manifest.json").read_text())
-    identities = {
-        "experiment": run.name,
-        "model": f"{model} seed {seed}",
-        "source fingerprint": manifest["code"]["code_hash"],
-        "code revision": manifest["code"].get("revision"),
-        "frozen dataset": manifest["dataset_hash"],
-        "configuration": manifest["identity"]["config_hash"],
-        "diagnostics module": module_hash(),
-        "artifact schema": SCHEMA_VERSION,
-    }
+    identities = provenance(run, model, seed)
     (out / "identities.json").write_text(json.dumps(identities, indent=2, sort_keys=True) + "\n")
     (out / "READINESS.md").write_text(readiness_note(run, rows, fitted, identities))
     log(f"Wrote {out}")

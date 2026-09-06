@@ -1376,15 +1376,48 @@ def test_the_export_records_identities_and_states_no_conclusion(tmp_path, monkey
     }
     identities = json.loads((out / "identities.json").read_text())
     manifest = json.loads((run / "manifest.json").read_text())
-    assert identities["source fingerprint"] == manifest["code"]["code_hash"]
-    assert identities["frozen dataset"] == manifest["dataset_hash"]
-    assert identities["diagnostics module"] == diagnostics.module_hash()
+    forecasts, computed = identities["forecast_provenance"], identities["diagnostic_provenance"]
+    assert forecasts["source_fingerprint"] == manifest["code"]["code_hash"]
+    assert forecasts["frozen_dataset"] == manifest["dataset_hash"]
+    assert forecasts["future_discount_source"] == "study"
+    assert computed["diagnostics_module"] == diagnostics.module_hash("diagnostics")
+    assert computed["evaluate_module"] == diagnostics.module_hash("evaluate")
 
     note = (out / "READINESS.md").read_text()
     assert "Production constants are unchanged" in note
     assert "not fitted correction artifacts" in note
     for claim in ("recommend", "should apply", "is well calibrated", "ready to ship", "improves"):
         assert claim not in note
+
+
+def test_the_recorded_identity_follows_the_code_that_computes_the_metrics(tmp_path, monkeypatch):
+    """Only the study was fingerprinted, so changing an inference constant changed
+    whether intervals were reported at all while leaving `identities.json` byte for
+    byte identical. The implementation describing the forecasts is its own identity."""
+    run = _diagnosable_run(tmp_path, monkeypatch)
+    before = diagnostics.provenance(run, "shipped", -1)
+    with config.override(MIN_INFERENCE_CLUSTERS=config.MIN_INFERENCE_CLUSTERS + 1):
+        after = diagnostics.provenance(run, "shipped", -1)
+    assert before["forecast_provenance"] == after["forecast_provenance"]
+    assert before["diagnostic_provenance"] != after["diagnostic_provenance"]
+    assert (
+        after["diagnostic_provenance"]["min_inference_clusters"]
+        == before["diagnostic_provenance"]["min_inference_clusters"] + 1
+    )
+
+
+def test_planning_values_use_the_discount_the_study_ran_under(tmp_path, monkeypatch):
+    """The forecasts on disk were planned under the discount in force when the run
+    happened; a later edit to `config` must not restate them under a different one."""
+    run = _diagnosable_run(tmp_path, monkeypatch)
+    saved = diagnostics.study_constants(run)["FUTURE_DISCOUNT"]
+    with config.override(FUTURE_DISCOUNT=0.5):
+        rows = diagnostics.load_run(run)
+        recorded = diagnostics.provenance(run, "shipped", -1)["forecast_provenance"]
+    future = rows[rows.lead_horizon.gt(0)].iloc[0]
+    assert future.planning_lam == pytest.approx(future.lam * saved**future.lead_horizon)
+    assert recorded["future_discount"] == saved
+    assert recorded["future_discount_source"] == "study"
 
 
 def test_the_cli_reports_a_missing_surface_instead_of_a_traceback(tmp_path, monkeypatch):
