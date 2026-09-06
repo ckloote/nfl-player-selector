@@ -88,6 +88,10 @@ def _candidate(
     )
 
 
+def _row_id(plan: SlotPlan, row: int | None) -> str | None:
+    return None if row is None else str(plan.players.iloc[row].player_id)
+
+
 def advise_slot(
     proj: pd.DataFrame,
     slot: str,
@@ -98,6 +102,8 @@ def advise_slot(
     now: datetime | None = None,
 ) -> SlotAdvice:
     n_alternatives = config.ALTERNATIVES_SHOWN if n_alternatives is None else n_alternatives
+    if n_alternatives < 0:
+        raise ValueError("n_alternatives must be zero or more")
     now = state.eastern_now(now)
     plan = plan_slot(
         proj, slot, week, used_ids, locked, unavailable=state.unavailable_cells(proj, week, now)
@@ -113,17 +119,19 @@ def advise_slot(
     if week not in plan.weeks:
         return SlotAdvice(slot, week, None, None, [], False, None, plan)
     col = plan.weeks.index(week)
+    # Every candidate the solver itself considered, not a display-sized slice of them.
+    # Sizing the evaluated set by `n_alternatives` made the advice a function of how
+    # much of it we intended to print: a cheap Sunday alternative ranked outside the
+    # shown rows was invisible to the hold comparison, so asking for a longer list
+    # could turn a commit into a hold. `optimizer.build_matrix` already caps this pool
+    # at `config.CANDIDATES_PER_SLOT`, so this is one re-solve per surviving candidate.
     playable = [r for r in range(len(plan.players)) if plan.values[r, col] > -1e5]
-    # Evaluate the plan's pick plus the top-N by this-week lambda.
-    by_lam = sorted(playable, key=lambda r: -plan.raw[r, col])
-    rows = list(
-        dict.fromkeys(
-            ([plan.assignment[week]] if week in plan.assignment else [])
-            + by_lam[: n_alternatives + 4]
-        )
-    )
-    cands = [_candidate(plan, proj_week, r, week, plan.total, slate) for r in rows]
-    cands.sort(key=lambda c: c.cost)
+    cands = [_candidate(plan, proj_week, r, week, plan.total, slate) for r in playable]
+    # The solver's own pick keeps precedence at equal cost -- an alternative that ties
+    # it describes an equally good plan, not a better one -- and player ID breaks the
+    # rest, so a wider evaluated pool cannot reorder the answer by arrival order.
+    planned = plan.assignment.get(week)
+    cands.sort(key=lambda c: (c.cost, c.player_id != _row_id(plan, planned), -c.lam, c.player_id))
     recommended = cands[0] if cands else None
     # Cheapest deviations first, but always show the top raw-xTD options so the
     # "obvious" pick and its season cost are visible.
@@ -133,6 +141,8 @@ def advise_slot(
     alternatives += [c for c in rest[n_alternatives:] if c.player_id in top_lam]
     alternatives.sort(key=lambda c: c.cost)
 
+    # The hold decision reads the whole evaluated pool, so it cannot change with how
+    # many alternatives are displayed.
     hold, hold_alt = False, None
     if recommended and recommended.early:
         later = [c for c in cands if not c.early]

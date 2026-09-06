@@ -189,8 +189,9 @@ granularity, but the recommendation layer applies an **early-commitment rule**
 for players whose games kick off before the week's main slate: commit early
 unless a considered later-game alternative costs less than the fixed TD
 "information premium." This is a heuristic, not an estimated dynamic value of waiting.
-The considered candidate subset currently depends on `n_alternatives`; making hold advice
-independent of display truncation is an open Phase 3A repair, not a completed guarantee.
+The comparison considers every candidate in the solver's own pool and is independent of
+`n_alternatives`, which sizes only the displayed alternatives. Zero, default and large
+display sizes give the same pick, hold flag, hold alternative and cost.
 Re-solving after early games have locked (or finished) preserves recorded locks and
 excludes elapsed current-week choices. Current season replay calls `plan_slot`, not
 `advise_slot`, once per week, so it does not validate this hold/commit workflow.
