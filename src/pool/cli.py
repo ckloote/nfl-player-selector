@@ -156,11 +156,18 @@ def recommend(
     now = state.eastern_now()
     decided = state.decision_instant(now)
     wk = _week(conn, season, week, now)
-    proj = _projections(conn, season, wk)
-    used, locked = state.used_ids(conn, season), state.locked_by_slot(conn, season)
-    advice = advise_week(proj, wk, used, locked, now=now)
-    if capture_decision:
-        capture.record_decision(conn, season, wk, proj, advice, used, locked, decision_at=decided)
+    # One transaction over the whole decision. The forecast reads mutable feed tables
+    # and the capture then names the observations behind them; a refresh landing
+    # between the two would file this forecast against the previous feed. Holding the
+    # read means a concurrent refresh waits, or fails loudly, rather than interleaving.
+    with db.transaction(conn):
+        proj = _projections(conn, season, wk)
+        used, locked = state.used_ids(conn, season), state.locked_by_slot(conn, season)
+        advice = advise_week(proj, wk, used, locked, now=now)
+        if capture_decision:
+            capture.record_decision(
+                conn, season, wk, proj, advice, used, locked, decision_at=decided
+            )
     console.print(f"[bold]Week {wk} — {season}[/bold]")
     _status(conn, season, wk, now)
     recorded_names = state.picks(conn, season).set_index("player_id").player_name.to_dict()
@@ -271,34 +278,43 @@ def record(
                 team=m.team,
             )
         )
-    replaced = {
-        r["slot"]: r["player_id"]
-        for r in conn.execute(
-            "SELECT slot, player_id FROM my_picks WHERE season = ? AND week = ?", (season, wk)
-        )
-    }
+    # `my_picks` holds the current answer; the capture log holds every answer. Both in
+    # one transaction: a pick that changed without its history leaves no way back to
+    # the identity it overwrote, and retrying cannot recover it.
     try:
-        warnings = state.record_picks(conn, season, wk, entries, now=now)
+        with db.transaction(conn):
+            replaced = {
+                r["slot"]: r["player_id"]
+                for r in conn.execute(
+                    "SELECT slot, player_id FROM my_picks WHERE season = ? AND week = ?",
+                    (season, wk),
+                )
+            }
+            warnings = state.record_picks(conn, season, wk, entries, now=now)
+            for e in entries:
+                prior = replaced.get(e["slot"])
+                if prior is not None and prior != e["player_id"]:
+                    capture.record_action(
+                        conn,
+                        season,
+                        wk,
+                        e["slot"],
+                        "correction",
+                        prior,
+                        dict(replaced_by=e["player_id"]),
+                    )
+                capture.record_action(
+                    conn,
+                    season,
+                    wk,
+                    e["slot"],
+                    "submitted",
+                    e["player_id"],
+                    dict(player_name=e["player_name"], team=e.get("team"), replaced=prior),
+                )
     except state.PickError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1) from e
-    # `my_picks` holds the current answer; the capture log holds every answer. A slot
-    # that replaces a different player records the correction as well as the entry.
-    for e in entries:
-        prior = replaced.get(e["slot"])
-        if prior is not None and prior != e["player_id"]:
-            capture.record_action(
-                conn, season, wk, e["slot"], "correction", prior, dict(replaced_by=e["player_id"])
-            )
-        capture.record_action(
-            conn,
-            season,
-            wk,
-            e["slot"],
-            "submitted",
-            e["player_id"],
-            dict(player_name=e["player_name"], team=e.get("team"), replaced=prior),
-        )
     for warning in warnings:
         console.print(f"[yellow]Warning: {warning}[/yellow]")
     for e in entries:
@@ -310,19 +326,26 @@ def unrecord(week: int, slot: str, season: int = SeasonOpt, db_path: Path | None
     """Remove a recorded pick (slot: QB, RB, FLEX)."""
     conn = _conn(db_path)
     _week(conn, season, week)
-    removed = conn.execute(
-        "SELECT player_id FROM my_picks WHERE season = ? AND week = ? AND slot = ?",
-        (season, week, slot.upper()),
-    ).fetchone()
     try:
-        ok = state.remove_pick(conn, season, week, slot.upper())
+        with db.transaction(conn):
+            removed = conn.execute(
+                "SELECT player_id FROM my_picks WHERE season = ? AND week = ? AND slot = ?",
+                (season, week, slot.upper()),
+            ).fetchone()
+            ok = state.remove_pick(conn, season, week, slot.upper())
+            if ok:
+                capture.record_action(
+                    conn,
+                    season,
+                    week,
+                    slot.upper(),
+                    "correction",
+                    removed["player_id"],
+                    dict(removed=True),
+                )
     except state.PickError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1) from e
-    if ok:
-        capture.record_action(
-            conn, season, week, slot.upper(), "correction", removed["player_id"], dict(removed=True)
-        )
     console.print("removed" if ok else "[yellow]nothing to remove[/yellow]")
 
 

@@ -5,6 +5,7 @@ unguarded fit returned plausible numbers for populations that identify nothing,
 and a plausible number survives into a published table.
 """
 
+import contextlib
 import hashlib
 import json
 import sqlite3
@@ -668,7 +669,7 @@ def test_the_capture_stores_the_whole_surface_not_the_shortlist(tmp_path):
     _publish(conn, unplayed, "thursday")
     decision_id, proj, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
 
-    frame, _, _ = capture.reconstruct(conn, decision_id)
+    frame, _, _, _ = capture.reconstruct(conn, decision_id)
     assert len(frame) == len(proj)
     assert set(frame.columns) >= set(P.PROJECTION_COLUMNS) | set(capture.SURFACE_EXTRAS)
     assert sorted(frame.week.unique()) == [3, 4]  # the future surface, not just this week
@@ -691,7 +692,8 @@ def test_a_captured_decision_reconstructs_its_advice_from_the_surface_alone(tmp_
     _publish(conn, unplayed, "thursday")
     decision_id, _, advice = _decide(conn, 3, datetime.fromisoformat(DECISION))
 
-    _, redone, recorded = capture.reconstruct(conn, decision_id)
+    _, redone, recorded, drift = capture.reconstruct(conn, decision_id)
+    assert not drift["code_hash_changed"] and not drift["constants_changed"]
     assert sorted(recorded) == sorted(config.SLOTS)
     for original, again in zip(advice, redone, strict=True):
         detail = recorded[original.slot]
@@ -745,7 +747,7 @@ def test_a_decision_survives_a_later_feed_correction(tmp_path):
     archive_all(conn, PRE_WEEK3)
     _publish(conn, unplayed, "thursday")
     decision_id, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
-    before, advice_before, recorded = capture.reconstruct(conn, decision_id)
+    before, advice_before, recorded, _ = capture.reconstruct(conn, decision_id)
 
     _publish(conn, unplayed, "rest")
     with conn:
@@ -753,12 +755,151 @@ def test_a_decision_survives_a_later_feed_correction(tmp_path):
     for feed in ("player_stats", "touchdowns"):
         snapshots.archive(conn, SEASON, feed, observed_at=POST_SUN)
 
-    after, advice_after, recorded_after = capture.reconstruct(conn, decision_id)
+    after, advice_after, recorded_after, _ = capture.reconstruct(conn, decision_id)
     pd.testing.assert_frame_equal(before, after)
     assert recorded == recorded_after
     assert [a.recommended.player_id for a in advice_before] == [
         a.recommended.player_id for a in advice_after
     ]
+
+
+def test_a_pick_and_its_history_change_together_or_not_at_all(tmp_path, monkeypatch):
+    """`my_picks` is overwritten in place, so a replacement that commits without its
+    correction event destroys the identity it replaced with no way back. Capture must
+    not be able to fail after the pick has already moved."""
+    path = tmp_path / "pool.db"
+    _seed(db.connect(path)).close()
+    runner = CliRunner()
+    args = ["--season", str(SEASON), "--db", str(path)]
+    assert runner.invoke(app, ["record", "--week", "1", "--rb", "AAA RB1", *args]).exit_code == 0
+
+    # Whatever makes recording history impossible -- here, no source fingerprint.
+    monkeypatch.setattr(
+        capture, "_code_identity", lambda: (_ for _ in ()).throw(OSError("git unavailable"))
+    )
+    result = runner.invoke(app, ["record", "--week", "1", "--rb", "BBB RB1", *args])
+    assert result.exit_code != 0
+
+    conn = db.connect(path)
+    picks = state.picks(conn, SEASON)
+    assert list(picks.player_id) == ["AAA-RB1"], "the replacement must not have landed"
+    log = capture.events(conn, SEASON, 1)
+    assert list(zip(log.kind, log.player_id, strict=True)) == [("submitted", "AAA-RB1")]
+
+
+def test_removing_a_pick_and_recording_the_correction_are_one_write(tmp_path, monkeypatch):
+    path = tmp_path / "pool.db"
+    _seed(db.connect(path)).close()
+    runner = CliRunner()
+    args = ["--season", str(SEASON), "--db", str(path)]
+    assert runner.invoke(app, ["record", "--week", "1", "--rb", "AAA RB1", *args]).exit_code == 0
+    monkeypatch.setattr(
+        capture, "_code_identity", lambda: (_ for _ in ()).throw(OSError("git unavailable"))
+    )
+    assert runner.invoke(app, ["unrecord", "1", "RB", *args]).exit_code != 0
+
+    conn = db.connect(path)
+    assert list(state.picks(conn, SEASON).player_id) == ["AAA-RB1"]
+    assert set(capture.events(conn, SEASON, 1).kind) == {"submitted"}
+
+
+def test_two_decisions_under_different_settings_get_different_identities(tmp_path):
+    """The identity cache keyed on model and calibrator while caching the constants,
+    so two decisions made under different premiums recorded one premium between them --
+    and it was the first one's, whichever decision you asked about."""
+    conn, unplayed = _staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    _publish(conn, unplayed, "thursday")
+    before_kickoff = datetime.fromisoformat("2024-09-19T18:30:00+00:00")
+
+    identities, holds = {}, {}
+    for premium in (0.10, 0.0001):
+        with config.override(INFO_PREMIUM_TD=premium):
+            decision_id, _, advice = _decide(conn, 3, before_kickoff)
+        identities[premium] = capture.recorded_identity(conn, decision_id)
+        holds[premium] = {a.slot: a.hold for a in advice}
+
+    # The cheapest later alternative costs 0.00036 TDs, so these straddle it.
+    assert holds[0.10] != holds[0.0001], "fixture must actually flip a hold decision"
+    assert identities[0.10]["constants"]["INFO_PREMIUM_TD"] == 0.10
+    assert identities[0.0001]["constants"]["INFO_PREMIUM_TD"] == 0.0001
+    assert identities[0.10] != identities[0.0001]
+
+
+def test_a_captured_hold_stays_a_hold_when_the_premium_moves(tmp_path):
+    """Reconstruction re-derives advice, and `advise_slot` reads the premium when it is
+    called. Under today's configuration a captured hold came back as a commit from
+    byte-identical stored data."""
+    conn, unplayed = _staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    _publish(conn, unplayed, "thursday")
+    before_kickoff = datetime.fromisoformat("2024-09-19T18:30:00+00:00")
+    now = state.eastern_now(before_kickoff)
+    with config.override(INFO_PREMIUM_TD=0.10):
+        decision_id, _, advice = _decide(conn, 3, before_kickoff)
+    captured = {a.slot: a.hold for a in advice}
+    assert any(captured.values()), "fixture must capture a hold"
+
+    with config.override(INFO_PREMIUM_TD=0.0001):
+        # Under the new premium this decision would commit; the recorded one held.
+        live = advise_week(
+            P.projections_for(conn, SEASON, from_week=3),
+            3,
+            set(),
+            {slot: {} for slot in config.SLOTS},
+            now=now,
+        )
+        assert not any(a.hold for a in live)
+        _, redone, _, drift = capture.reconstruct(conn, decision_id)
+    assert {a.slot: a.hold for a in redone} == captured
+    assert drift["constants_changed"]["INFO_PREMIUM_TD"]["recorded"] == 0.10
+
+
+def test_reconstruction_refuses_a_source_tree_it_was_not_captured_under(tmp_path):
+    """The recommender's behaviour is not carried by the recorded constants alone, so a
+    silent substitution of current code would answer a different question."""
+    conn, unplayed = _staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    _publish(conn, unplayed, "thursday")
+    decision_id, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+
+    capture._code_identity.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="captured under source fingerprint"):
+            with _pretend_source_moved():
+                capture.reconstruct(conn, decision_id)
+        with _pretend_source_moved():
+            _, _, _, drift = capture.reconstruct(conn, decision_id, allow_code_drift=True)
+        assert drift["code_hash_changed"]
+        assert drift["current_code_hash"] == "moved"
+    finally:
+        capture._code_identity.cache_clear()
+
+
+@contextlib.contextmanager
+def _pretend_source_moved():
+    original = capture._code_identity
+    capture._code_identity = lambda: ("moved", "moved", False)
+    try:
+        yield
+    finally:
+        capture._code_identity = original
+
+
+def test_a_setting_this_version_cannot_rebuild_is_refused_not_guessed(tmp_path):
+    """`DEPTH_MULT` keys come back from the log as strings. Installing that form would
+    demote a backup quarterback from 0.15 to 0.05 -- a worse reconstruction than none."""
+    recorded = capture._canonical(capture.current_constants())
+    recorded["DEPTH_MULT"] = {"QB": {"1": 1.0, "2": 0.9}}
+    with pytest.raises(ValueError, match="DEPTH_MULT"):
+        with capture.recorded_settings(recorded):
+            pass
+    # A scalar that moved is restored rather than refused.
+    recorded = capture._canonical(capture.current_constants())
+    recorded["INFO_PREMIUM_TD"] = 0.42
+    with capture.recorded_settings(recorded):
+        assert config.INFO_PREMIUM_TD == 0.42
+    assert config.INFO_PREMIUM_TD != 0.42
 
 
 @pytest.mark.parametrize("table", ["decision_events", "decision_inputs"])

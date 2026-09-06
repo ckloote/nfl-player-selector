@@ -21,6 +21,7 @@ import io
 import json
 import sqlite3
 import zlib
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import cache
 from typing import Any
@@ -51,22 +52,38 @@ def _json(value: Any) -> str:
 
 
 @cache
-def _identity_payload(model: str, calibrator: str, artifact_hash: str | None) -> tuple[str, str]:
-    """Hashing the source tree shells out to git; a command that records three picks
-    should not do it three times. Source cannot change under a running process in any
-    way this tool would survive anyway."""
+def _code_identity() -> tuple[str, str | None, bool | None]:
+    """Fingerprint the source tree once per process.
+
+    Hashing it shells out to git three times, and a command that records three picks
+    should not do that nine. Source cannot change under a running process in any way
+    this tool would survive. Constants *can* -- `config.override` exists and the sweep
+    uses it -- so they are deliberately outside this cache and read on every call.
+    Caching them here once recorded one premium for decisions made under two.
+    """
     from . import benchmark  # imports the feed layer; not needed to read a capture
 
     code = benchmark.code_identity()
+    return code["code_hash"], code.get("revision"), code.get("dirty")
+
+
+def current_constants() -> dict:
+    from . import benchmark
+
+    return benchmark.constants()
+
+
+def _identity_payload(model: str, calibrator: str, artifact_hash: str | None) -> tuple[str, str]:
+    code_hash, revision, dirty = _code_identity()
     raw = _json(
         {
             "model": model,
             "calibrator": calibrator,
             "calibrator_artifact_hash": artifact_hash,
-            "code_hash": code["code_hash"],
-            "revision": code.get("revision"),
-            "dirty": code.get("dirty"),
-            "constants": benchmark.constants(),
+            "code_hash": code_hash,
+            "revision": revision,
+            "dirty": dirty,
+            "constants": current_constants(),
         }
     )
     return hashlib.sha256(raw.encode()).hexdigest(), raw
@@ -398,13 +415,83 @@ def events(conn: sqlite3.Connection, season: int, week: int | None = None) -> pd
     return db.read_df(conn, sql + " ORDER BY event_id", params)
 
 
-def reconstruct(conn: sqlite3.Connection, decision_id: str):
+def recorded_identity(conn: sqlite3.Connection, decision_id: str) -> dict:
+    """The code, constants, model and calibrator a captured decision was made under."""
+    row = conn.execute(
+        "SELECT i.payload FROM decision_events e "
+        "JOIN decision_identities i USING(identity_hash) "
+        "WHERE e.decision_id = ? ORDER BY e.event_id LIMIT 1",
+        (decision_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"No captured decision {decision_id}")
+    return json.loads(row["payload"])
+
+
+def _canonical(value):
+    """The form a value takes in the log, so recorded and live settings compare like
+    with like. Tuples arrive back as lists and integer keys as strings; without this
+    every reconstruction would report drift in settings nobody had touched."""
+    return json.loads(_json(value))
+
+
+def constants_drift(recorded: dict, current: dict | None = None) -> dict:
+    canonical = _canonical(current_constants() if current is None else current)
+    return {
+        name: {"recorded": value, "current": canonical.get(name)}
+        for name, value in recorded.items()
+        if canonical.get(name) != value
+    }
+
+
+@contextmanager
+def recorded_settings(constants: dict):
+    """Re-derive under the settings the decision was made with, not today's.
+
+    `advise_slot` reads the information premium, the future discount, the candidate
+    limit and the deadline window when it is called, so replaying a captured decision
+    under the current configuration answers a different question: a captured hold comes
+    back as a commit if the premium has moved since.
+
+    Only settings that survive the log unchanged are restored. A structured setting
+    does not: `DEPTH_MULT` keys come back as strings, and installing that form would
+    quietly demote a backup quarterback from 0.15 to 0.05 -- a worse reconstruction
+    than leaving the live value alone. When one of those has genuinely moved, this
+    refuses rather than reconstructs against a shape it cannot rebuild.
+    """
+    drift = constants_drift(constants)
+    restorable = {
+        name: change["recorded"]
+        for name, change in drift.items()
+        if isinstance(change["recorded"], (int, float, str, bool))
+    }
+    structured = sorted(set(drift) - set(restorable))
+    if structured:
+        raise ValueError(
+            "Cannot faithfully restore structured settings recorded with this decision: "
+            f"{structured}. The log keeps their shape, not their types."
+        )
+    try:
+        with config.override(**restorable):
+            yield
+    except KeyError as exc:
+        raise ValueError(
+            f"Captured decision names settings this version no longer has: {exc}"
+        ) from exc
+
+
+def reconstruct(conn: sqlite3.Connection, decision_id: str, *, allow_code_drift: bool = False):
     """Rebuild a decision's surface and re-derive its advice from that surface alone.
 
-    Nothing here reads a current table, so a feed corrected after the decision cannot
-    change what comes back. This is the check that the capture is sufficient: if the
-    re-derived advice differs from what was recorded, something the decision depended
-    on was never written down.
+    Nothing here reads a current feed table, so a correction published after the
+    decision cannot change what comes back. This is the check that the capture is
+    sufficient: if the re-derived advice differs from what was recorded, something the
+    decision depended on was never written down.
+
+    The recorded settings are restored for the re-derivation, and a source tree that no
+    longer matches the recorded fingerprint is refused rather than quietly substituted,
+    because the recommender's behaviour is not carried by the constants alone. Pass
+    `allow_code_drift` to reconstruct anyway; the returned drift record says what moved.
     """
     rows = [
         dict(r)
@@ -414,21 +501,39 @@ def reconstruct(conn: sqlite3.Connection, decision_id: str):
     ]
     if not rows:
         raise ValueError(f"No captured decision {decision_id}")
+    identity_payload = recorded_identity(conn, decision_id)
+    current_hash, _, _ = _code_identity()
+    recorded_constants = identity_payload.get("constants", {})
+    drift = {
+        "code_hash_changed": identity_payload.get("code_hash") != current_hash,
+        "recorded_code_hash": identity_payload.get("code_hash"),
+        "current_code_hash": current_hash,
+        "constants_changed": constants_drift(recorded_constants),
+    }
+    if drift["code_hash_changed"] and not allow_code_drift:
+        raise ValueError(
+            f"Decision {decision_id} was captured under source fingerprint "
+            f"{drift['recorded_code_hash']}, running {current_hash}. The recommender's "
+            "behaviour is not carried by the recorded constants alone; pass "
+            "allow_code_drift=True to reconstruct anyway."
+        )
+
     head = next(r for r in rows if r["kind"] == "surface")
     frame = load_surface(conn, head["surface_hash"])
-    state = json.loads(head["detail"])
-    advice = advise_week(
-        frame,
-        int(head["week"]),
-        set(state["used"]),
-        {
-            slot: {int(w): pid for w, pid in cells.items()}
-            for slot, cells in state["locked"].items()
-        },
-        now=datetime.fromisoformat(head["decision_at"]),
-    )
+    detail = json.loads(head["detail"])
+    with recorded_settings(recorded_constants):
+        advice = advise_week(
+            frame,
+            int(head["week"]),
+            set(detail["used"]),
+            {
+                slot: {int(w): pid for w, pid in cells.items()}
+                for slot, cells in detail["locked"].items()
+            },
+            now=datetime.fromisoformat(head["decision_at"]),
+        )
     recorded = {r["slot"]: json.loads(r["detail"]) for r in rows if r["kind"] == "advice"}
-    return frame, advice, recorded
+    return frame, advice, recorded, drift
 
 
 def outcomes(conn: sqlite3.Connection, season: int) -> pd.DataFrame:

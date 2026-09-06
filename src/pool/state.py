@@ -154,7 +154,10 @@ def record_picks(
                 game["game_id"] if game else None,
             )
         )
-    with conn:
+    # A savepoint, not `with conn:`: a plain commit would also commit whatever the
+    # caller had open, so a pick could survive a failure in the same command that
+    # was supposed to record its history alongside it.
+    with db.transaction(conn):
         conn.executemany(
             "INSERT INTO my_picks(season, week, slot, player_id, player_name, "
             "recorded_at, game_id) "
@@ -173,7 +176,7 @@ def remove_pick(conn: sqlite3.Connection, season: int, week: int, slot: str) -> 
     validate_week(conn, season, week)
     if slot not in config.SLOTS:
         raise PickError(f"unknown slot {slot!r}")
-    with conn:
+    with db.transaction(conn):
         cur = conn.execute(
             "DELETE FROM my_picks WHERE season = ? AND week = ? AND slot = ?", (season, week, slot)
         )
