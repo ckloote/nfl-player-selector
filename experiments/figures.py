@@ -149,13 +149,38 @@ def slope_by_season(data, baseline):
     """Saved calibration slopes and their normal-approximation intervals by season."""
     cal = data["calibration"]
     cal = cal[cal.model.eq(baseline)].sort_values("season")
-    w, h = 720, 320
-    left, right, top, bottom = 62, 24, 66, 44
+    # An unsupported fit has no coefficient to plot; a supported fit whose cluster SEs
+    # were suppressed has a coefficient but no interval. Both are stated in the caption
+    # rather than drawn: NaN geometry would emit literal `nan` coordinates into the SVG.
+    unsupported = int(cal.slope.isna().sum())
+    cal = cal[cal.slope.notna()]
+    if cal.empty:
+        out = _frame(
+            720,
+            160,
+            "Poisson calibration slope by season",
+            "No season produced a supported calibration fit; there is nothing to plot.",
+        )
+        out.append("</svg>")
+        return "\n".join(out)
+    spread = cal.se_slope.fillna(0.0)
+    no_interval = int(cal.se_slope.isna().sum())
+    # Both warnings on one line ran about 77px past the 720px canvas, so the reader lost
+    # the end of whichever notice came second. They get their own line, and the plot
+    # starts lower to make room rather than being drawn over.
+    notes = []
+    if unsupported:
+        notes.append(f"{unsupported} unsupported fit(s) omitted")
+    if no_interval:
+        notes.append(f"{no_interval} plotted without cluster SEs")
+    w, h = 720, 320 + (15 if notes else 0)
+    left, right, bottom = 62, 24, 44
+    top = 66 + (15 if notes else 0)
     # Both bounds follow the plotted intervals. A hardcoded top clipped every
     # supported baseline above it: `vegas-environment` reaches a slope of 1.137
     # and an upper bound of 1.234, outside a viewport that stopped at 1.03.
-    lo = min(0.75, (cal.slope - 1.96 * cal.se_slope).min() - 0.02)
-    hi = max(1.03, (cal.slope + 1.96 * cal.se_slope).max() + 0.02)
+    lo = min(0.75, (cal.slope - 1.96 * spread).min() - 0.02)
+    hi = max(1.03, (cal.slope + 1.96 * spread).max() + 0.02)
     y = _scale(lo, hi, h - bottom, top)
     step = (w - left - right) / len(cal)
     xs = [left + step * (i + 0.5) for i in range(len(cal))]
@@ -168,6 +193,7 @@ def slope_by_season(data, baseline):
         [
             f"`{baseline}`; estimate +/-1.96 SE, player-season clusters.",
             f"Dashed: slope 1 reference. Dotted: mean {cal.slope.mean():.3f}. Intercepts in table.",
+            *(["; ".join(notes) + "."] if notes else []),
         ],
     )
     for tick in _ticks(lo, hi, 0.05):
@@ -185,11 +211,13 @@ def slope_by_season(data, baseline):
         f'stroke="{UNDER}" stroke-width="1" stroke-dasharray="2 3"/>'
     )
     for x, row in zip(xs, cal.itertuples(), strict=True):
-        top_y, bot_y = y(row.slope + 1.96 * row.se_slope), y(row.slope - 1.96 * row.se_slope)
-        out.append(
-            f'<line x1="{x:.1f}" y1="{top_y:.1f}" x2="{x:.1f}" y2="{bot_y:.1f}" '
-            f'stroke="{UNDER}" stroke-width="1.5" stroke-opacity="0.55"/>'
-        )
+        if pd.notna(row.se_slope):
+            top_y = y(row.slope + 1.96 * row.se_slope)
+            bot_y = y(row.slope - 1.96 * row.se_slope)
+            out.append(
+                f'<line x1="{x:.1f}" y1="{top_y:.1f}" x2="{x:.1f}" y2="{bot_y:.1f}" '
+                f'stroke="{UNDER}" stroke-width="1.5" stroke-opacity="0.55"/>'
+            )
         out.append(f'<circle cx="{x:.1f}" cy="{y(row.slope):.1f}" r="3.5" fill="{UNDER}"/>')
         out.append(_text(x, h - bottom + 18, str(int(row.season))[2:], size=10))
     out.append(_text(left, h - 12, "season", size=10, anchor="start"))

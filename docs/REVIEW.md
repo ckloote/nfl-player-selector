@@ -26,20 +26,21 @@ a universal calibration correction, a universal 4-TD resolution floor and rankin
 model-selection rule. Those documentation claims are corrected in this update. F07's empirical
 work is still open; documentation correction does not fix the following implementation gaps:
 
-| Open Gap | Planned Resolution |
+| Gap | Resolution (Phase 3A, 2026-09-06) |
 |---|---|
-| GLM identifiability/convergence and unsupported inference | Phase 3A guards and fixtures for constant predictors, all-zero outcomes, `n <= 2`, exhausted iterations and insufficient clusters; explicit fit status and zero-rate accounting |
-| Hold advice depends on `n_alternatives` display sizing | Phase 3A evaluates later alternatives independently of display truncation and tests invariant advice |
-| Live/snapshot same-week stats handling differs | Phase 3A defines one observed-stats contract and tests parity after an early game, plus later-input noninterference |
-| Resume identifies a decision-time CSV path, not frozen contents | Phase 3A copies/hashes actual CSV contents, uses the frozen input and rejects same-path edits on resume |
-| Feed snapshots do not yet provide the full decision evidence needed | Phase 3A adds append-only current/future surfaces, model/calibrator/input identities and used/locked/action records |
+| GLM identifiability/convergence and unsupported inference | Resolved. `poisson_glm` returns an explicit fit status and reason for empty, non-finite, `n <= 2`, constant-predictor, all-zero-outcome and iteration-exhausted inputs, with NaN coefficients; cluster SEs are suppressed below the predeclared `config.MIN_INFERENCE_CLUSTERS`. Supported fits are unchanged: the published 2019 season reproduces to twelve significant figures |
+| Hold advice depends on `n_alternatives` display sizing | Resolved. `advise_slot` evaluates the whole solver pool and truncates only for display; the pick, hold flag, hold alternative and its cost are identical across display sizes |
+| Live/snapshot same-week stats handling differs | Resolved. One contract: a completed game already observed at the decision is available to it, in both paths. Historical replay keeps its explicitly approximate `stats < W` cut |
+| Resume identifies a decision-time CSV path, not frozen contents | Resolved. The CSV is read while resolving the configuration and its contents enter the run identity, so a same-path edit is rejected on resume and workers never re-read the path |
+| Feed snapshots do not yet provide the full decision evidence needed | Resolved. Append-only decision events store the full pre-pruning current/future surface, advice, hold/commit, used/locked state, resolved input observations and code/constant/model identity; corrections are new events and outcomes are joined at read time |
 
 The [Phase 3 plan](IMPLEMENTATION_PLAN.md) gives dependencies, deliverables, tests and acceptance
 criteria for those repairs, followed by past-only calibration experiments and shadow-live
-transfer/policy validation. Begin prospective capture alongside retrospective diagnosis; initial
-2026 snapshots are not completed live validation. Current one-decision-per-week replay calls
-`plan_slot`, not `advise_slot`, and does not validate waiting for later news. No implementation
-defect is marked fixed by this documentation update, and no production calibration is approved.
+transfer/policy validation. Prospective capture now runs alongside retrospective diagnosis;
+initial 2026 snapshots are still not completed live validation. Current one-decision-per-week
+replay calls `plan_slot`, not `advise_slot`, and does not validate waiting for later news.
+No production calibration is approved: the 3A export describes rate errors by population and
+fits no correction.
 
 ## September 4 Scope And Verification
 
@@ -424,9 +425,9 @@ Recommended order (September 5 status):
 2. **Phase 2 repairs: implemented; documentation corrected.** Custom-baseline handling,
    shuffled eligibility, metric labels and temporal claims were repaired. Timestamped input
    archives and reproducible configurations exist; remaining readiness gaps are listed above.
-3. **Phase 3: planned.** Start capture and readiness repairs now (3A), run predeclared
-   chronological train/apply experiments (3B), then validate live transfer and policy effects
-   in shadow (3C). Keep forecast proper metrics separate from achieved policy TDs and static
+3. **Phase 3: 3A implemented; 3B and 3C planned.** The readiness repairs, capture and the
+   descriptive export are in place. Next are the predeclared chronological train/apply
+   experiments (3B), then live transfer and policy validation in shadow (3C). Keep forecast proper metrics separate from achieved policy TDs and static
    hold sensitivity separate from the dynamic value of waiting. Production stays unchanged
    unless the intended deployment has appropriate evidence; no change is a valid outcome.
 4. **Then build leaderboard strategy.** Start with scoring and opponent-report

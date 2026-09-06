@@ -50,6 +50,7 @@ Artifact schema version 1:
 | `picks.csv` | Every individual strategy choice and its final actual TDs; empty slots are retained |
 | `*_summary.csv` | Seeds/trials averaged within season, then equally weighted seasons; cross-season SE and separate within-season shuffle/trial SD, including retrospective era summaries |
 | `input-provenance.json` | Decision timestamps and, for snapshot policy, resolved observation identities, hashes, absence, age and staleness |
+| `decision-times.csv` | Normalized copy of the frozen `season,week,decision_at` inputs the run used; the same records are in the resolved configuration and so in its hash |
 | `coverage.csv` | Each scheduled game in every required history/evaluation season, with completion and reason |
 | `presentation.json` | Publication-only source hashes for the report/figure renderers, plus the original metric source and dataset identities; does not replace the metric manifest |
 
@@ -94,6 +95,34 @@ The verification script reconciles every configured seed, candidate/mask populat
 history and score total, then records the matching implementation commit. Verification and
 model resume still require the recorded metric implementation and inputs. Raw forecasts and
 databases remain in the ignored output directory.
+
+## Descriptive diagnostics
+
+`pool diagnose` reads a completed run's saved surface and forecast exports and describes the
+model's rate errors by population, position, rate bin, availability and forecast lead horizon.
+It fits no correction, selects no model and states no conclusion.
+
+```bash
+uv run pool diagnose --run data/experiments/roster-snapshot-repair \
+  --out experiments/results/phase3a-readiness
+```
+
+Group definitions are frozen before any outcome is read; none selects on future touchdowns or
+on participation. Horizons are never pooled: repeated forecasts of one target week share its
+single outcome, so horizon 0 clusters on player-season and later horizons cluster on the target
+player-week. Raw rates and discounted planning values are exported separately. Eligible zero
+rates cannot enter a fit on `log(lambda)` and are excluded from every fit and deviance and
+counted instead, separately from hard exclusions, whose zero is a mask rather than a forecast.
+
+| Artifact | Row definition |
+|---|---|
+| `strata.csv` | Population x axis level x horizon: counts, outcome coverage, forecast and actual levels, forecast/actual, played fraction, positive-rate deviance and the zero-rate counts |
+| `fits.csv` | The Poisson calibration fit for each of those strata, with fit status, reason, convergence, iterations, clusters and whether cluster SEs are supported |
+| `fits-by-season.csv` | The same fit per season for each population and horizon; season is the unit any later paired comparison would use |
+| `reliability.csv` | Lambda-bin table by population, position and horizon |
+| `zero-accounting.csv` | Eligible zero rates and hard exclusions, counted separately, with how many scored anyway |
+| `coverage.csv` | Rows with and without a resolved outcome, by season and horizon |
+| `identities.json`, `READINESS.md` | Source, dataset, configuration and diagnostics-module identities, and a dated note of measurements and limits |
 
 ## Measurements And Interpretation
 

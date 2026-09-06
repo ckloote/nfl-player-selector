@@ -106,6 +106,15 @@ including inactive players. Every supplied slot is validated before one atomic
 write. Replacing a player clears the slot's score; re-recording the same player
 preserves it. Removing a pick removes its contribution to totals.
 
+`recommend` also records the decision: the whole pre-pruning surface for every slot and
+remaining week, the advice and hold-or-commit call per slot, the used and locked state, the
+feed observations that were visible, and the code, constants and model that produced it. The
+log is append-only — a correction is a new event, and `record`/`unrecord` append their own —
+so a captured decision can be reconstructed later even after the feeds have moved on.
+Outcomes are never stored beside it; they are joined from finalized scoring when read. Use
+`--no-capture` to skip recording. This evidence is what
+[Phase 3](docs/IMPLEMENTATION_PLAN.md) needs and is not used to make picks.
+
 Scoring counts every touchdown thrown or scored, including returns and recoveries.
 The importer uses nflverse's explicit scorer identifier and separately credits the
 passer on a credited passing touchdown, excluding negated plays and conversions.
@@ -167,8 +176,8 @@ Replay commands share these input policies:
 
 | Policy | Inputs and assumptions |
 |---|---|
-| `historical` (default) | Closing lines strictly before week W, masked before team/league averages; stats through W−1; rosters/injuries through W; usage roles. Final schedule revisions, weekly report timing and later stat corrections remain approximations. |
-| `snapshots` | Latest successful archived feed observation at or before an explicit decision timestamp; depth-chart roles by default. Missing essential history fails; absent/stale optional feeds are recorded with fallbacks. |
+| `historical` (default) | Closing lines strictly before week W, masked before team/league averages; stats through W−1; rosters/injuries through W; usage roles. It has no observation times to consult, so it cannot tell which of week W's games had finished; that cut, final schedule revisions, weekly report timing and later stat corrections remain approximations. |
+| `snapshots` | Latest successful archived feed observation at or before an explicit decision timestamp; depth-chart roles by default. Stats from completed games already observed at that timestamp are used, including earlier games in week W, matching the live path. Missing essential history fails; absent/stale optional feeds are recorded with fallbacks. |
 | `legacy-closing` | Prior closing-line horizon, explicitly labeled sensitivity analysis. Only this policy permits `--vegas-horizon`. |
 
 Historical and legacy replay reject the latest depth chart. Live recommendations retain their
@@ -184,15 +193,24 @@ uv run pool backtest --season 2026 --input-policy snapshots --decision-times dec
 uv run pool benchmark --config experiments/phase2-validation.toml --output data/experiments/phase2-validation
 # Continue only when configuration, code, dependencies and frozen dataset match:
 uv run pool benchmark --config experiments/phase2-validation.toml --output data/experiments/phase2-validation --resume
+uv run pool diagnose --run data/experiments/roster-snapshot-repair --out experiments/results/phase3a-readiness
 ```
+
+`diagnose` describes a saved study's rate errors by population, position, rate bin,
+availability and forecast lead horizon, and writes a dated readiness note. Group definitions
+are frozen before any outcome is read, horizons are never pooled — repeated forecasts of one
+target week share its single outcome — and eligible zero rates are counted rather than
+dropped, separately from hard exclusions. It fits no correction and states no conclusion.
 
 Decision CSVs require `season,week,decision_at`, with one timezone-aware timestamp for every
 requested week, such as `2026,1,2026-09-10T18:00:00-04:00`. Observations become available when
 an import succeeds; source publication timestamps never backdate availability. Legacy database
 rows acquire no invented observation times. Later imports may change measured final outcomes
 but cannot alter projections reconstructed from earlier snapshots.
-Freezing and hashing the actual decision CSV contents for benchmark resume remains a Phase 3A
-repair; the current path-based configuration is not a safeguard against same-path content edits.
+The benchmark reads the decision CSV once, while resolving its configuration, and carries the
+timestamps in the resolved specification. They are therefore part of the run's configuration
+hash: editing the file in place and resuming is rejected, and the workers never re-read the
+path. A normalized `decision-times.csv` copy is saved beside the frozen dataset.
 
 Every successful refresh atomically replaces a normalized feed and appends an observation,
 including valid empty feeds. Payloads are compressed and deduplicated; full play-by-play is not

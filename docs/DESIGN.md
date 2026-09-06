@@ -189,8 +189,9 @@ granularity, but the recommendation layer applies an **early-commitment rule**
 for players whose games kick off before the week's main slate: commit early
 unless a considered later-game alternative costs less than the fixed TD
 "information premium." This is a heuristic, not an estimated dynamic value of waiting.
-The considered candidate subset currently depends on `n_alternatives`; making hold advice
-independent of display truncation is an open Phase 3A repair, not a completed guarantee.
+The comparison considers every candidate in the solver's own pool and is independent of
+`n_alternatives`, which sizes only the displayed alternatives. Zero, default and large
+display sizes give the same pick, hold flag, hold alternative and cost.
 Re-solving after early games have locked (or finished) preserves recorded locks and
 excludes elapsed current-week choices. Current season replay calls `plan_slot`, not
 `advise_slot`, once per week, so it does not validate this hold/commit workflow.
@@ -279,7 +280,11 @@ A web dashboard is a possible Phase 4 nicety, not a requirement.
 
 The shared projection loader implements historical, archived-snapshot and legacy-closing
 policies. Historical lines at weeks ≥ W are removed before every team/league average;
-week-one uses the shipped fallback. Stats stop at W−1, weekly reports at W. Final schedule
+week-one uses the shipped fallback. Historical stats stop at W−1 and weekly reports at W.
+One stats contract covers the two paths that have observation times: a completed game
+already observed when the decision was made is available to it, so an early-week result
+enters both live advice and snapshot replay of the same instant. Historical replay keeps
+its W−1 cut because it cannot tell which of week W's games had finished. Final schedule
 revisions, within-week roster/injury timing and later stat corrections remain approximations.
 Historical roles use usage; only observed snapshots support replay of the depth-chart model.
 
@@ -311,9 +316,10 @@ forecasts, future surfaces, picks, per-seed metrics and reports. Operational pic
 
 Generated reports contain facts, methods and provenance; human/AI interpretation belongs in
 the separately authored [analysis](ANALYSIS.md), which reruns do not refresh. The saved historical
-study supports diagnosis, not calibrated production. Phase 3A tracks remaining GLM guards,
-live/snapshot same-week stats parity, decision-CSV content hashing for resume, and prospective
-full-surface/action capture. Initial 2026 feed snapshots are not completed live validation.
+study supports diagnosis, not calibrated production. Live decisions are captured append-only beside the feed archive: the pre-pruning current and
+future surface, each slot's advice and hold/commit call, used/locked state, the resolved input
+observations and the code/constant/model identity. Corrections are new events and outcomes are
+joined at read time, so nothing already recorded changes. Initial 2026 feed snapshots are not completed live validation.
 
 ## 6. Out of scope (for now)
 

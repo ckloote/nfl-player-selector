@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import runpy
 import sqlite3
 import sys
@@ -573,13 +574,17 @@ def test_reports_measure_results_without_interpreting_them(seasons):
         prose.append("\n".join(line for line in report.splitlines() if not line.startswith("|")))
     assert prose[0] == prose[1] == prose[2]
     empty_fit = ev.calibration(pd.DataFrame(dict(hard_eligible=[True], lam=[0.0])))
+    assert empty_fit["fit_status"] == "unsupported"
+    assert empty_fit["reason"] == "no positive-rate rows"
     data["calibration"] = pd.DataFrame(
         [dict(season=s, model="shipped", **empty_fit) for s in seasons]
     )
     report = benchmark.render_reports(data, spec, manifest, Path("data/experiments/test"))[
         "EVALUATION.md"
     ]
-    assert f"| {seasons[0]} | NA | NA | NA | NA | 0 | NA | NA |" in report
+    # No coefficient and no interval, but the excluded population is a count, not an
+    # absence: one eligible zero-rate row was dropped and no positive-rate row remained.
+    assert f"| {seasons[0]} | NA | NA | NA | NA | 0 | 0 | 1 |" in report
 
 
 def test_republish_renders_saved_metrics_without_changing_the_run(tmp_path, monkeypatch):
@@ -725,6 +730,32 @@ def test_calibration_figure_holds_every_plotted_interval():
     svg = figures.slope_by_season({"calibration": _calibration([0.9, 1.137], se=0.05)}, "m")
     height, ys = _viewbox_ys(svg)
     assert ys and all(0 <= y <= height for y in ys)
+
+
+def test_both_fit_warnings_fit_inside_the_slope_figure():
+    """Concatenated onto the estimate line, the two warnings ran about 77px past the
+    720px canvas and the reader lost the end of whichever came second. Monospace at
+    11px overflows near 105 characters, so every caption line has to stay under it."""
+    cal = pd.DataFrame(
+        {
+            "model": "shipped",
+            "season": range(2011, 2026),
+            "slope": [np.nan, np.nan] + [0.85 + i * 0.01 for i in range(13)],
+            "se_slope": [np.nan] * 5 + [0.03] * 10,
+            "intercept": -0.1,
+        }
+    )
+    svg = figures.slope_by_season({"calibration": cal}, "shipped")
+    captions = [
+        m.group(1)
+        for m in re.finditer(r'font-size="11"[^>]*>([^<]*)</text>', svg)
+        if not re.fullmatch(r"[\d.]+", m.group(1))
+    ]
+    assert any("unsupported" in c for c in captions)
+    assert any("cluster SEs" in c for c in captions)
+    assert max(len(c) for c in captions) <= 105
+    # The plot is given the extra room rather than drawn over the caption.
+    assert 'viewBox="0 0 720 335"' in svg
 
 
 def test_the_shipped_calibration_range_is_unchanged():

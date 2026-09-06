@@ -154,7 +154,10 @@ def record_picks(
                 game["game_id"] if game else None,
             )
         )
-    with conn:
+    # A savepoint, not `with conn:`: a plain commit would also commit whatever the
+    # caller had open, so a pick could survive a failure in the same command that
+    # was supposed to record its history alongside it.
+    with db.transaction(conn):
         conn.executemany(
             "INSERT INTO my_picks(season, week, slot, player_id, player_name, "
             "recorded_at, game_id) "
@@ -173,7 +176,7 @@ def remove_pick(conn: sqlite3.Connection, season: int, week: int, slot: str) -> 
     validate_week(conn, season, week)
     if slot not in config.SLOTS:
         raise PickError(f"unknown slot {slot!r}")
-    with conn:
+    with db.transaction(conn):
         cur = conn.execute(
             "DELETE FROM my_picks WHERE season = ? AND week = ? AND slot = ?", (season, week, slot)
         )
@@ -214,6 +217,19 @@ def eastern_now(now: datetime | None = None) -> datetime:
     if now.tzinfo is not None:
         return now.astimezone(ZoneInfo(config.TIMEZONE)).replace(tzinfo=None)
     return now
+
+
+def decision_instant(now: datetime | None = None) -> datetime:
+    """The timezone-aware instant behind an Eastern wall-clock decision time.
+
+    Deadlines compare against kickoffs, which are stored as Eastern wall clock, but
+    which feed observations were available is a question about an instant. Both must
+    describe the same moment, so derive one from the other rather than reading the
+    clock twice. An ambiguous hour on the fall-back boundary resolves to the earlier
+    offset, which can only make a decision look older than it was.
+    """
+    eastern = eastern_now(now)
+    return eastern.replace(tzinfo=ZoneInfo(config.TIMEZONE)).astimezone(UTC)
 
 
 def current_week(conn: sqlite3.Connection, season: int, now: datetime | None = None) -> int:

@@ -12,7 +12,19 @@ from rich.console import Console
 from rich.table import Table
 
 from . import backtest as bt
-from . import config, db, freshness, ingest, models, projections, scoring, snapshots, state
+from . import (
+    capture,
+    config,
+    db,
+    diagnostics,
+    freshness,
+    ingest,
+    models,
+    projections,
+    scoring,
+    snapshots,
+    state,
+)
 from . import evaluate as ev
 from .optimizer import plan_slot
 from .recommend import Candidate, SlotAdvice, advise_week
@@ -74,7 +86,12 @@ def _projections(conn, season: int, wk: int):
 
 
 def _status(conn, season: int, week: int, now: datetime, detail: bool = False):
-    rows, warnings = freshness.report(conn, season, week, now)
+    _print_freshness(*freshness.report(conn, season, week, now), detail=detail)
+
+
+def _print_freshness(rows, warnings, detail: bool = False):
+    """Render a freshness report. Split from reading it so a caller holding a snapshot
+    can gather inside it and print outside, rather than re-reading after it is gone."""
     if detail:
         t = Table(
             "Feed",
@@ -129,18 +146,42 @@ def refresh(season: int = SeasonOpt, db_path: Path | None = DbOpt):
 
 
 @app.command()
-def recommend(week: int | None = WeekOpt, season: int = SeasonOpt, db_path: Path | None = DbOpt):
+def recommend(
+    week: int | None = WeekOpt,
+    season: int = SeasonOpt,
+    db_path: Path | None = DbOpt,
+    capture_decision: bool = typer.Option(
+        True, "--capture/--no-capture", help="Record this decision's inputs, surface and advice"
+    ),
+):
     """Recommend picks for every open slot this week."""
     conn = _conn(db_path)
-    now = state.eastern_now()
-    wk = _week(conn, season, week, now)
-    proj = _projections(conn, season, wk)
-    advice = advise_week(
-        proj, wk, state.used_ids(conn, season), state.locked_by_slot(conn, season), now=now
-    )
+    # One snapshot over the whole decision, taken before the clock. The forecast reads
+    # mutable feed tables and the capture then names the observations behind them by
+    # asking for everything at or before this instant; a refresh landing between the
+    # timestamp and the reads would feed the forecast data the reference excludes.
+    # `snapshot=True` fixes what this connection sees first, because a SAVEPOINT on its
+    # own does not -- so the clock below is now read against data already held. A
+    # concurrent refresh waits, or fails loudly, rather than interleaving.
+    with db.transaction(conn, snapshot=True):
+        # One instant for the whole decision: the Eastern form compares against
+        # kickoffs, the aware form identifies which feed observations were available.
+        now = state.eastern_now()
+        decided = state.decision_instant(now)
+        wk = _week(conn, season, week, now)
+        proj = _projections(conn, season, wk)
+        used, locked = state.used_ids(conn, season), state.locked_by_slot(conn, season)
+        advice = advise_week(proj, wk, used, locked, now=now)
+        if capture_decision:
+            capture.record_decision(
+                conn, season, wk, proj, advice, used, locked, decision_at=decided
+            )
+        # Read inside the snapshot too: a data-age line or a pick name drawn from a
+        # feed the advice never saw would describe a decision that was not made.
+        freshness_rows, freshness_warnings = freshness.report(conn, season, wk, now)
+        recorded_names = state.picks(conn, season).set_index("player_id").player_name.to_dict()
     console.print(f"[bold]Week {wk} — {season}[/bold]")
-    _status(conn, season, wk, now)
-    recorded_names = state.picks(conn, season).set_index("player_id").player_name.to_dict()
+    _print_freshness(freshness_rows, freshness_warnings)
     for a in advice:
         if a.locked_player in recorded_names:
             a.locked_player = recorded_names[a.locked_player]
@@ -248,8 +289,40 @@ def record(
                 team=m.team,
             )
         )
+    # `my_picks` holds the current answer; the capture log holds every answer. Both in
+    # one transaction: a pick that changed without its history leaves no way back to
+    # the identity it overwrote, and retrying cannot recover it.
     try:
-        warnings = state.record_picks(conn, season, wk, entries, now=now)
+        with db.transaction(conn):
+            replaced = {
+                r["slot"]: r["player_id"]
+                for r in conn.execute(
+                    "SELECT slot, player_id FROM my_picks WHERE season = ? AND week = ?",
+                    (season, wk),
+                )
+            }
+            warnings = state.record_picks(conn, season, wk, entries, now=now)
+            for e in entries:
+                prior = replaced.get(e["slot"])
+                if prior is not None and prior != e["player_id"]:
+                    capture.record_action(
+                        conn,
+                        season,
+                        wk,
+                        e["slot"],
+                        "correction",
+                        prior,
+                        dict(replaced_by=e["player_id"]),
+                    )
+                capture.record_action(
+                    conn,
+                    season,
+                    wk,
+                    e["slot"],
+                    "submitted",
+                    e["player_id"],
+                    dict(player_name=e["player_name"], team=e.get("team"), replaced=prior),
+                )
     except state.PickError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1) from e
@@ -265,7 +338,22 @@ def unrecord(week: int, slot: str, season: int = SeasonOpt, db_path: Path | None
     conn = _conn(db_path)
     _week(conn, season, week)
     try:
-        ok = state.remove_pick(conn, season, week, slot.upper())
+        with db.transaction(conn):
+            removed = conn.execute(
+                "SELECT player_id FROM my_picks WHERE season = ? AND week = ? AND slot = ?",
+                (season, week, slot.upper()),
+            ).fetchone()
+            ok = state.remove_pick(conn, season, week, slot.upper())
+            if ok:
+                capture.record_action(
+                    conn,
+                    season,
+                    week,
+                    slot.upper(),
+                    "correction",
+                    removed["player_id"],
+                    dict(removed=True),
+                )
     except state.PickError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1) from e
@@ -910,6 +998,34 @@ def _render_evaluation(df, baseline: str, k: int) -> None:
     console.print(
         ev.replay_summary(pd.DataFrame(df.attrs["replays"]), baseline).to_string(index=False)
     )
+
+
+@app.command()
+def diagnose(
+    run: Annotated[Path, typer.Option("--run", help="A completed benchmark output directory")],
+    out: Annotated[Path, typer.Option("--out", help="Where to write the diagnostic export")],
+    model: str = typer.Option("shipped", help="Model whose saved surface to diagnose"),
+    seed: int = typer.Option(-1, help="Seed; -1 is the deterministic sentinel"),
+    seasons: str | None = typer.Option(None, "--season", help="Season or range, e.g. 2019-2025"),
+):
+    """Describe a saved study's rate errors by population, position, rate, availability
+    and forecast horizon, and write a dated readiness note.
+
+    Descriptive only: it fits no correction and selects no model. Group definitions are
+    frozen before any outcome is read.
+    """
+    try:
+        diagnostics.export(
+            run,
+            out,
+            model=model,
+            seed=seed,
+            seasons=_seasons(seasons) if seasons else None,
+            log=console.print,
+        )
+    except (ValueError, OSError, KeyError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
 
 
 @app.command()

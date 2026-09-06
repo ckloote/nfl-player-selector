@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import backtest, config, db, ingest, models, projections, scoring
+from . import backtest, config, db, ingest, models, projections, scoring, snapshots
 from . import evaluate as ev
 
 SCHEMA_VERSION = 1
@@ -119,11 +119,61 @@ def resolve(path):
         raise ValueError("Benchmark requires both greedy and optimizer replays")
     if spec.get("scoring_corrections"):
         spec["resolved_corrections"] = json.loads((ROOT / spec["scoring_corrections"]).read_text())
+    spec["resolved_decision_times"] = decision_time_records(spec)
     spec["workers"] = int(spec.get("workers", 1))
     if not 1 <= spec["workers"] <= 4:
         raise ValueError("workers must be between 1 and 4")
     spec["production_constants"] = constants()
     return spec
+
+
+def decision_time_records(spec):
+    """Read the decision CSV's contents into the specification, before anything runs.
+
+    Resume compared a path. Editing the file in place left the configuration hash
+    untouched, so a run could be continued against timestamps it had never seen, and
+    the workers -- separate processes, each re-reading the path relative to its own
+    working directory -- were the first thing to look at the file at all. The contents
+    belong to the run identity, the same way the reviewed scoring correction does.
+    """
+    path = spec.get("decision_times")
+    snapshot_policy = spec["input_policy"] == "snapshots"
+    if snapshot_policy and path is None:
+        raise ValueError("input_policy = 'snapshots' requires decision_times")
+    if path is not None and not snapshot_policy:
+        raise ValueError("decision_times requires input_policy = 'snapshots'")
+    if path is None:
+        return []
+    times = snapshots.decision_times(ROOT / path)
+    return [
+        dict(season=int(season), week=int(week), decision_at=stamp)
+        for (season, week), stamp in sorted(times.items())
+    ]
+
+
+def frozen_decision_times(spec):
+    """The frozen mapping, in the shape the replay layer expects."""
+    records = spec.get("resolved_decision_times") or []
+    return {(r["season"], r["week"]): r["decision_at"] for r in records} or None
+
+
+def require_decision_times(conn, spec):
+    """Every week the run will replay needs a timestamp, checked before any worker.
+
+    `weekly_inputs` also refuses a missing week, but only once a worker has reached
+    that season -- after the manifest is written and hours into a fifteen-season run.
+    """
+    times = frozen_decision_times(spec)
+    if times is None:
+        return
+    missing = [
+        (season, week)
+        for season in spec["seasons"]
+        for week in projections.available_weeks(conn, season)
+        if (season, week) not in times
+    ]
+    if missing:
+        raise ValueError(f"decision_times is missing timestamps for {missing}")
 
 
 def audit(conn, spec):
@@ -285,6 +335,19 @@ def save_frame(path, frame):
     tmp.replace(path)
 
 
+CALIBRATION_COLUMNS = (
+    "intercept",
+    "slope",
+    "se_intercept",
+    "se_slope",
+    "slope_lo",
+    "slope_hi",
+    "n",
+    "clusters",
+    "dropped_zero_lam",
+)
+
+
 def evaluate_season(conn, season, spec, directory, log):
     directory.mkdir(parents=True, exist_ok=True)
     chosen = {name: models.get(name) for name in spec["models"]}
@@ -304,9 +367,10 @@ def evaluate_season(conn, season, spec, directory, log):
         )
     }
     forecast_parts, provenance = [], []
-    from . import snapshots
-
-    times = snapshots.decision_times(spec["decision_times"]) if spec.get("decision_times") else None
+    # The frozen contents carried in the specification, never a re-read of the path:
+    # a worker is a separate process with its own working directory, and by the time it
+    # runs, the file on disk is no longer part of anything the run identity covers.
+    times = frozen_decision_times(spec)
     for model, seed, common, loaded, frames in ev.season_frames(
         conn,
         season,
@@ -355,9 +419,22 @@ def evaluate_season(conn, season, spec, directory, log):
                         ev.paired_ranking_seasons(paired, spec["baseline"], k, rank)
                     )
         if spec["calibration"]:
+            # Artifact schema 1 columns only. The guarded fit's status, reason and
+            # zero-rate breakdown belong to the Phase 3A diagnostics export; widening a
+            # published artifact's schema in place would leave two different files both
+            # claiming to be schema 1.
             fit = ev.calibration(df)
             metrics["calibration"].append(
-                pd.DataFrame([dict(model=model, seed=seed, season=season, **fit)])
+                pd.DataFrame(
+                    [
+                        dict(
+                            model=model,
+                            seed=seed,
+                            season=season,
+                            **{k: fit[k] for k in CALIBRATION_COLUMNS},
+                        )
+                    ]
+                )
             )
             rel = ev.reliability(df)
             rel["bin"] = rel["bin"].astype(str)
@@ -609,6 +686,7 @@ def run(config_path, output, *, resume=False, log=print):
     conn.row_factory = sqlite3.Row
     try:
         coverage = audit(conn, spec)
+        require_decision_times(conn, spec)
         code = code_identity()
         dependencies = {
             name: importlib.metadata.version(name)
@@ -646,6 +724,11 @@ def run(config_path, output, *, resume=False, log=print):
             )
             write_json(output / "resolved-config.json", spec)
             save_frame(output / "coverage.csv", coverage)
+            if spec["resolved_decision_times"]:
+                # The normalised copy the run actually used, beside the frozen dataset.
+                save_frame(
+                    output / "decision-times.csv", pd.DataFrame(spec["resolved_decision_times"])
+                )
             write_json(manifest_path, manifest)
         pending = []
         for season in spec["seasons"]:
