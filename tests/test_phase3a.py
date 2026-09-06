@@ -173,6 +173,59 @@ def test_a_population_that_identifies_nothing_yields_a_reason_not_a_coefficient(
     assert set(ev.FIT_KEYS) <= set(fit)
 
 
+def test_separation_is_refused_rather_than_certified():
+    """Every outcome zero on one side of a threshold and positive on the other: the
+    likelihood climbs without bound and the estimate does not exist. IRLS still came to
+    rest -- against the clip that keeps `exp` from overflowing -- and reported slope
+    300 with `converged=True` and an interval of no width."""
+    y, x = np.tile([0.0, 1.0], 100), np.tile([-0.1, 0.0], 100)
+    fit = ev.poisson_glm(y, x, np.arange(len(y)))
+    assert fit["fit_status"] == ev.FIT_UNSUPPORTED
+    assert fit["reason"] == "no finite maximum-likelihood estimate (separation)"
+    assert np.isnan(fit["slope"]) and np.isnan(fit["se_slope"])
+    assert not fit["cluster_se"]
+
+
+def test_a_separated_population_is_refused_however_it_fails():
+    """A wider gap between the two levels diverges instead of settling on the clip, so
+    it is the iteration guard that catches it rather than the separation check. Either
+    way it must not come back as an estimate; the control proves the guards are
+    refusing separation and not merely any two-level design."""
+    rng = np.random.default_rng(21)
+    x = np.repeat([0.0, 2.0], 500)
+    separated = np.concatenate([np.zeros(500), rng.poisson(4.0, 500) + 1.0])
+    fit = ev.poisson_glm(separated, x, np.arange(len(x)))
+    assert fit["fit_status"] == ev.FIT_UNSUPPORTED
+    assert np.isnan(fit["slope"])
+
+    both_score = np.concatenate([rng.poisson(0.3, 500), rng.poisson(4.0, 500)])
+    control = ev.poisson_glm(both_score, x, np.arange(len(x)))
+    assert control["fit_status"] == ev.FIT_OK
+    assert np.isfinite(control["slope"])
+
+
+@pytest.mark.skipif(not STUDY.exists(), reason="saved study artifacts are not checked in")
+def test_an_interior_fit_is_nowhere_near_the_refusal_bounds():
+    """The guards must refuse a non-existent estimate without touching a real one. The
+    published season rests four log units from the clip and thirteen orders of
+    magnitude from the conditioning bound."""
+    df = pd.read_parquet(STUDY / "2019" / "forecasts.parquet")
+    sub = df[df.model.eq("shipped") & df.seed.eq(-1) & df.hard_eligible & df.lam.gt(0)]
+    x = np.log(sub.lam.to_numpy(dtype=float))
+    fit = ev.poisson_glm(
+        sub.actual_tds.to_numpy(dtype=float),
+        x,
+        (sub.player_id + "|" + sub.season.astype(str)).to_numpy(),
+    )
+    assert fit["fit_status"] == ev.FIT_OK
+    design = np.column_stack([np.ones_like(x), x])
+    eta = design @ np.array([fit["intercept"], fit["slope"]])
+    mu = np.exp(eta)
+    assert np.max(np.abs(eta)) < ev.LINEAR_PREDICTOR_BOUND / 3
+    condition = np.linalg.cond(design.T @ (design * mu[:, None]))
+    assert condition < ev.MAX_INFORMATION_CONDITION / 1e6
+
+
 def test_exhausted_iterations_are_a_refusal_not_a_partial_answer():
     """A fit stopped mid-Newton is not an estimate; the old loop returned it silently."""
     y, x = _varied(2000, seed=4)

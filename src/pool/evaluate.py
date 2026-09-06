@@ -373,6 +373,17 @@ def reliability(df: pd.DataFrame, bins: Sequence[float] = LAMBDA_BINS) -> pd.Dat
 FIT_OK = "ok"
 FIT_UNSUPPORTED = "unsupported"
 
+# The linear predictor is clipped so a diverging IRLS step cannot overflow `exp`. A
+# solution that comes to rest *on* that bound was stopped by the guard rather than by
+# the data: the likelihood was still climbing, and the step only looked small because
+# the clip had flattened it. On this population a rate of `exp(30)` touchdowns is not a
+# large estimate, it is an absent one.
+LINEAR_PREDICTOR_BOUND = 30.0
+# Above this, the observed information is numerically singular and `pinv` is silently
+# discarding a direction, so the "estimate" in that direction is whatever the
+# pseudoinverse chose. The separation fixture reaches 1e15; interior fits sit near 1e0.
+MAX_INFORMATION_CONDITION = 1e12
+
 FIT_KEYS = (
     "intercept",
     "slope",
@@ -433,10 +444,12 @@ def poisson_glm(
     Every return carries `fit_status`, `reason`, `converged`, `iterations` and
     `cluster_se`, so a caller can never mistake a refusal for an estimate. Empty
     inputs, non-finite inputs, negative outcomes, `n <= 2`, a rank-deficient design
-    (a constant log rate), all-zero outcomes and exhausted iterations are
-    unsupported and return NaN coefficients. Fewer than `min_clusters` clusters
-    keeps the point estimates and suppresses the cluster-robust uncertainty:
-    the coefficients are still identified, the sandwich is not.
+    (a constant log rate), all-zero outcomes, exhausted iterations and a solution with
+    no finite maximum -- separation, where the likelihood climbs forever and IRLS still
+    reports a tidy coefficient -- are unsupported and return NaN coefficients.
+    Fewer than `min_clusters` clusters keeps the point estimates and suppresses the
+    cluster-robust uncertainty: the coefficients are still identified, the sandwich
+    is not.
     """
     min_clusters = config.MIN_INFERENCE_CLUSTERS if min_clusters is None else min_clusters
     y = np.asarray(y, dtype=float)
@@ -466,7 +479,7 @@ def poisson_glm(
     beta = np.zeros(2)
     converged, iterations = False, 0
     for iterations in range(1, max_iter + 1):
-        mu = np.exp(np.clip(design @ beta, -30, 30))
+        mu = np.exp(np.clip(design @ beta, -LINEAR_PREDICTOR_BOUND, LINEAR_PREDICTOR_BOUND))
         grad = design.T @ (y - mu)
         hess = design.T @ (design * mu[:, None])
         if not (np.isfinite(grad).all() and np.isfinite(hess).all()):
@@ -481,8 +494,28 @@ def poisson_glm(
     if not converged:
         return _unsupported_fit("iterations exhausted before convergence", n, n_groups, iterations)
 
-    mu = np.exp(np.clip(design @ beta, -30, 30))
-    bread = np.linalg.pinv(design.T @ (design * mu[:, None]))
+    # Converging is not the same as landing on a maximum. Under separation -- every
+    # outcome zero on one side of a threshold and positive on the other -- the
+    # likelihood climbs without bound and the estimate does not exist, yet IRLS reports
+    # a tidy slope with an interval of no width. Two checks catch it, both on the
+    # solution rather than on the path taken to it.
+    eta = design @ beta
+    if np.max(np.abs(eta)) >= LINEAR_PREDICTOR_BOUND:
+        return _unsupported_fit(
+            "no finite maximum-likelihood estimate (separation)", n, n_groups, iterations
+        )
+    mu = np.exp(eta)
+    information = design.T @ (design * mu[:, None])
+    if (
+        np.linalg.matrix_rank(design * np.sqrt(mu)[:, None]) < 2
+        or not np.isfinite(np.linalg.cond(information))
+        or np.linalg.cond(information) > MAX_INFORMATION_CONDITION
+    ):
+        return _unsupported_fit(
+            "weighted design is rank deficient at the solution", n, n_groups, iterations
+        )
+
+    bread = np.linalg.pinv(information)
     resid = (y - mu)[:, None] * design
     groups = pd.Series(cluster)
     meat = np.zeros((2, 2))
