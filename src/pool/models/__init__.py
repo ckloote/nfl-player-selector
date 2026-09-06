@@ -21,6 +21,7 @@ from collections.abc import Callable
 
 import pandas as pd
 
+from . import baselines
 from .baselines import (
     base_rate_only,
     current_season_rate,
@@ -75,7 +76,16 @@ def get(name: str) -> Builder | None:
     return BUILDERS[name]
 
 
-__all__ = ["BAKEOFF", "BUILDERS", "NULLS", "Builder", "get"]
+__all__ = [
+    "BAKEOFF",
+    "BUILDERS",
+    "CALIBRATED",
+    "Builder",
+    "NULLS",
+    "calibrated",
+    "get",
+    "register_calibrated",
+]
 
 
 def seeded(name: str, seed: int) -> Builder | None:
@@ -105,3 +115,41 @@ def parse_seeds(spec: str) -> list[int]:
             "seeds must be nonnegative integers or ranges, e.g. 0-19 or 1,3,5-8"
         ) from None
     return sorted(set(out))
+
+
+# --- Calibrated candidates (Phase 3B) ---------------------------------------
+# Names registered here at run time, never shipped in `BUILDERS`. A fitted map is
+# fold-dependent, so the builder closes over one fold's artifact and cannot be a
+# module-level constant; and `evaluate.season_frames` validates every model name
+# against this registry, so a candidate has to be visible here before it runs.
+CALIBRATED: set[str] = set()
+
+
+def calibrated(mapper: Callable[[pd.DataFrame], object]) -> Builder:
+    """A builder that keeps the shipped scaffold and replaces only `lam`.
+
+    The scaffold is the shipped frame, so the candidate pool, hard eligibility,
+    availability and bye handling are the shipped model's own — a calibration map
+    that changed who is eligible would not be a calibration map.
+    """
+
+    def build(frames, from_week: int = 1, role_source: str | None = None) -> pd.DataFrame:
+        proj = baselines._scaffold(frames, from_week, role_source)
+        return baselines._with_lam(proj, mapper(proj))
+
+    return build
+
+
+def register_calibrated(name: str, builder: Builder) -> None:
+    """Make a fitted candidate resolvable by name, refusing to shadow a real model.
+
+    Re-registering the same calibrated name is allowed: a single-worker run walks
+    several seasons in one process and each season binds its own fold's artifact.
+    Shadowing a shipped model is not, because every saved artifact — forecasts,
+    surfaces, picks — is keyed by that name, and two different functions answering
+    to `shipped` would be indistinguishable afterwards.
+    """
+    if name in BUILDERS and name not in CALIBRATED:
+        raise ValueError(f"calibrated candidate {name!r} would shadow a registered model")
+    BUILDERS[name] = builder
+    CALIBRATED.add(name)

@@ -69,6 +69,65 @@ for path in sorted((output / "compact").iterdir()):
         shutil.copy2(path, published / path.name)
 shutil.copy2(output / "verification.json", published / "verification.json")
 
+calibrated = spec.get("calibration_experiment")
+
+
+def presentation(sources):
+    """Rendering does not execute the recorded model implementation. Preserve its identity
+    and record the current presentation sources separately, including uncommitted edits."""
+    benchmark.write_json(
+        published / "presentation.json",
+        dict(
+            schema_version=1,
+            metric_source_hash=verification["source_hash"],
+            dataset_hash=verification["dataset_hash"],
+            source_hashes={path: benchmark.digest(benchmark.ROOT / path) for path in sources},
+        ),
+    )
+
+
+PRESENTATION_NOTE = (
+    "\n### Presentation\n\n"
+    "Rendered from saved compact metrics; no forecasts, replays, or calibration fits "
+    "were recomputed. `presentation.json` records the rendering-source hashes. "
+    "The metric manifest and original verification record are unchanged.\n"
+)
+
+if calibrated is not None:
+    # The Phase 3B report is written by the run from its own saved tables, so publication
+    # copies it rather than re-rendering it: there is no second renderer to drift. The
+    # bake-off's figures are drawn for the bake-off's metric set and are not reused.
+    presentation(("src/pool/benchmark.py", "experiments/publish.py", "experiments/appendix.py"))
+    report = (output / "compact" / "CALIBRATION.md").read_text()
+    report += appendix.run_verification(verification)
+    report += PRESENTATION_NOTE
+    # The appendix links are written relative to `docs/`; this report lives two levels
+    # deeper and is not copied there, because Phase 3B is an experiment rather than the
+    # project's standing evaluation.
+    (published / "CALIBRATION.md").write_text(
+        report.replace("(../experiments/README.md)", "(../../README.md)")
+    )
+    (published / "README.md").write_text(
+        f"# Verified results: {experiment}\n\n"
+        "A Phase 3B chronological calibration experiment. `folds.csv` holds every fitted "
+        "group in every fold with the fit that produced it and the hash of the artifact it "
+        "came from; `paired-deviance.csv` is the primary forecast estimand; `policy.csv` "
+        "compares each candidate against identity's replay of the same strategy; "
+        "`decision-changes.csv` and `advice-changes.csv` count assignment and static "
+        "hold disagreements. Individual picks are stored as deterministic `picks.csv.gz`.\n\n"
+        "The generated [report](CALIBRATION.md) states facts, methods and provenance. It "
+        "selects no candidate: the promotion rule is in the resolved configuration here, "
+        "and applying it is a separate, dated authoring step. Production constants are "
+        "unchanged and nothing in this directory deploys a calibrated model.\n\n"
+        f"Published with `uv run python experiments/publish.py {experiment}` after "
+        f"`uv run python experiments/verify.py {experiment}` and a benchmark resume check. "
+        "Fold artifacts, out-of-fold surfaces and the frozen database remain in the ignored "
+        f"`data/experiments/{experiment}` directory. "
+        f"Matching source implementation: `{verification['implementation_commit']}`.\n"
+    )
+    print(f"Published {len(list(published.iterdir()))} artifacts to {published}")
+    raise SystemExit(0)
+
 # Figures are a rendering of the exported metrics, so they are drawn here rather than
 # in the run: a caption change must not invalidate a checkpoint.
 metrics = {
@@ -87,24 +146,13 @@ figure_dir.mkdir(exist_ok=True)
 for name, svg in figures.render(metrics, spec["baseline"]).items():
     (figure_dir / f"{name}.svg").write_text(svg)
 
-# Rendering does not execute the recorded model implementation. Preserve its identity
-# and record the current presentation sources separately, including uncommitted edits.
-benchmark.write_json(
-    published / "presentation.json",
-    dict(
-        schema_version=1,
-        metric_source_hash=verification["source_hash"],
-        dataset_hash=verification["dataset_hash"],
-        source_hashes={
-            path: benchmark.digest(benchmark.ROOT / path)
-            for path in (
-                "src/pool/benchmark.py",
-                "experiments/publish.py",
-                "experiments/figures.py",
-                "experiments/appendix.py",
-            )
-        },
-    ),
+presentation(
+    (
+        "src/pool/benchmark.py",
+        "experiments/publish.py",
+        "experiments/figures.py",
+        "experiments/appendix.py",
+    )
 )
 
 
@@ -119,12 +167,7 @@ def with_figures(text, prefix):
 
 for name, text in benchmark.render_reports(metrics, spec, manifest, output).items():
     text += appendix.run_verification(verification)
-    text += (
-        "\n### Presentation\n\n"
-        "Rendered from saved compact metrics; no forecasts, replays, or calibration fits "
-        "were recomputed. `presentation.json` records the rendering-source hashes. "
-        "The metric manifest and original verification record are unchanged.\n"
-    )
+    text += PRESENTATION_NOTE
     beside = with_figures(text, "figures/")
     (published / name).write_text(
         beside.replace("(../experiments/README.md)", "(../../README.md)").replace(

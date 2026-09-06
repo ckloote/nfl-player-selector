@@ -1,4 +1,4 @@
-# Phase 2 experiments
+# Experiments
 
 `phase2-validation.toml` is the dated specification. It uses all ten registered models,
 shipped production constants, baseline `shipped`, historical inputs and usage roles, shuffled
@@ -123,6 +123,67 @@ counted instead, separately from hard exclusions, whose zero is a mask rather th
 | `zero-accounting.csv` | Eligible zero rates and hard exclusions, counted separately, with how many scored anyway |
 | `coverage.csv` | Rows with and without a resolved outcome, by season and horizon |
 | `identities.json`, `READINESS.md` | Source, dataset, configuration and diagnostics-module identities, and a dated note of measurements and limits |
+
+## Phase 3B calibration experiment
+
+`experiments/phase3-calibration.toml` is the dated, frozen specification for the chronological
+train/apply experiment. It declares the fold schedule, the candidate families, the population,
+the weighting, the fallback, the primary estimand and the decision margins before anything is
+fitted; every one of those keys enters the resolved configuration and so the run identity, and
+`benchmark.resolve` refuses a run that omits a margin. Amending any of them starts a new
+experiment rather than continuing this one.
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 uv run pool benchmark \
+  --config experiments/phase3-calibration.toml \
+  --output data/experiments/phase3-calibration
+uv run python experiments/verify.py phase3-calibration <tests-passed>
+uv run python experiments/publish.py phase3-calibration
+```
+
+The run has three stages with a barrier between each, and each stage checkpoints and resumes
+the same way a benchmark season does.
+
+| Stage | Output | What it is |
+|---|---|---|
+| pairs | `pairs/<season>/` | The identity model over every configured season: the forecast/outcome pairs a fold trains on |
+| folds | `folds/<Y>/<candidate>.json` | One fitted artifact per candidate per fold, with its coefficients, fit status, training keys digest, cutoff and content hash |
+| apply | `apply/<season>/` | Identity and every candidate over the apply seasons: raw and mapped surfaces, independent replays, metrics |
+
+The map is `exp(a) * lam ** b` on positive rates. `level` fixes the exponent at one and
+estimates the scale alone; `log_affine` estimates both and refuses a non-positive exponent,
+which would rank a better forecast below a worse one. Identity is mandatory. Each family is
+fitted pooled and by position, with WR and TE separate because they share the FLEX slot. The
+map acts on the availability-adjusted rate — the quantity the optimizer consumes and the one
+Phase 3A described — before pruning and before the future discount. `avail_mult`,
+`hard_eligible` and the keys are untouched, and a zero rate maps to zero, so the population the
+primary metric scores is identical for every candidate.
+
+Fold Y trains on `train_start..Y-1` only. A training row needs its target week played and
+scored, not merely an early forecast timestamp, and the artifact records a digest of the exact
+keys that entered the fit so that "no evaluation-season row reached this coefficient" is
+checkable afterwards rather than asserted. Eligible zero rates cannot enter a fit on
+`log(lambda)`: they are excluded and counted, as in the 3A export. A group below the declared
+row or cluster minimum, or whose fit is unsupported, takes the declared fallback and records
+which one it took.
+
+| Artifact | Row definition |
+|---|---|
+| `folds.csv` | Every fitted group in every fold: coefficients, source, fit status and reason, training rows, digest and artifact hash |
+| `paired-deviance.csv` | The primary estimand — paired change in season-mean Poisson deviance on the fixed all-eligible current-week population — with the Holm rank and level for the pre-registered comparisons |
+| `policy.csv` | Achieved TDs per season and each candidate against identity's replay of the *same* strategy, never against identity greedy |
+| `decision-changes.csv` | How often a candidate's replay chose a different player than identity's did |
+| `advice.csv`, `advice-changes.csv` | Static `advise_slot` sensitivity: replay makes one decision per week through `plan_slot`, so a flipped hold is a mechanism, not a touchdown gained by waiting |
+| `surface-<candidate>-<seed>.parquet` | The out-of-fold surface, carrying the mapped rate as `lam` and the rate it was mapped from as `original_lam` |
+
+`experiments/phase3-calibration-smoke.toml` is a two-season mechanics check, not evidence. It
+exists so the stages, the barrier, the artifact hashes and resume can be exercised end to end.
+Point a fresh output directory at a copy of an existing `dataset.sqlite` to skip re-ingestion.
+
+The generated `CALIBRATION.md` states facts, methods and provenance. It selects no candidate:
+the promotion rule is in the frozen configuration, and applying it is a separate, dated
+authoring step, exactly as the bake-off keeps its report separate from
+[docs/ANALYSIS.md](../docs/ANALYSIS.md). Keeping the model unchanged is a valid outcome.
 
 ## Measurements And Interpretation
 

@@ -1316,10 +1316,11 @@ def test_no_fit_pools_two_forecast_horizons(tmp_path, monkeypatch):
     current = rows[rows.lead_horizon.eq(0)]
     future = rows[rows.lead_horizon.gt(0)]
     assert (
-        len(set(diagnostics._cluster(current))) == current.groupby(["player_id", "season"]).ngroups
+        len(set(diagnostics.cluster_key(current)))
+        == current.groupby(["player_id", "season"]).ngroups
     )
     assert (
-        len(set(diagnostics._cluster(future)))
+        len(set(diagnostics.cluster_key(future)))
         == future.groupby(["player_id", "season", "week"]).ngroups
     )
     # The repetition is real: a target week is forecast from several decision weeks.

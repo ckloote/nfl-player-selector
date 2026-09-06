@@ -205,7 +205,7 @@ def population_masks(rows: pd.DataFrame) -> dict[str, pd.Series]:
     return {name: masks[name] for name in POPULATIONS}
 
 
-def _cluster(sub: pd.DataFrame) -> np.ndarray:
+def cluster_key(sub: pd.DataFrame) -> np.ndarray:
     """Repeated forecasts of one target share its outcome, so the outcome is the unit.
 
     At horizon 0 there is one forecast per player-week and the binding repetition is a
@@ -295,7 +295,7 @@ def strata(rows: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         fit = ev.poisson_glm(
             scored.actual_tds.to_numpy(dtype=float),
             np.log(scored.lam.to_numpy(dtype=float)),
-            _cluster(scored),
+            cluster_key(scored),
         )
         fitted.append({**key, **fit})
     return pd.DataFrame(described), pd.DataFrame(fitted)
@@ -316,7 +316,7 @@ def by_season(rows: pd.DataFrame) -> pd.DataFrame:
             fit = ev.poisson_glm(
                 scored.actual_tds.to_numpy(dtype=float),
                 np.log(scored.lam.to_numpy(dtype=float)),
-                _cluster(scored),
+                cluster_key(scored),
             )
             out.append(dict(population=population, season=int(season), horizon=horizon, **fit))
     return pd.DataFrame(out)

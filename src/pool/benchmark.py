@@ -123,8 +123,89 @@ def resolve(path):
     spec["workers"] = int(spec.get("workers", 1))
     if not 1 <= spec["workers"] <= 4:
         raise ValueError("workers must be between 1 and 4")
+    if "calibration_experiment" in spec:
+        resolve_calibration(spec)
     spec["production_constants"] = constants()
     return spec
+
+
+def resolve_calibration(spec):
+    """Validate the Phase 3B experiment declaration, before a single pair is read.
+
+    Everything checked here ends up in the specification dict, and the specification is
+    what the run identity hashes, so a fold schedule, a family, a fallback or a margin
+    cannot be changed after the fact without invalidating every checkpoint. The margins
+    especially: the plan says a missing margin blocks execution, because a threshold
+    chosen once the estimate is on screen is not a threshold.
+    """
+    from . import calibration as cal
+
+    c = spec["calibration_experiment"]
+    if not spec.get("export_future_forecasts"):
+        raise ValueError("A calibration experiment fits the future surface; export it")
+    if spec["models"] != [spec["baseline"]]:
+        raise ValueError("A calibration experiment runs one base model: its own baseline")
+    unknown = sorted(set(c.get("families", [])) - set(cal.FAMILIES))
+    if not c.get("families") or unknown:
+        raise ValueError(
+            f"Unknown calibration families {unknown}; choose from {list(cal.FAMILIES)}"
+        )
+    unknown = sorted(set(c.get("groupings", [])) - set(cal.GROUPINGS))
+    if not c.get("groupings") or unknown:
+        raise ValueError(
+            f"Unknown calibration groupings {unknown}; choose from {list(cal.GROUPINGS)}"
+        )
+    c["apply_seasons"] = sorted(set(c.get("apply_seasons", [])))
+    outside = [y for y in c["apply_seasons"] if y not in set(spec["seasons"])]
+    if not c["apply_seasons"] or outside:
+        raise ValueError(f"Apply seasons {outside} are not replayed seasons of this run")
+    if c.get("train_start") is None or c["train_start"] <= spec["history_start"]:
+        raise ValueError("train_start must be a replayed season after history_start")
+    if min(c["apply_seasons"]) <= c["train_start"]:
+        raise ValueError("The first apply season must leave at least one training season")
+    missing = [
+        y for y in range(c["train_start"], max(c["apply_seasons"])) if y not in spec["seasons"]
+    ]
+    if missing:
+        raise ValueError(f"Training seasons {missing} are not replayed by this run")
+    for name, expected in (
+        ("map_target", cal.MAP_TARGET),
+        ("fit_horizons", cal.FIT_HORIZONS),
+        ("row_weight", cal.ROW_WEIGHT),
+        ("cluster", cal.CLUSTER),
+        ("zero_rate_policy", cal.ZERO_RATE_POLICY),
+    ):
+        if c.get(name) != expected:
+            raise ValueError(
+                f"calibration_experiment.{name} must be {expected!r}; "
+                f"this run declares {c.get(name)!r}"
+            )
+    if list(c.get("fallback", ())) != list(cal.FALLBACK):
+        raise ValueError(f"calibration_experiment.fallback must be {list(cal.FALLBACK)}")
+    for name in ("min_rows", "min_clusters"):
+        if int(c.get(name, 0)) <= 0:
+            raise ValueError(f"calibration_experiment.{name} must be a positive integer")
+    if not c.get("specification_date"):
+        raise ValueError("A calibration experiment must be dated before it is fitted")
+    margins = c.get("margins") or {}
+    absent = [k for k in cal.REQUIRED_MARGINS if not isinstance(margins.get(k), (int, float))]
+    if absent:
+        raise ValueError(
+            f"calibration_experiment.margins is missing {absent}; a missing margin blocks the run"
+        )
+    # A name already registered as a calibrated candidate is this runner's own, from an
+    # earlier run in the same process. Only a shipped model is a collision.
+    collisions = [
+        n
+        for _f, _g, n in cal.candidates(spec)
+        if n in models.BUILDERS and n not in models.CALIBRATED
+    ]
+    if collisions:
+        raise ValueError(f"Calibration candidates {collisions} would shadow registered models")
+    # The primary metric is the all-eligible current-week population, not the tail the
+    # bake-off scores, so the floor travels in the specification rather than defaulting.
+    spec["deviance_floor"] = float(c.get("deviance_floor", 0.0))
+    spec["advice_sensitivity"] = bool(c.get("advice_sensitivity", True))
 
 
 def decision_time_records(spec):
@@ -311,6 +392,7 @@ def save_frame(path, frame):
     keys = [
         k
         for k in (
+            "fold",
             "season",
             "model",
             "seed",
@@ -348,9 +430,37 @@ CALIBRATION_COLUMNS = (
 )
 
 
-def evaluate_season(conn, season, spec, directory, log):
+def write_checkpoint(directory):
+    """Seal a completed stage directory by hashing everything it wrote."""
+    files = {p.name: digest(p) for p in sorted(directory.iterdir()) if p.name != "checkpoint.json"}
+    write_json(directory / "checkpoint.json", dict(schema_version=SCHEMA_VERSION, files=files))
+
+
+def checkpoint_complete(directory, label):
+    """True if `directory` holds a checkpoint whose artifacts still hash as recorded."""
+    checkpoint = directory / "checkpoint.json"
+    if not checkpoint.exists():
+        return False
+    saved = json.loads(checkpoint.read_text())
+    if any(
+        not (directory / name).exists() or digest(directory / name) != checksum
+        for name, checksum in saved["files"].items()
+    ):
+        raise ValueError(f"Checkpoint artifact hash mismatch for {label}")
+    return True
+
+
+def evaluate_season(conn, season, spec, directory, log, candidates=None):
     directory.mkdir(parents=True, exist_ok=True)
     chosen = {name: models.get(name) for name in spec["models"]}
+    for name, builder in (candidates or {}).items():
+        # `season_frames` validates every name against the model registry, and a fitted
+        # candidate is not in it until its fold has been fitted -- which is inside this
+        # process, because a builder closing over an artifact cannot be pickled here.
+        models.register_calibrated(name, builder)
+    chosen |= candidates or {}
+    base_frames = None
+    advice_parts = []
     actuals = backtest.actual_tds(conn, season)
     reference = None
     metrics = {
@@ -442,10 +552,18 @@ def evaluate_season(conn, season, spec, directory, log):
             paired = (
                 df if model == spec["baseline"] else pd.concat([reference, df], ignore_index=True)
             )
-            dev = ev.deviance_seasons(paired, spec["baseline"])
+            dev = ev.deviance_seasons(
+                paired, spec["baseline"], spec.get("deviance_floor", ev.DEVIANCE_FLOOR)
+            )
             metrics["deviance"].append(dev[dev.model == model])
             metrics["spearman"].append(ev.spearman_seasons(df))
         forecast_parts.append(df)
+        if model == spec["baseline"] and seed == -1:
+            base_frames = frames
+        if spec.get("advice_sensitivity"):
+            from . import calibration as cal
+
+            advice_parts.append(cal.advice_rows(frames, common, model, seed, season))
         if spec["export_future_forecasts"]:
             surfaces = pd.concat(
                 [
@@ -464,6 +582,28 @@ def evaluate_season(conn, season, spec, directory, log):
                 ],
                 ignore_index=True,
             )
+            if spec.get("calibration_experiment"):
+                # Only in a calibration experiment. The mapped rate is `lam` and the rate
+                # it was mapped from travels beside it, so a saved surface says what the
+                # map did without rejoining the identity export to find out. Adding it to
+                # every run would leave two different files both claiming artifact schema 1.
+                if candidates and model in candidates:
+                    if base_frames is None:
+                        raise ValueError(
+                            "A calibrated candidate was built before its identity surface; "
+                            "the baseline must be evaluated first"
+                        )
+                    keys = ["decision_week", "week", "slot", "player_id"]
+                    raw = pd.concat(
+                        [
+                            f[["week", "slot", "player_id", "lam"]].assign(decision_week=w)
+                            for w, f in base_frames.items()
+                        ],
+                        ignore_index=True,
+                    ).rename(columns={"lam": "original_lam"})
+                    surfaces = surfaces.merge(raw, on=keys, how="left", validate="one_to_one")
+                else:
+                    surfaces["original_lam"] = surfaces.lam
             save_frame(directory / f"surface-{model}-{seed}.parquet", surfaces)
         if model == spec["baseline"]:
             for trial in range(spec["random_trials"]):
@@ -492,8 +632,9 @@ def evaluate_season(conn, season, spec, directory, log):
         if parts:
             save_frame(directory / f"{name}.csv", pd.concat(parts, ignore_index=True))
     write_json(directory / "input-provenance.json", provenance)
-    files = {p.name: digest(p) for p in sorted(directory.iterdir()) if p.name != "checkpoint.json"}
-    write_json(directory / "checkpoint.json", dict(schema_version=SCHEMA_VERSION, files=files))
+    if advice_parts:
+        save_frame(directory / "advice.csv", pd.concat(advice_parts, ignore_index=True))
+    write_checkpoint(directory)
 
 
 def markdown_table(frame, columns):
@@ -552,6 +693,215 @@ def reports(output, spec, manifest, config_path=None):
     for name, text in render_reports(data, spec, manifest, output, config_path).items():
         (compact / name).write_text(text)
     return compact
+
+
+def calibration_reports(output, spec, manifest, config_path=None):
+    """Compact exports and a factual report for a Phase 3B run, from saved artifacts only.
+
+    Nothing here selects a candidate. The promotion rule is in the frozen specification
+    and the decision that applies it is a separately authored, dated note, the same
+    separation the bake-off keeps between its generated report and `docs/ANALYSIS.md`.
+    """
+    from . import calibration as cal
+
+    compact = output / "compact"
+    compact.mkdir(exist_ok=True)
+    seasons = spec["calibration_experiment"]["apply_seasons"]
+    names = (
+        "ranking",
+        "paired_ranking",
+        "calibration",
+        "reliability",
+        "deviance",
+        "spearman",
+        "replays",
+        "picks",
+        "advice",
+    )
+    data = {}
+    for name in names:
+        paths = [output / "apply" / str(s) / f"{name}.csv" for s in seasons]
+        parts = [pd.read_csv(p) for p in paths if p.exists()]
+        if not parts:
+            continue
+        data[name] = pd.concat(parts, ignore_index=True)
+        save_frame(compact / f"{name}.csv", data[name])
+    data["folds"] = cal.fold_table(output / "folds", spec)
+    save_frame(compact / "folds.csv", data["folds"])
+    data["policy"] = cal.policy_table(data["replays"], spec["baseline"])
+    save_frame(compact / "policy.csv", data["policy"])
+    data["decision_changes"] = cal.decision_changes(data["picks"], spec["baseline"])
+    save_frame(compact / "decision-changes.csv", data["decision_changes"])
+    if "advice" in data:
+        data["advice_changes"] = cal.advice_changes(data["advice"], spec["baseline"])
+        save_frame(compact / "advice-changes.csv", data["advice_changes"])
+    data["paired_deviance"] = cal.holm(
+        ev.paired_deviance(
+            _forecast_deviance(output, spec), spec["baseline"], spec["deviance_floor"]
+        )
+    )
+    save_frame(compact / "paired-deviance.csv", data["paired_deviance"])
+    write_json(compact / "manifest.json", manifest)
+    shutil.copy2(output / "resolved-config.json", compact / "resolved-config.json")
+    shutil.copy2(output / "coverage.csv", compact / "coverage.csv")
+    (compact / "CALIBRATION.md").write_text(
+        render_calibration_report(data, spec, manifest, output, config_path)
+    )
+    return compact
+
+
+def _forecast_deviance(output, spec):
+    """The current-week forecast rows of every candidate, for one paired comparison."""
+    parts = [
+        pd.read_parquet(output / "apply" / str(season) / "forecasts.parquet")
+        for season in spec["calibration_experiment"]["apply_seasons"]
+    ]
+    return pd.concat(parts, ignore_index=True)
+
+
+_POSITION_SUMMARY_COLUMNS = [
+    "candidate",
+    "group",
+    "folds",
+    "a_min",
+    "a_max",
+    "b_min",
+    "b_max",
+    "sources",
+]
+
+
+def _position_summary(folds):
+    """Per-position coefficients collapsed across folds, so the table stays readable.
+
+    The range rather than a mean: a map that is stable across folds and one that swings
+    between them are different findings, and an average would report them identically.
+    """
+    rows = folds[folds.grouping == "position"]
+    out = rows.groupby(["candidate", "group"], as_index=False).agg(
+        folds=("fold", "nunique"),
+        a_min=("a", "min"),
+        a_max=("a", "max"),
+        b_min=("b", "min"),
+        b_max=("b", "max"),
+    )
+    used = rows.groupby(["candidate", "group"]).source.agg(lambda s: "/".join(sorted(set(s))))
+    return out.merge(used.rename("sources"), on=["candidate", "group"])
+
+
+def render_calibration_report(data, spec, manifest, output, config_path=None):
+    """Facts, methods and provenance. No selection, no recommendation, no verdict."""
+    from . import calibration as cal
+
+    c = spec["calibration_experiment"]
+    experiment = Path(output).name
+    config_path = config_path or f"experiments/{experiment}.toml"
+    folds = data["folds"]
+    unsupported = folds[folds.fit_status != ev.FIT_OK]
+    inherited = folds[folds.source != "own"]
+    report = (
+        "# Phase 3B Calibration Experiment\n\n"
+        f"Specification `{config_path}`, dated {c['specification_date']}, frozen before any fit. "
+        f"Folds train on {c['train_start']}-Y-1 and apply to Y for "
+        f"Y = {min(c['apply_seasons'])}-{max(c['apply_seasons'])}; no outcome from Y enters its "
+        "own fit, and a training row needs its target week played and scored, not merely an "
+        "early forecast timestamp. All of these seasons have been explored before: this is "
+        "walk-forward evaluation, not an untouched holdout.\n\n"
+        "## Fitted Maps\n\n"
+        f"The map is `exp(a) * lam ** b` on positive rates, applied to the "
+        f"{c['map_target'].replace('_', ' ')} before the optimizer prunes or discounts it. "
+        f"Eligible zero rates are {c['zero_rate_policy'].replace('_', ' ')} and hard exclusions "
+        f"stay masks, so every candidate is scored on the same rows. Of "
+        f"{len(folds)} fitted groups, {len(unsupported)} were unsupported and {len(inherited)} "
+        "used the declared fallback rather than their own coefficient.\n\n"
+        + markdown_table(
+            folds[folds.grouping == "pooled"][
+                ["fold", "candidate", "a", "b", "source", "n", "clusters", "fit_status"]
+            ],
+            ["fold", "candidate", "a", "b", "source", "n", "clusters", "fit_status"],
+        )
+        + "\n\nCoefficients by position, across folds. WR and TE are fitted separately because "
+        "they share the FLEX slot, so their two maps are the ones able to reorder it.\n\n"
+        + markdown_table(_position_summary(folds), _POSITION_SUMMARY_COLUMNS)
+        + "\n\n## Forecast Score\n\n"
+        f"Primary estimand: paired change in season-mean Poisson deviance on hard-eligible "
+        f"current-week rows with identity lambda above {spec['deviance_floor']}, which is the "
+        "same population for every candidate because a map sends zero to zero. Uncertainty is "
+        "the standard error of the season differences. Deviance is a loss, so a negative "
+        "`delta` is a better forecast than identity's. `holm_alpha` is the declared "
+        "multiplicity level for the pre-registered comparisons; it is reported, not applied "
+        "to a verdict here.\n\n"
+        + markdown_table(
+            data["paired_deviance"],
+            ["model", "delta", "se", "seasons", "holm_rank", "holm_alpha"],
+        )
+        + "\n\n## Achieved Season Scores\n\n"
+        "Each candidate replays its own no-reuse greedy and optimizer history and is compared "
+        "against identity's replay of the same strategy, never against identity greedy. A "
+        "better proper score and more touchdowns are different claims.\n\n"
+        + markdown_table(
+            data["policy"],
+            [
+                "model",
+                "strategy",
+                "tds_per_season",
+                "delta_vs_own_identity",
+                "paired_se",
+                "seasons",
+            ],
+        )
+        + "\n\n## Decision Changes\n\n"
+        "How often a candidate's replay chose a different player than identity's did. A shared "
+        "strictly increasing map preserves order within a slot; separate WR and TE maps need "
+        "not, because they compete in FLEX, and a nonlinear map can reorder cells at different "
+        "horizons once the discount is applied.\n\n"
+        + markdown_table(
+            data["decision_changes"]
+            .groupby(["model", "strategy"], as_index=False)
+            .agg(decisions=("decisions", "sum"), changed=("changed", "sum")),
+            ["model", "strategy", "decisions", "changed"],
+        )
+    )
+    if "advice_changes" in data:
+        report += (
+            "\n\n## Static Hold Sensitivity\n\n"
+            f"`advise_slot` compares a season cost in touchdowns against a fixed "
+            f"{config.INFO_PREMIUM_TD} premium, so rescaling the rates rescales one side of "
+            "that comparison and not the other. These counts are that sensitivity and nothing "
+            "more: replay makes one decision per week through `plan_slot`, so a flipped hold "
+            "here is not a touchdown gained or lost. Measuring the value of waiting needs the "
+            "multi-event replay Phase 3C specifies.\n\n"
+            + markdown_table(
+                data["advice_changes"]
+                .groupby("model", as_index=False)
+                .agg(
+                    decisions=("decisions", "sum"),
+                    pick_changed=("pick_changed", "sum"),
+                    hold_changed=("hold_changed", "sum"),
+                ),
+                ["model", "decisions", "pick_changed", "hold_changed"],
+            )
+        )
+    report += (
+        "\n\n## Methods And Provenance\n\n"
+        f"Source `{manifest['code']['revision']}`"
+        f"{' (dirty)' if manifest['code']['dirty'] else ''}, dataset "
+        f"`{manifest['dataset_hash'][:12]}`, configuration "
+        f"`{manifest['identity']['config_hash'][:12]}`. Production constants are unchanged and "
+        "no calibrated model is deployed; the future discount, information premium and every "
+        "base-model constant were fixed for the whole experiment. Candidate fallback order is "
+        f"{list(c['fallback'])}, with a group needing at least {c['min_rows']} rows and "
+        f"{c['min_clusters']} clusters to use its own coefficient. Declared margins: "
+        + ", ".join(f"`{k}` = {v}" for k, v in sorted(c["margins"].items()))
+        + ". Repeated forecasts of one target week share its single outcome, so fits cluster on "
+        f"the {c['cluster'].replace('_', ' ')} and rows carry {c['row_weight']} weight; late "
+        "target weeks are therefore forecast, and so represented, more often than early ones. "
+        f"Identity is `{spec['baseline']}` and is mandatory: fold artifacts, out-of-fold "
+        "surfaces, picks and these tables are saved beside the run. Applying the promotion rule "
+        "is a separate, dated authoring step, and keeping the model unchanged is a valid "
+        f"outcome. Candidates: {', '.join(n for _f, _g, n in cal.candidates(spec))}.\n"
+    )
+    return report
 
 
 def render_reports(data, spec, manifest, output, config_path=None):
@@ -664,14 +1014,59 @@ def render_reports(data, spec, manifest, output, config_path=None):
     return {"EVALUATION.md": report}
 
 
-def _season_worker(frozen, season, spec, directory):
+def _season_worker(frozen, season, spec, directory, folds=None):
     conn = sqlite3.connect(f"file:{Path(frozen).resolve()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
-        evaluate_season(conn, season, spec, Path(directory), print)
+        evaluate_season(
+            conn, season, spec, Path(directory), print, _candidates(spec, folds, season)
+        )
     finally:
         conn.close()
     return season
+
+
+def _candidates(spec, folds, season):
+    """Bind this season's fitted maps, in the process that is about to use them."""
+    if folds is None:
+        return None
+    from . import calibration
+
+    return calibration.candidate_builders(folds, spec, season)
+
+
+def season_sweep(conn, frozen, spec, seasons, root, log, folds=None):
+    """Evaluate every season that has no verified checkpoint yet, in parallel.
+
+    Shared by the plain benchmark and by both of the calibration experiment's season
+    stages, so resume verifies artifact hashes the same way in all three.
+    """
+    root = Path(root)
+    pending = []
+    for season in seasons:
+        directory = root / str(season)
+        if checkpoint_complete(directory, season):
+            log(f"Resume: verified completed season {season} in {root.name}")
+        else:
+            pending.append(season)
+    if spec["workers"] == 1 or len(pending) == 1:
+        for season in pending:
+            log(f"Evaluating {season}")
+            evaluate_season(
+                conn, season, spec, root / str(season), log, _candidates(spec, folds, season)
+            )
+        return
+    if not pending:
+        return
+    with ProcessPoolExecutor(
+        max_workers=spec["workers"], mp_context=multiprocessing.get_context("spawn")
+    ) as executor:
+        futures = {
+            executor.submit(_season_worker, frozen, season, spec, root / str(season), folds): season
+            for season in pending
+        }
+        for future in as_completed(futures):
+            log(f"Checkpoint complete: {future.result()}")
 
 
 def run(config_path, output, *, resume=False, log=print):
@@ -730,37 +1125,14 @@ def run(config_path, output, *, resume=False, log=print):
                     output / "decision-times.csv", pd.DataFrame(spec["resolved_decision_times"])
                 )
             write_json(manifest_path, manifest)
-        pending = []
-        for season in spec["seasons"]:
-            directory = output / str(season)
-            checkpoint = directory / "checkpoint.json"
-            if checkpoint.exists():
-                saved = json.loads(checkpoint.read_text())
-                if any(
-                    not (directory / name).exists() or digest(directory / name) != checksum
-                    for name, checksum in saved["files"].items()
-                ):
-                    raise ValueError(f"Checkpoint artifact hash mismatch for {season}")
-                log(f"Resume: verified completed season {season}")
-            else:
-                pending.append(season)
-        if spec["workers"] == 1:
-            for season in pending:
-                log(f"Evaluating {season}")
-                evaluate_season(conn, season, spec, output / str(season), log)
-        elif pending:
-            with ProcessPoolExecutor(
-                max_workers=spec["workers"], mp_context=multiprocessing.get_context("spawn")
-            ) as executor:
-                futures = {
-                    executor.submit(
-                        _season_worker, frozen, season, spec, output / str(season)
-                    ): season
-                    for season in pending
-                }
-                for future in as_completed(futures):
-                    log(f"Checkpoint complete: {future.result()}")
-        compact = reports(output, spec, manifest, config_path)
+        if spec.get("calibration_experiment"):
+            from . import calibration as cal
+
+            cal.run_stages(conn, frozen, output, spec, log)
+            compact = calibration_reports(output, spec, manifest, config_path)
+        else:
+            season_sweep(conn, frozen, spec, spec["seasons"], output, log)
+            compact = reports(output, spec, manifest, config_path)
         write_json(
             output / "complete.json",
             dict(schema_version=SCHEMA_VERSION, identity=identity, seasons=spec["seasons"]),

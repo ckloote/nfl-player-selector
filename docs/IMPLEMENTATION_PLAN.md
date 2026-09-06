@@ -13,7 +13,7 @@ after F11. The superseded Phase 2 results remain published for comparison.
 | Weekly reliability (review step 1) | Implemented: F01, F05, F09 |
 | Validation repairs (review step 2) | Implemented: F02–F04, F06, F08, F10; F07 documentation corrected |
 | Candidate-pool repair (review step 2) | Implemented: F11; benchmark rerun on the same frozen dataset |
-| Phase 3: readiness, calibration and shadow validation (review step 3) | 3A implemented: repairs, capture and the readiness note. 3B/3C planned below; no production calibration or tuning changes |
+| Phase 3: readiness, calibration and shadow validation (review step 3) | 3A and 3B implemented: repairs, capture, the readiness note, and the frozen walk-forward calibration experiment. 3C planned below; no production calibration or tuning changes |
 | Leaderboard strategy (review step 4) | Pending |
 
 ## Weekly reliability
@@ -64,10 +64,14 @@ historical replay. Both 2011–2018 and 2019–2025 summaries are retrospective.
 
 ## Phase 3 — calibration validation
 
-**Status as of 2026-09-06:** 3A is implemented; 3B and 3C are planned, not implemented.
+**Status as of 2026-09-06:** 3A and 3B are implemented; 3C is planned, not implemented.
 The five readiness repairs, the prospective capture and the descriptive diagnostic export
-are in place, with fixtures in `tests/test_phase3a.py` and a dated readiness note. No
-calibration mapping was fitted and no production constant changed. The saved study remains
+are in place, with fixtures in `tests/test_phase3a.py` and a dated readiness note. The
+chronological experiment is specified in
+[phase3-calibration.toml](../experiments/phase3-calibration.toml) and runnable through
+`pool benchmark`, with fixtures in `tests/test_phase3b.py`. No production constant changed
+and no calibrated model is deployed: running the experiment produces evidence, and applying
+its declared promotion rule is a separate, dated authoring step. The saved study remains
 ready for diagnosis, not calibrated production. Its persistent pooled miscalibration does not
 identify a universal correction; see [ANALYSIS.md](ANALYSIS.md) for evidence and limits, which
 the 3A export describes by population without resolving.
@@ -81,7 +85,7 @@ there is no requirement to wait a whole prospective season before descriptive re
 | Stage | Dependency | Exit Deliverable |
 |---|---|---|
 | 3A: Evidence, capture and readiness | Implemented 2026-09-06 | Guarded diagnostics, reproducible capture, regression tests and a dated [readiness note](../experiments/results/phase3a-readiness/READINESS.md) |
-| 3B: Chronological train/apply experiment | 3A diagnostic/input contracts pass; prospective capture continues | Frozen specification, fitted artifacts, out-of-fold forecasts, proper metrics and separate policy replays |
+| 3B: Chronological train/apply experiment | Implemented 2026-09-06 | Frozen [specification](../experiments/phase3-calibration.toml), fitted fold artifacts, out-of-fold surfaces, proper metrics and separate policy replays |
 | 3C: Shadow-live transfer and policy validation | 3A capture/parity; a frozen 3B candidate or identity baseline | Matched live/snapshot shadow evidence and a reviewed ship/defer/no-change decision |
 
 ### Phase 3A: Evidence And Readiness
@@ -126,6 +130,13 @@ are unchanged. Interpreting it remains a separate, dated authoring step.
 
 ### Phase 3B: Chronological Experiment
 
+**Implemented.** The runner is `pool benchmark --config experiments/phase3-calibration.toml`,
+which executes three stages with a barrier between each: identity forecast/outcome pairs for
+every season, then one fit per fold, then the candidates applied and replayed. Fitting lives
+in [`calibration.py`](../src/pool/calibration.py); fixtures are in `tests/test_phase3b.py`.
+The declarations below are keys of the dated specification, and `benchmark.resolve` refuses a
+run that is missing any of them.
+
 1. **Freeze the specification before fitting.** Deliver a dated
    `experiments/phase3-calibration.toml` with source/data/input hashes, candidate families,
    populations/weights, rate and lead-horizon strata, cutoffs, refit schedule, minimum samples,
@@ -169,6 +180,16 @@ FLEX rank changes and deterministic resume. Reconcile pick sums, no reuse, match
 paired season metrics. Deliver the frozen config, fold artifacts, out-of-fold surfaces, picks,
 metric tables and a separately authored decision note, including negative/inconclusive results.
 A favorable result is not required to complete 3B; production remains unchanged pending 3C.
+
+*Met 2026-09-06.* The map is `exp(a) * lam ** b`: `level` fixes the exponent at one,
+`log_affine` estimates both, and identity is mandatory. Each is fitted pooled and by position
+with WR and TE separate, on the availability-adjusted rate the optimizer consumes, clustered on
+the shared target player-week. Candidates are registered as builders, so they share the shipped
+scaffold and `evaluate.assert_comparable` checks the keys and masks; each replays its own
+no-reuse history through `backtest.replay`. The apply stage rebuilds identity rather than
+reusing the pairs stage, so "identity reproduces unchanged rates, picks and scores" is checked
+by comparing the two. `experiments/verify.py` additionally reconciles that every fitted
+artifact still hashes as recorded and that no training key reaches its own apply season.
 
 ### Phase 3C: Shadow-Live Validation
 
