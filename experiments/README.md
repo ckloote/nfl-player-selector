@@ -1,4 +1,4 @@
-# Phase 2 experiments
+# Experiments
 
 `phase2-validation.toml` is the dated specification. It uses all ten registered models,
 shipped production constants, baseline `shipped`, historical inputs and usage roles, shuffled
@@ -123,6 +123,96 @@ counted instead, separately from hard exclusions, whose zero is a mask rather th
 | `zero-accounting.csv` | Eligible zero rates and hard exclusions, counted separately, with how many scored anyway |
 | `coverage.csv` | Rows with and without a resolved outcome, by season and horizon |
 | `identities.json`, `READINESS.md` | Source, dataset, configuration and diagnostics-module identities, and a dated note of measurements and limits |
+
+## Phase 3B calibration experiment
+
+`experiments/phase3-calibration.toml` is the dated, frozen specification for the chronological
+train/apply experiment. It declares the fold schedule, the candidate families, the population,
+the weighting, the fallback, the primary estimand and the decision margins before anything is
+fitted; every one of those keys enters the resolved configuration and so the run identity, and
+`benchmark.resolve` refuses a run that omits a margin. Amending any of them starts a new
+experiment rather than continuing this one.
+
+The project owner approved the unchanged margins on 2026-09-07 (UTC), before the full
+benchmark. The [sign-off and rationale](../docs/PHASE3B_MARGIN_SIGNOFF.md) record the
+accepted policy downside, the limits of the inference, and the distinction between
+Phase 3C advancement and production deployment.
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 uv run pool benchmark \
+  --config experiments/phase3-calibration.toml \
+  --output data/experiments/phase3-calibration
+uv run python experiments/verify.py phase3-calibration <tests-passed>
+uv run python experiments/publish.py phase3-calibration
+```
+
+The run has three stages with a barrier between each, and each stage checkpoints and resumes
+the same way a benchmark season does.
+
+| Stage | Output | What it is |
+|---|---|---|
+| pairs | `pairs/<season>/` | The identity model over every configured season: the forecast/outcome pairs a fold trains on |
+| folds | `folds/<Y>/<candidate>.json` | One fitted artifact per candidate per fold, with its coefficients, fit status, training keys digest, cutoff and content hash |
+| apply | `apply/<season>/` | Identity and every candidate over the apply seasons: raw and mapped surfaces, independent replays, metrics |
+
+The map is `exp(a) * lam ** b` on positive rates. `level` fixes the exponent at one and
+estimates the scale alone; `log_affine` estimates both and refuses a non-positive exponent,
+which would rank a better forecast below a worse one. Identity is mandatory. Each family is
+fitted pooled and by position, with WR and TE separate because they share the FLEX slot. The
+map acts on the availability-adjusted rate — the quantity the optimizer consumes and the one
+Phase 3A described — before pruning and before the future discount. `avail_mult`,
+`hard_eligible` and the keys are untouched, and a zero rate maps to zero, so the population the
+primary metric scores is identical for every candidate.
+
+Fold Y trains on `train_start..Y-1` only. A training row needs its target week played and
+scored, not merely an early forecast timestamp, and the artifact records a digest of the
+*values* that entered the fit — keys, rates, positions and outcomes — so that "this artifact was
+fitted on these rows" is checkable afterwards rather than asserted; the keys alone would let one
+run's fold sit in another's directory unnoticed. The artifact also names the checkpoint digest of
+each training season it read, and a resumed fold is checked against both before it is accepted:
+a restored directory carries its own checkpoint, so verifying a checkpoint against the files
+beside it says nothing about which run produced them. Eligible zero rates cannot enter a fit on
+`log(lambda)`: they are excluded and counted, in `training-accounting.csv`, as in the 3A export.
+A group below the declared row or cluster minimum, or whose fit is unsupported, takes the
+declared fallback and records which one it took.
+
+An outcome is settled from the finalized scoring ledger at export time and travels on the
+surface, absence counting as zero only where the week is completely scored. Reading it instead
+off the target week's own forecast row would make it conditional on the player still being a
+candidate then, which is a fact about roster churn rather than about what he scored: on 2016 that
+alone left 9,502 eligible rows unscored, none of which had scored a touchdown, and dropping them
+moved fold 2016's fitted scale from 0.9413 to 0.9355. Membership is reported separately as
+retention.
+
+| Artifact | Row definition |
+|---|---|
+| `folds.csv` | Every fitted group in every fold: coefficients, source, fit status and reason, training rows, digest and artifact hash |
+| `paired-deviance.csv` | The primary estimand — paired change in season-mean Poisson deviance on the fixed all-eligible current-week population — as a paired season t with its Holm step-down adjustment and both intervals |
+| `policy.csv` | Achieved TDs per season and each candidate against identity's replay of the *same* strategy, never against identity greedy, with the paired interval the non-inferiority bound is compared against |
+| `decision-changes.csv` | How often a candidate's replay chose a different player than identity's did |
+| `advice.csv`, `advice-changes.csv` | Static `advise_slot` sensitivity: replay makes one decision per week through `plan_slot`, so a flipped hold is a mechanism, not a touchdown gained by waiting |
+| `coverage-out-of-fold.csv`, `coverage-margins.csv` | Whether the applied surface has an outcome to score against, by season and horizon and then collapsed to the two populations the declared floors are stated over, with retention — how much of the surface belonged to a player still in the pool at the week he was forecast for — reported beside it. Different from the schedule audit in `coverage.csv` and from each other |
+| `zero-accounting-out-of-fold.csv` | Eligible zero rates and the two kinds of exclusion over the applied seasons, in the classes that mean different things |
+| `training-accounting.csv` | The same for the training population, per fold: hard exclusions, eligible zero rates and unresolved outcomes, reconciling to the rows each fold actually fitted |
+| `strata-out-of-fold.csv` | The proper score by forecast horizon and availability, per candidate — the diagnostics the pooled fit declares consequences for and cannot itself show |
+| `surface-<candidate>-<seed>.parquet` | The out-of-fold surface, carrying the mapped rate as `lam`, the rate it was mapped from as `original_lam`, the decision-time `position` the map was selected by, and the target week's settled outcome (`actual_tds`, `outcome_complete`, `played`) beside `in_target_pool` |
+
+`experiments/phase3-calibration-smoke.toml` is a two-season mechanics check, not evidence. It
+exists so the stages, the barrier, the artifact hashes and resume can be exercised end to end.
+Point a fresh output directory at a copy of an existing `dataset.sqlite` to skip re-ingestion.
+
+The generated `CALIBRATION.md` states facts, methods and provenance. It selects no candidate:
+the promotion rule is in the frozen configuration as `[calibration_experiment.promotion]`, and
+applying it is a separate, dated authoring step, exactly as the bake-off keeps its report
+separate from [docs/ANALYSIS.md](../docs/ANALYSIS.md). Keeping the model unchanged is a valid
+outcome.
+
+The rule is data rather than prose so that it cannot be relaxed once the estimates exist, and
+`resolve` additionally hashes the specification *text* into the resolved configuration, so an
+edit to the reasoning beside those keys starts a new experiment too. `verify.py` reads the
+saved resolved configuration rather than the current TOML, checks it against the identity the
+run recorded, and records that hash in `verification.json`; publication refuses a calibration
+record that does not carry it.
 
 ## Measurements And Interpretation
 

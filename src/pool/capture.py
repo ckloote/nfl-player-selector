@@ -157,7 +157,7 @@ def surface(
     used_ids: set[str],
     locked_by_slot: dict[str, dict[int, str]],
     now: datetime,
-    mapped: pd.Series | None = None,
+    original: pd.Series | None = None,
 ) -> pd.DataFrame:
     """The full pre-pruning surface, with the state that made it a decision.
 
@@ -179,8 +179,12 @@ def surface(
     # recommender, so the frame alone does not say why a cell was unusable. Resolve it
     # here: a diagnostic should not have to re-derive an elapsed kickoff from a clock.
     out["decision_status"] = [state.availability(row, week, now) for _, row in out.iterrows()]
-    out["original_lam"] = out.lam.astype(float)
-    out["mapped_lam"] = out.original_lam if mapped is None else pd.Series(mapped).astype(float)
+    # `lam` is the rate the decision was actually made on, so it is the mapped rate
+    # whenever a calibrator is in play; `original` is what it was mapped from. Storing
+    # the frame the optimizer saw and the rate it started from keeps both sides of a
+    # calibrated decision recoverable. Under the identity calibrator they are equal.
+    out["mapped_lam"] = out.lam.astype(float)
+    out["original_lam"] = out.mapped_lam if original is None else pd.Series(original).astype(float)
     return out.reset_index(drop=True)
 
 
@@ -280,13 +284,27 @@ def record_decision(
     model: str = "shipped",
     calibrator: str = "identity",
     artifact_hash: str | None = None,
+    original_lam: pd.Series | None = None,
 ) -> str:
-    """Write one decision: its surface, its advice, and what it was looking at."""
+    """Write one decision: its surface, its advice, and what it was looking at.
+
+    Under a fitted calibrator the advice is made on mapped rates, so `proj.lam` is the
+    mapped rate and `original_lam` is what it was mapped from. Passing the pair keeps
+    both on the stored surface: a decision that recorded only one of them could not say
+    afterwards whether the calibrator or the base model moved.
+    """
     stamp = snapshots.timestamp(decision_at)
     stamp_naive = datetime.fromisoformat(stamp)
     decision_id = uuid4().hex
     identity_hash = identity(conn, model, calibrator, artifact_hash)
-    frame = surface(proj, week, used_ids, locked_by_slot, state.eastern_now(stamp_naive))
+    frame = surface(
+        proj,
+        week,
+        used_ids,
+        locked_by_slot,
+        state.eastern_now(stamp_naive),
+        original=original_lam,
+    )
     with db.transaction(conn):
         surface_hash = _store_surface(conn, frame)
         rows = [

@@ -401,7 +401,7 @@ FIT_KEYS = (
 )
 
 
-def _unsupported_fit(reason: str, n: int, clusters: int, iterations: int = 0) -> dict:
+def unsupported_fit(reason: str, n: int, clusters: int, iterations: int = 0) -> dict:
     """An explicit non-fit: every coefficient NaN, with the reason travelling beside it."""
     return {
         "intercept": np.nan,
@@ -461,20 +461,20 @@ def poisson_glm(
     n_groups = int(pd.Series(cluster).nunique()) if n else 0
 
     if n == 0:
-        return _unsupported_fit("empty input", n, n_groups)
+        return unsupported_fit("empty input", n, n_groups)
     if not (np.isfinite(y).all() and np.isfinite(x).all()):
-        return _unsupported_fit("non-finite inputs", n, n_groups)
+        return unsupported_fit("non-finite inputs", n, n_groups)
     if (y < 0).any():
-        return _unsupported_fit("negative outcomes", n, n_groups)
+        return unsupported_fit("negative outcomes", n, n_groups)
     if n <= 2:
         # The finite-sample correction divides by n - k with k = 2, and two points
         # cannot separate an intercept from a slope in any case.
-        return _unsupported_fit("n <= 2 for a two-parameter fit", n, n_groups)
+        return unsupported_fit("n <= 2 for a two-parameter fit", n, n_groups)
     design = np.column_stack([np.ones_like(x), x])
     if np.linalg.matrix_rank(design) < 2:
-        return _unsupported_fit("design rank 1 (constant log rate)", n, n_groups)
+        return unsupported_fit("design rank 1 (constant log rate)", n, n_groups)
     if y.sum() == 0:
-        return _unsupported_fit("all-zero outcomes", n, n_groups)
+        return unsupported_fit("all-zero outcomes", n, n_groups)
 
     beta = np.zeros(2)
     converged, iterations = False, 0
@@ -483,16 +483,16 @@ def poisson_glm(
         grad = design.T @ (y - mu)
         hess = design.T @ (design * mu[:, None])
         if not (np.isfinite(grad).all() and np.isfinite(hess).all()):
-            return _unsupported_fit("non-finite IRLS step", n, n_groups, iterations)
+            return unsupported_fit("non-finite IRLS step", n, n_groups, iterations)
         step = np.linalg.pinv(hess) @ grad
         if not np.isfinite(step).all():
-            return _unsupported_fit("non-finite IRLS step", n, n_groups, iterations)
+            return unsupported_fit("non-finite IRLS step", n, n_groups, iterations)
         beta = beta + step
         if np.max(np.abs(step)) < tol:
             converged = True
             break
     if not converged:
-        return _unsupported_fit("iterations exhausted before convergence", n, n_groups, iterations)
+        return unsupported_fit("iterations exhausted before convergence", n, n_groups, iterations)
 
     # Converging is not the same as landing on a maximum. Under separation -- every
     # outcome zero on one side of a threshold and positive on the other -- the
@@ -501,7 +501,7 @@ def poisson_glm(
     # solution rather than on the path taken to it.
     eta = design @ beta
     if np.max(np.abs(eta)) >= LINEAR_PREDICTOR_BOUND:
-        return _unsupported_fit(
+        return unsupported_fit(
             "no finite maximum-likelihood estimate (separation)", n, n_groups, iterations
         )
     mu = np.exp(eta)
@@ -511,7 +511,7 @@ def poisson_glm(
         or not np.isfinite(np.linalg.cond(information))
         or np.linalg.cond(information) > MAX_INFORMATION_CONDITION
     ):
-        return _unsupported_fit(
+        return unsupported_fit(
             "weighted design is rank deficient at the solution", n, n_groups, iterations
         )
 
@@ -566,7 +566,7 @@ def calibration(
         "zero_lam_positive_outcome_n": int((outcomes > 0).sum()),
     }
     if not len(sub):
-        return {**_unsupported_fit("no positive-rate rows", 0, 0), **zero_counts}
+        return {**unsupported_fit("no positive-rate rows", 0, 0), **zero_counts}
     if cluster_on == "player_season":
         cluster = sub.player_id.astype(str) + "|" + sub.season.astype(str)
     elif cluster_on == "season":
@@ -582,14 +582,19 @@ def calibration(
     return {**out, **zero_counts}
 
 
-def poisson_deviance(actual: np.ndarray, lam: np.ndarray) -> float:
-    """Mean Poisson deviance. A proper scoring rule, so it cannot be improved by
-    flattening the ranking — which a naive calibration fix would happily do."""
+def poisson_deviance_terms(actual: np.ndarray, lam: np.ndarray) -> np.ndarray:
+    """Each row's contribution to the deviance, so a stratum mean is a group mean."""
     actual = np.asarray(actual, dtype=float)
     lam = np.clip(np.asarray(lam, dtype=float), 1e-9, None)
     with np.errstate(divide="ignore", invalid="ignore"):
         term = np.where(actual > 0, actual * np.log(actual / lam), 0.0)
-    return float(2.0 * np.mean(term - (actual - lam)))
+    return 2.0 * (term - (actual - lam))
+
+
+def poisson_deviance(actual: np.ndarray, lam: np.ndarray) -> float:
+    """Mean Poisson deviance. A proper scoring rule, so it cannot be improved by
+    flattening the ranking — which a naive calibration fix would happily do."""
+    return float(np.mean(poisson_deviance_terms(actual, lam)))
 
 
 # --- season and seed aggregation -------------------------------------------

@@ -20,9 +20,12 @@ appetite change with your position on the leaderboard?
 The weekly workflow and Phase 2 validation repairs are implemented: explicit deadline
 eligibility, complete touchdown accounting, timestamped input archives, shared baseline
 comparisons, and reproducible season experiments. Production model constants remain fixed.
-The saved study supports further diagnosis, not a production calibration change. Calibration
-experiments and live-policy validation are planned in [Phase 3](docs/IMPLEMENTATION_PLAN.md);
-leaderboard strategy comes later.
+The saved study supports further diagnosis, not a production calibration change. The
+[Phase 3B](docs/IMPLEMENTATION_PLAN.md) chronological calibration experiment is implemented and
+specified in [phase3-calibration.toml](experiments/phase3-calibration.toml): it fits past-only
+rate maps on an expanding walk-forward schedule and measures them, but changes no production
+constant and deploys no calibrated model. Live-policy validation in shadow (Phase 3C) is still
+planned; leaderboard strategy comes later.
 
 The [evaluation report](docs/EVALUATION.md) combines actual season scores from each model's
 greedy and optimizer pick history with ranking and calibration diagnostics. Its
@@ -194,6 +197,7 @@ uv run pool benchmark --config experiments/phase2-validation.toml --output data/
 # Continue only when configuration, code, dependencies and frozen dataset match:
 uv run pool benchmark --config experiments/phase2-validation.toml --output data/experiments/phase2-validation --resume
 uv run pool diagnose --run data/experiments/roster-snapshot-repair --out experiments/results/phase3a-readiness
+uv run pool benchmark --config experiments/phase3-calibration.toml --output data/experiments/phase3-calibration
 ```
 
 `diagnose` describes a saved study's rate errors by population, position, rate bin,
@@ -201,6 +205,21 @@ availability and forecast lead horizon, and writes a dated readiness note. Group
 are frozen before any outcome is read, horizons are never pooled — repeated forecasts of one
 target week share its single outcome — and eligible zero rates are counted rather than
 dropped, separately from hard exclusions. It fits no correction and states no conclusion.
+
+A configuration carrying a `[calibration_experiment]` table runs the Phase 3B experiment
+instead of a model bake-off: identity forecast/outcome pairs for every season, then one fit per
+fold on the seasons that had already finished, then each candidate applied to the whole surface
+before pruning and discount and replayed with its own no-reuse history. The map is
+`exp(a) * lam ** b`, fitted pooled and by position with WR and TE separate; zero rates map to
+zero and hard exclusions stay masks, so every candidate is scored on the same rows. Fold
+schedule, families, population, weighting, fallback, primary estimand, the promotion conditions
+and the decision margins are all declared in the dated configuration, whose text is hashed into
+the run identity; a missing margin blocks the run, and so does one outside its own domain. The
+run measures the outcome coverage its floors are stated over, reports retention beside it, counts
+every training row it discards, and scores each candidate by forecast horizon and availability as
+well as in the pooled primary estimand. The primary comparison is a paired season t with a Holm
+step-down, and the step-down's own decision is what the promotion rule reads. See
+[experiments/README.md](experiments/README.md) for the stages and artifacts.
 
 Decision CSVs require `season,week,decision_at`, with one timezone-aware timestamp for every
 requested week, such as `2026,1,2026-09-10T18:00:00-04:00`. Observations become available when

@@ -1,0 +1,153 @@
+# Phase 3B: chronological calibration experiment.
+#
+# Frozen and dated before anything is fitted. It declares the fold schedule, the
+# candidate families, the population, the weighting, the fallback, the primary estimand
+# and the decision margins, so none of them can be chosen once the estimates are on
+# screen. Every one of these keys enters the resolved configuration and therefore the
+# run identity: amending any of them starts a new experiment rather than continuing this
+# one, and an amendment must be dated before the evaluation it affects.
+#
+# All of 2011-2025 has been explored before. This is walk-forward evaluation with
+# honest temporal discipline, not an untouched holdout; prospective and shadow evidence
+# is reserved for Phase 3C. Production constants are fixed and nothing here deploys.
+schema_version = 1
+workers = 4
+specification_date = "2026-09-06"
+seasons = [2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
+history_start = 2010
+models = ["shipped"]
+baseline = "shipped"
+seeds = [0]
+input_policy = "historical"
+role_source = "usage"
+constants = "shipped"
+scoring_corrections = "experiments/scoring-corrections.json"
+strategies = ["greedy", "optimizer"]
+# The shuffled nulls and the random-selection trials answer a different question and are
+# not rerun here: the comparison is identity against a map of identity, on one base model.
+random_top_n = 10
+random_trials = 0
+random_seed = 0
+hindsight = false
+ranking_k = [1, 3, 5, 10]
+ranking_pools = ["rank_available", "rank_in_slot"]
+calibration = true
+export_future_forecasts = true
+
+[calibration_experiment]
+specification_date = "2026-09-06"
+# Expanding folds: train on 2011..Y-1, apply to Y. 2010 supplies base-model history only.
+train_start = 2011
+apply_seasons = [2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
+refit = "annual"
+# The map is exp(a) * lam ** b. `level` fixes b at one and estimates the scale alone;
+# `log_affine` estimates both. Identity is mandatory and implicit.
+families = ["level", "log_affine"]
+# WR and TE are separate under `position`: they share the FLEX slot, so two maps can
+# reorder them against each other where one shared map cannot.
+groupings = ["pooled", "position"]
+# The optimizer consumes the availability-adjusted rate and Phase 3A described that same
+# quantity, so that is what the map acts on. `avail_mult` and `hard_eligible` are left
+# untouched. Consequence, declared: for b != 1 the Questionable 0.85 is rescaled
+# nonlinearly, so it is no longer a clean multiplier on the calibrated rate. The
+# availability stratum is reported separately rather than assumed away.
+map_target = "availability_adjusted_lam"
+# One fit across horizons, because one map is applied across horizons. Rows carry equal
+# weight, which matches the population the map is applied to; the known consequence is
+# that a late target week is forecast more often than an early one and so appears more
+# often. Repeated forecasts of one target share its single outcome, so the fit clusters
+# on the target player-week rather than treating the repeats as independent rows.
+fit_horizons = "pooled"
+row_weight = "equal"
+cluster = "target_player_week"
+# An eligible zero rate cannot enter a fit on log(lambda). It is excluded and counted,
+# never silently dropped, and a hard exclusion's zero stays a mask rather than a forecast.
+zero_rate_policy = "excluded_and_counted"
+min_rows = 500
+min_clusters = 30
+fallback = ["own", "pooled", "identity"]
+# Primary estimand: paired change in season-mean Poisson deviance on hard-eligible
+# current-week rows with identity lambda above the floor. The floor is zero rather than
+# the bake-off's 0.30 tail, and the population is identical for every candidate because
+# every map sends zero to zero. Slope, intercept, level ratios and common-pool ranks are
+# diagnostics and cannot substitute for it.
+primary_metric = "paired_season_mean_poisson_deviance"
+primary_population = "all_eligible_current_week"
+deviance_floor = 0.0
+uncertainty = "paired_season_t"
+multiplicity = "holm"
+# A policy difference that never varies between seasons is exactly determined and has no
+# sampling distribution. It reports an interval of width zero at that difference rather
+# than no interval at all. A shared increasing map preserves greedy's within-slot ranking,
+# so an unchanged policy is guaranteed there; the optimizer maximises an assignment sum,
+# which a nonlinear map can reorder even when every candidate shares it, so the same
+# outcome is expected of it but not guaranteed. Either way the treatment is frozen here
+# rather than chosen once the difference is on screen.
+zero_variance_policy = "degenerate_interval"
+advice_sensitivity = true
+
+# Decision margins. A missing margin blocks the run. These are thresholds chosen in
+# advance, not claims that the experiment can resolve them: the achieved paired standard
+# error decides that, and a non-significant difference is not equivalence.
+[calibration_experiment.margins]
+# Mean-deviance units. Phase 3A's all-eligible horizon-0 deviance is 0.6977, so this is
+# roughly a 0.7% relative improvement.
+min_deviance_improvement = 0.005
+# Non-inferiority bound in touchdowns per season, against identity's replay of the same
+# strategy. Shipped greedy scores 53.73 per season in the saved study.
+max_policy_loss_td_per_season = 0.5
+# Phase 3A coverage, under its own resolution of an outcome through the target week's
+# candidate pool, is 1.000 at horizon 0 and 0.9416 at horizon 1 over all fifteen seasons.
+# (0.989 is 2011 alone; an earlier revision of this file cited it as the all-season
+# figure.) This experiment settles an outcome from the finalized ledger instead -- absence
+# is zero wherever the target week is completely scored -- and these floors are declared
+# against that definition, which is the weaker of the two claims to have to meet.
+min_outcome_coverage_current = 0.98
+min_outcome_coverage_future = 0.95
+
+# Promotion, declared before fitting and carried as data rather than prose: at most one
+# candidate is carried into Phase 3C, and only if all four of these hold. The Holm
+# step-down rejects its comparison at alpha over the pre-registered family; the change is
+# an improvement larger than min_deviance_improvement (deviance is a loss, so that means
+# delta below -min_deviance_improvement); its policy difference lower bound exceeds
+# -max_policy_loss_td_per_season for both strategies; and both coverage floors are met.
+# Otherwise the outcome is defer or no-change.
+#
+# The decision is the step-down's own result and not an interval. Holm's per-step levels
+# widen down the ranking, so a step's local interval can exclude zero on a step the
+# procedure never reached, and a rule written against those intervals would admit a
+# candidate Holm declined. `stage_lo`/`stage_hi` are reported as diagnostics only.
+#
+# These keys enter the run identity, so the rule cannot be relaxed after the estimates
+# exist. Applying it is a separate, dated authoring step, and nothing in the run applies
+# it; keeping the model unchanged is a valid result.
+[calibration_experiment.promotion]
+max_promoted = 1
+require_deviance_margin = true
+decision = "holm_step_down"
+alpha = 0.05
+direction = "improvement"
+policy_strategies = "both"
+require_coverage_floors = true
+
+[eras]
+"2016-2020 walk-forward" = [2016, 2020]
+"2021-2025 walk-forward" = [2021, 2025]
+
+[expected_games]
+2010 = 256
+2011 = 256
+2012 = 256
+2013 = 256
+2014 = 256
+2015 = 256
+2016 = 256
+2017 = 256
+2018 = 256
+2019 = 256
+2020 = 256
+2021 = 272
+2022 = 271
+2023 = 272
+2024 = 272
+2025 = 272
