@@ -212,9 +212,11 @@ can exclude zero on a step the procedure never reached.
 
 ### Phase 3C: Shadow-Live Validation
 
-**Protocol dated 2026-09-07; collection and review pending.** No calibrated candidate
-qualified in 3B, so this window is identity only; starting baseline collection is not an
-exception to that promotion rule. The machine-readable protocol is
+**Protocol dated and signed off 2026-09-07 (UTC); collection and review pending.** The
+project owner approved the window, the populations, the parity criteria and the floors
+before the first captured decision, for collection and description only. No calibrated
+candidate qualified in 3B, so this window is identity only; starting baseline collection is
+not an exception to that promotion rule. The machine-readable protocol is
 [`experiments/phase3c-baseline.toml`](../experiments/phase3c-baseline.toml) and its
 authored rationale and sign-off are in [PHASE3C_PROTOCOL.md](PHASE3C_PROTOCOL.md).
 

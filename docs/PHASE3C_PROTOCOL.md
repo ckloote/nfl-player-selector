@@ -2,9 +2,25 @@
 
 **Specification date:** 2026-09-07 (UTC).
 
-**Status:** written before the first captured decision; awaiting owner sign-off.
+**Status:** signed off 2026-09-07 (UTC), before the first captured decision. Authorised
+for collection; unamended since.
 
 **Decision maker:** project owner, before the 2026 week 1 pick deadline.
+
+**Sign-off.** The project owner approved this protocol on
+[PR #6](https://github.com/ckloote/nfl-player-selector/pull/6) at commit
+`48a9f3303110a659d38dca735644bdf905b0cd05`, for prospective identity-only collection over
+2026 weeks 1-6. The approval authorises collection, fidelity verification and the
+descriptive diagnostics below. It authorises no candidate promotion, no production change,
+no achieved-score claim and no waiting-value claim. The declared floors and window will not
+be relaxed after inspection, and a failing floor will be reported as an outcome rather than
+adjusted away.
+
+This record changes no declaration. The machine-readable specification is
+`experiments/phase3c-baseline.toml`, whose SHA-256 is
+`958118e635d5b2718a10dbe0846335e0e39306a4445a23386fb370656fa474ab`; that hash is what every
+export carries, and it is unchanged by writing the sign-off down here. A window whose
+export reports a different one was not run under the protocol approved above.
 
 This is the dated collection protocol for Phase 3C, the counterpart to the
 [Phase 3B margin sign-off](PHASE3B_MARGIN_SIGNOFF.md). It fixes the window, the decision
