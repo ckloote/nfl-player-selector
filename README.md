@@ -136,8 +136,11 @@ uv run pool baseline --config experiments/phase3c-baseline.toml \
 
 `verify-capture` re-derives each decision's advice from its stored surface alone, then
 rebuilds the same instant from the archived feeds and compares the model columns. The
-archive is written by `refresh`, so a decision made without one cannot be verified and is
-reported as unverified rather than skipped. `baseline` describes the captures under the
+rebuild runs under the constants the decision recorded, so a setting that has moved since
+is not reported as a live/archive divergence. The archive is written by `refresh`, so a
+decision made without one cannot be verified and is reported as unverified rather than
+skipped; a window with no captures at all exits nonzero, because nothing verified is not
+verification. `baseline` describes the captures under the
 dated [3C protocol](experiments/phase3c-baseline.toml), which declares the window, the
 decision events, the populations and the floors before any decision is captured; a missing
 floor blocks the export. It promotes nothing and changes nothing.

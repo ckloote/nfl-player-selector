@@ -69,7 +69,13 @@ either of them a policy's selection would name a comparison that was never run.
 
 `all_eligible`, `available`, `depleted`, `recommended`, `submitted`, and
 `common_top1/3/5/10` by rank within slot among the eligible unused candidates at the
-decision itself. Positions keep WR and TE separate. Lead horizons use the frozen buckets
+decision itself. `submitted` is the pick that still stands in a slot: corrections and
+removals are folded over the ordered action history first, across decision ids, because a
+withdrawal recorded without naming a decision arrives linked to whichever advice came
+last. Reading only the submissions would leave every player ever entered in the
+population. A submission credited to a decision that never forecast that player is
+reported as unmatched rather than counted, so a link that names nothing describable is
+visible instead of silently absent. Positions keep WR and TE separate. Lead horizons use the frozen buckets
 and are never pooled: repeated forecasts of one target week share its single outcome.
 
 Eligibility reconciles the deadline. The live path leaves the deadline out of
@@ -96,12 +102,26 @@ assumes the live path and the archive are the same function of the same inputs; 
 that was checked only inside one process on a staged database, never against a decision
 that had actually been captured.
 
+The rebuild runs under the constants the decision recorded, not the current ones. The
+projection multipliers are read when they are called, so replaying under today's would
+report a configuration change as a live/archive divergence -- and would report it while
+reconstruction still passed, because the stored surface already has the old multiplier in
+it. A structured setting the log cannot faithfully restore leaves the decision
+unverifiable, which counts against the floor rather than being excused by it.
+
 `hard_eligible` is deliberately not compared. The live path omits the deadline from it and
 the replay folds it in, so the two differ by construction and comparing them would report
 the contract as a defect. The deadline is reconciled instead: the captured
-`decision_status` must reproduce exactly the cells the replay blocked. The same instant
-must also name the same feed observations, or the two sides agreed about inputs neither of
-them read.
+`decision_status` must reproduce exactly the cells the replay blocked.
+
+The same instant must also name the same feed observations, or the two sides agreed about
+inputs neither of them read. The captured side of that comparison is the decision's own
+append-only input record, never a fresh resolution of the archive: resolving both sides at
+check time compares the archive against itself, so an observation written afterwards but
+stamped before the decision would change what the replay reads while the comparison went
+on reporting agreement. Observations are compared by identity rather than by content
+alone, because two readings of a feed can carry identical bytes and still be two
+readings.
 
 ## Floors
 

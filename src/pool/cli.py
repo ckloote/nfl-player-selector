@@ -1191,8 +1191,11 @@ def verify_capture(
             console.print(f"[red]No captured decision {decision} in {season}[/red]")
             raise typer.Exit(1)
     if not len(found):
-        console.print(f"[yellow]No captured decisions for {season}.[/yellow]")
-        return
+        # Nothing verified is not verification. A caller running this command on its own
+        # gets no completeness check anywhere else, and an exit code of zero here would
+        # tell it the window is sound when the window is empty.
+        console.print(f"[red]No captured decisions for {season}; nothing was verified.[/red]")
+        raise typer.Exit(1)
     t = Table("Decision", "Week", "Event", "Reconstructs", "Parity", "Detail")
     failed = 0
     for row in found.itertuples():

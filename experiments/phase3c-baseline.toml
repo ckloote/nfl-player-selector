@@ -71,7 +71,23 @@ parity_columns = [
   "lam",
 ]
 parity_reconciles_deadline = true
+# The captured side of the observation comparison is the decision's own append-only input
+# record, and identity is compared rather than content alone. Re-resolving the archive at
+# check time would compare it against itself: an observation archived afterwards but
+# stamped before the decision would change what the replay reads while the comparison
+# went on reporting agreement, and two readings carrying identical bytes are still two
+# readings.
 parity_requires_same_observations = true
+# The replay is rebuilt under the constants the decision recorded, not the current ones.
+# `build_projections` reads its multipliers when it is called, so a constant that moved
+# after the capture would otherwise be reported as a live/archive divergence -- and
+# reported while reconstruction still passed, because the stored surface already has the
+# old multiplier in it.
+parity_uses_recorded_settings = true
+# Submissions are reduced over the ordered action history before they are a population.
+# A pick that was corrected or removed is not a submitted pick, and one credited to a
+# decision that never forecast that player is reported rather than counted.
+submissions_reduce_corrections = true
 # Advice re-derived from the stored surface must equal the advice recorded beside it.
 # This is the check that the capture is sufficient: if they differ, something the
 # decision depended on was never written down.

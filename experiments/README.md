@@ -76,7 +76,7 @@ dataset, and writes:
 | `events.csv` | Scheduled decision events against captured ones, week by week; a week whose first game is already in the main slate schedules one, not two |
 | `fidelity.csv` | Event capture, reconstruction and parity rates against the protocol's floors; both fidelity rates divide by every captured decision, not by the ones that could be checked |
 | `outcome-coverage.csv` | Coverage over the declared current and future populations, with future target weeks outside the window reported as unsettled rather than missing |
-| `submissions.csv` | Each submitted pick, the decision it was attributed to, and whether that link was named or inferred |
+| `submissions.csv` | Every recorded submission with its player, the decision it was attributed to, whether that link was named or inferred, any reader-side fallback, and its status: still standing, superseded, withdrawn, unattributed, or credited to a decision that never forecast that player |
 | `strata.csv`, `fits.csv`, `reliability.csv`, `zero-accounting.csv`, `coverage.csv` | The Phase 3A descriptive tables over the captured surface, under the prospective populations |
 | `identities.json` | The protocol hash, the distinct decision identities in the window and any constants drift between them, beside the module hashes that computed the description |
 | `BASELINE.md` | The dated note: measurements and identities only, no conclusion |
@@ -84,7 +84,11 @@ dataset, and writes:
 Eligibility is reconciled with the deadline before any population is described, and parity
 compares the model columns rather than the two eligibility columns, which differ by
 construction: the live path leaves the deadline out of `hard_eligible` and the replay folds
-it in.
+it in. The captured side of the observation comparison comes from each decision's own
+append-only input record rather than from re-resolving the archive at check time, so an
+observation written afterwards but stamped before the decision is caught instead of
+agreeing with itself. Corrections and removals are folded before `submitted` is a
+population, so it holds the pick that still stands rather than every pick ever entered.
 
 Seed −1 identifies a deterministic forecast/strategy. Seeds 0–19 identify shuffled projections
 or shipped random-strategy trials; the `model` and `strategy` columns distinguish them.

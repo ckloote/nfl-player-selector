@@ -179,9 +179,18 @@ def load_run(run: Path, model: str = "shipped", seed: int = -1, seasons=None) ->
 
 
 def prepare(
-    rows: pd.DataFrame, discount: float | None = None, decision_week_flags=None
+    rows: pd.DataFrame,
+    discount: float | pd.Series | None = None,
+    decision_week_flags=None,
 ) -> pd.DataFrame:
-    """Derive the frozen grouping axes from a joined surface."""
+    """Derive the frozen grouping axes from a joined surface.
+
+    `discount` may be a per-row Series as well as a scalar. A study runs under one saved
+    setting, but a prospective window can span more than one: a discount that moved
+    mid-window makes the decisions on either side of the move two different functions of
+    the same name, and pooling them under today's value would rewrite the planning
+    quantity of captures that never changed.
+    """
     discount = config.FUTURE_DISCOUNT if discount is None else discount
     rows = rows.copy()
     rows["lead_horizon"] = rows.week.astype(int) - rows.decision_week.astype(int)

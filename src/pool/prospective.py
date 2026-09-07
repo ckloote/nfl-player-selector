@@ -20,6 +20,7 @@ import json
 import math
 import sqlite3
 import tomllib
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -78,6 +79,21 @@ PARITY_COLUMNS = (
     "lam",
 )
 PARITY_KEYS = ("week", "slot", "player_id")
+
+# Every recorded submission, and what became of it. A pick that was corrected, removed,
+# attributed to no captured decision, or credited to a decision that never forecast it
+# is a fact about the collection; leaving any of them out of the audit would report a
+# tidier history than the one the log holds.
+SUBMISSION_COLUMNS = (
+    "week",
+    "slot",
+    "player_id",
+    "attributed",
+    "link_source",
+    "reader_fallback",
+    "status",
+)
+SUBMISSION_STATUS = ("matched", "unmatched surface", "unattributed", "superseded", "withdrawn")
 
 # `state.availability` values that mean the cell could not be acted on. The forecast was
 # usable; the cell was not.
@@ -158,7 +174,9 @@ def resolve(path: str | Path) -> dict:
     for name in (
         "parity_reconciles_deadline",
         "parity_requires_same_observations",
+        "parity_uses_recorded_settings",
         "reconstruction_checks_advice",
+        "submissions_reduce_corrections",
     ):
         if spec.get(name) is not True:
             raise ValueError(f"{name} must be declared true; this module always checks it")
@@ -346,6 +364,48 @@ def _keyed(frame: pd.DataFrame, columns) -> pd.DataFrame:
     return frame.set_index(list(PARITY_KEYS))[list(columns)].sort_index()
 
 
+def _captured_observations(conn: sqlite3.Connection, decision_id: str) -> dict:
+    """The observations the decision recorded for itself, from the append-only table.
+
+    Not `capture.observed_inputs`: that re-resolves `input_observations` at the time it
+    is asked, which is the same table and the same rule the replay uses. Both sides would
+    then move together, and a backdated observation -- one archived afterwards but stamped
+    before the decision -- would change what the replay reads while the comparison went on
+    reporting agreement.
+    """
+    return {
+        (int(r["season"]), r["feed"]): (
+            r["observation_id"],
+            r["content_hash"],
+            r["observed_at"],
+            bool(r["missing"]),
+        )
+        for r in conn.execute(
+            "SELECT season, feed, observation_id, content_hash, observed_at, missing "
+            "FROM decision_inputs WHERE decision_id = ?",
+            (decision_id,),
+        )
+    }
+
+
+def _replayed_observations(provenance) -> dict:
+    """The same identity, from what the replay actually resolved.
+
+    Identity, not content: two observations of a feed can carry identical bytes and still
+    be different readings, and a comparison on the content hash alone would call them the
+    same observation. Missingness travels with it for the same reason.
+    """
+    return {
+        (int(r["season"]), r["feed"]): (
+            r.get("observation_id"),
+            r.get("content_hash"),
+            r.get("observed_at"),
+            bool(r.get("missing")),
+        )
+        for r in provenance
+    }
+
+
 def parity(
     conn: sqlite3.Connection, decision_id: str, spec: dict, *, allow_code_drift: bool = False
 ) -> dict:
@@ -356,6 +416,12 @@ def parity(
     checks it builds both sides in one process from a staged database. This resolves the
     archive at the captured timestamp and rebuilds, so a divergence shows up as a
     divergence rather than as a quietly different forecast.
+
+    The rebuild runs under the settings the decision recorded rather than today's.
+    `build_projections` reads its multipliers when it is called, so a moved constant would
+    otherwise be reported as a live/archive divergence -- and reported while
+    reconstruction still passed, because the stored surface already has the old multiplier
+    baked into it.
 
     A decision whose archive cannot be resolved is a failure, not an exemption. The
     archive is written by `refresh`, so an unresolvable decision means the feeds were
@@ -375,66 +441,83 @@ def parity(
     week, decision_at = int(head["week"]), head["decision_at"]
     stored = capture.load_surface(conn, head["surface_hash"])
     detail = json.loads(head["detail"])
-    try:
-        frames = projections.load_frames(
-            conn, season, week, input_policy="snapshots", decision_at=decision_at
-        )
-        replayed = projections.build_projections(frames, week, spec["role_source"])
-    except (ValueError, KeyError) as exc:
-        return dict(
-            decision_id=decision_id,
-            week=week,
-            decision_at=decision_at,
-            ok=False,
-            checkable=False,
-            reason=f"archive cannot be resolved at the decision: {exc}",
-        )
-
-    left, right = _keyed(stored, PARITY_COLUMNS), _keyed(replayed, PARITY_COLUMNS)
-    missing = left.index.difference(right.index)
-    extra = right.index.difference(left.index)
-    shared = left.index.intersection(right.index)
-    a, b = left.loc[shared], right.loc[shared]
-    differing, worst = [], 0.0
-    for column in PARITY_COLUMNS:
-        x, y = a[column].to_numpy(dtype=float), b[column].to_numpy(dtype=float)
-        if not np.array_equal(x, y, equal_nan=True):
-            differing.append(column)
-            gap = np.nanmax(np.abs(x - y)) if len(x) else np.nan
-            worst = max(worst, float(0.0 if np.isnan(gap) else gap))
-
-    # The deadline, reconciled rather than compared. Live `hard_eligible` omits it and the
-    # captured `decision_status` carries it; the replay folds it in. Equality of the two
-    # sides after that reconciliation is the same fact the columns cannot state directly.
-    decidable = ~stored.decision_status.isin(BLOCKED_STATUS)
-    reconciled = _keyed(
-        stored.assign(eligible=stored.hard_eligible.fillna(False).astype(bool) & decidable),
-        ["eligible"],
-    ).loc[shared]
-    replayed_eligible = _keyed(
-        replayed.assign(eligible=replayed.hard_eligible.fillna(False).astype(bool)), ["eligible"]
-    ).loc[shared]
-    deadline_ok = bool(
-        np.array_equal(reconciled.eligible.to_numpy(), replayed_eligible.eligible.to_numpy())
+    unchecked = dict(
+        decision_id=decision_id, week=week, decision_at=decision_at, ok=False, checkable=False
     )
 
-    # The same instant must name the same observations, or the two sides agreed about
-    # inputs neither of them read.
-    captured_inputs = {
-        (r["season"], r["feed"]): r["content_hash"]
-        for r in capture.observed_inputs(conn, season, decision_at)
-    }
-    replay_inputs = {(r["season"], r["feed"]): r.get("content_hash") for r in frames.provenance}
-    observations_ok = captured_inputs == replay_inputs
-
-    advice_ok, advice_reason = False, None
     try:
         identity_payload = capture.recorded_identity(conn, decision_id)
-        code_hash, _, _ = capture._code_identity()
-        if identity_payload.get("code_hash") != code_hash and not allow_code_drift:
-            advice_reason = "source tree differs from the one the decision was captured under"
-        else:
-            with capture.recorded_settings(identity_payload.get("constants", {})):
+    except ValueError as exc:
+        return dict(unchecked, reason=str(exc))
+    code_hash, _, _ = capture._code_identity()
+    code_ok = allow_code_drift or identity_payload.get("code_hash") == code_hash
+    advice_reason = (
+        None if code_ok else "source tree differs from the one the decision was captured under"
+    )
+
+    # One settings block around the whole rebuild: loading the frames, building the
+    # projections and re-deriving the advice each read their constants when called. A
+    # structured setting the log cannot restore leaves the decision unverifiable rather
+    # than checkable and wrong -- and unverifiable already counts against the floor.
+    restored = ExitStack()
+    try:
+        restored.enter_context(capture.recorded_settings(identity_payload.get("constants", {})))
+    except ValueError as exc:
+        return dict(unchecked, reason=f"cannot rebuild under the decision's own settings: {exc}")
+
+    with restored:
+        try:
+            frames = projections.load_frames(
+                conn, season, week, input_policy="snapshots", decision_at=decision_at
+            )
+            replayed = projections.build_projections(frames, week, spec["role_source"])
+        except (ValueError, KeyError) as exc:
+            return dict(unchecked, reason=f"archive cannot be resolved at the decision: {exc}")
+
+        left, right = _keyed(stored, PARITY_COLUMNS), _keyed(replayed, PARITY_COLUMNS)
+        missing = left.index.difference(right.index)
+        extra = right.index.difference(left.index)
+        shared = left.index.intersection(right.index)
+        a, b = left.loc[shared], right.loc[shared]
+        differing, worst = [], 0.0
+        for column in PARITY_COLUMNS:
+            x, y = a[column].to_numpy(dtype=float), b[column].to_numpy(dtype=float)
+            if not np.array_equal(x, y, equal_nan=True):
+                differing.append(column)
+                gap = np.nanmax(np.abs(x - y)) if len(x) else np.nan
+                worst = max(worst, float(0.0 if np.isnan(gap) else gap))
+
+        # The deadline, reconciled rather than compared. Live `hard_eligible` omits it and
+        # the captured `decision_status` carries it; the replay folds it in. Equality of
+        # the two sides after that reconciliation is the same fact the columns cannot
+        # state directly.
+        decidable = ~stored.decision_status.isin(BLOCKED_STATUS)
+        reconciled = _keyed(
+            stored.assign(eligible=stored.hard_eligible.fillna(False).astype(bool) & decidable),
+            ["eligible"],
+        ).loc[shared]
+        replayed_eligible = _keyed(
+            replayed.assign(eligible=replayed.hard_eligible.fillna(False).astype(bool)),
+            ["eligible"],
+        ).loc[shared]
+        deadline_ok = bool(
+            np.array_equal(reconciled.eligible.to_numpy(), replayed_eligible.eligible.to_numpy())
+        )
+
+        # The same instant must name the same observations, or the two sides agreed about
+        # inputs neither of them read.
+        captured_inputs = _captured_observations(conn, decision_id)
+        replay_inputs = _replayed_observations(frames.provenance)
+        differing_observations = sorted(
+            f"{key[0]}:{key[1]}"
+            for key in set(captured_inputs) | set(replay_inputs)
+            if captured_inputs.get(key) != replay_inputs.get(key)
+        )
+        observations_ok = bool(captured_inputs) and not differing_observations
+
+        advice_ok = False
+        if code_ok:
+            try:
                 derived = advise_week(
                     replayed,
                     week,
@@ -445,32 +528,35 @@ def parity(
                     },
                     now=state.eastern_now(datetime.fromisoformat(decision_at)),
                 )
-            recorded = {
-                r["slot"]: json.loads(r["detail"])
-                for r in conn.execute(
-                    "SELECT slot, detail FROM decision_events "
-                    "WHERE decision_id = ? AND kind = 'advice' ORDER BY event_id",
-                    (decision_id,),
-                )
-            }
-            advice_ok = _advice_details(derived) == recorded
-            advice_reason = None if advice_ok else "replayed advice differs from the record"
-    except ValueError as exc:
-        advice_reason = str(exc)
+                recorded = {
+                    r["slot"]: json.loads(r["detail"])
+                    for r in conn.execute(
+                        "SELECT slot, detail FROM decision_events "
+                        "WHERE decision_id = ? AND kind = 'advice' ORDER BY event_id",
+                        (decision_id,),
+                    )
+                }
+                advice_ok = _advice_details(derived) == recorded
+                advice_reason = None if advice_ok else "replayed advice differs from the record"
+            except (ValueError, KeyError) as exc:
+                advice_reason = str(exc)
 
-    ok = (
-        not len(missing)
-        and not len(extra)
-        and not differing
-        and deadline_ok
-        and observations_ok
-        and advice_ok
-    )
+    reasons = []
+    if len(missing) or len(extra) or differing:
+        reasons.append("surface differs")
+    if not deadline_ok:
+        reasons.append("deadline reconciliation differs")
+    if not captured_inputs:
+        reasons.append("the decision recorded no inputs of its own")
+    elif differing_observations:
+        reasons.append(f"replay read other observations: {', '.join(differing_observations)}")
+    if advice_reason:
+        reasons.append(advice_reason)
     return dict(
         decision_id=decision_id,
         week=week,
         decision_at=decision_at,
-        ok=ok,
+        ok=not reasons,
         checkable=True,
         rows_captured=int(len(left)),
         rows_replayed=int(len(right)),
@@ -480,8 +566,9 @@ def parity(
         largest_difference=worst,
         deadline_reconciled=deadline_ok,
         observations_match=observations_ok,
+        differing_observations=differing_observations,
         advice_matches=advice_ok,
-        reason=advice_reason if not ok and advice_reason else (None if ok else "surface differs"),
+        reason="; ".join(reasons) or None,
     )
 
 
@@ -501,44 +588,81 @@ def _ranks(rows: pd.DataFrame) -> pd.Series:
     return out
 
 
-def _flags(conn: sqlite3.Connection, rows: pd.DataFrame, known: set[str], season: int):
-    """Which surface row each slot's advice recommended, and which one was submitted.
-
-    A submission happens on the pool's own site, so the link back to a decision is
-    recorded rather than inferred; where it was never recorded, the submission is
-    attributed to the last decision captured that week and counted as attributed that
-    way, because a submission silently dropped is a population that quietly shrinks.
-    """
-    events = db.read_df(
+def _actions(conn: sqlite3.Connection, season: int) -> pd.DataFrame:
+    """Every advice, submission and correction of the season, in the order they happened."""
+    return db.read_df(
         conn,
         "SELECT decision_id, week, slot, kind, player_id, detail FROM decision_events "
-        "WHERE season = ? AND kind IN ('advice', 'submitted') ORDER BY event_id",
+        "WHERE season = ? AND kind IN ('advice', 'submitted', 'correction') ORDER BY event_id",
         (season,),
     )
-    last_of_week = {}
-    for row in rows[["decision_id", "decision_week"]].drop_duplicates().itertuples():
-        last_of_week[int(row.decision_week)] = row.decision_id
-    recommended, submitted, links = set(), set(), []
+
+
+def _player(value) -> str | None:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    return str(value)
+
+
+def _surviving(events: pd.DataFrame) -> tuple[dict, list[dict]]:
+    """Reduce the ordered action history to the pick that still stands in each slot.
+
+    `record` appends a correction naming the player it replaced and then the submission
+    that replaced him; `unrecord` appends a correction that removes one. Reading only the
+    submissions leaves every player ever entered marked as submitted, so a slot corrected
+    twice contributes three forecast rows to a population that describes one -- and a slot
+    later emptied contributes rows for a pick that is in nobody's lineup.
+
+    The fold runs across decision ids deliberately. `unrecord` links its correction through
+    the latest-advice fallback, so the withdrawal of a Thursday pick can arrive carrying a
+    Sunday decision's id; keying the reduction on the slot is what makes it find the pick
+    it actually replaced.
+    """
+    live: dict[tuple[int, str], dict] = {}
+    history: list[dict] = []
     for e in events.itertuples():
-        if e.player_id is None or (isinstance(e.player_id, float) and pd.isna(e.player_id)):
-            continue
-        key = (int(e.week), str(e.slot), str(e.player_id))
         if e.kind == "advice":
-            if e.decision_id in known:
-                recommended.add((e.decision_id, *key))
             continue
-        detail = json.loads(e.detail)
-        linked = detail.get("linked_decision") or e.decision_id
-        source = "recorded"
-        if linked not in known:
-            linked, source = last_of_week.get(int(e.week)), "latest in week"
-        if linked is None:
-            links.append(
-                dict(week=int(e.week), slot=e.slot, attributed=None, source="unattributed")
-            )
+        key = (int(e.week), str(e.slot))
+        detail = json.loads(e.detail) if e.detail else {}
+        if e.kind == "correction":
+            gone = live.pop(key, None)
+            if gone is not None:
+                history.append(
+                    dict(gone, status="withdrawn" if detail.get("removed") else "superseded")
+                )
             continue
-        submitted.add((linked, *key))
-        links.append(dict(week=int(e.week), slot=e.slot, attributed=linked, source=source))
+        player_id = _player(e.player_id)
+        if player_id is None:
+            continue
+        live[key] = dict(
+            week=key[0],
+            slot=key[1],
+            player_id=player_id,
+            attributed=detail.get("linked_decision") or e.decision_id,
+            # How the link was made travels with it. A deliberate `--decision` link and the
+            # latest-advice fallback are different claims about which decision the pick came
+            # from, and with two decisions in a week the fallback is whichever happened last.
+            link_source=detail.get("link_source") or "unrecorded",
+            reader_fallback=None,
+        )
+    return live, history
+
+
+def _flags(conn: sqlite3.Connection, rows: pd.DataFrame, captured: pd.DataFrame, season: int):
+    """Which surface row each slot's advice recommended, and which one is still submitted.
+
+    A submission happens on the pool's own site, so the link back to a decision is
+    recorded rather than inferred. Where the recorded link points outside the window the
+    submission is attributed to the last decision captured that week, and that reader-side
+    substitution is reported separately from the link the operator made -- a submission
+    silently dropped is a population that quietly shrinks, and one silently re-attributed
+    is a population that quietly lies.
+    """
+    known = set(captured.decision_id)
+    # `decisions` reads in event order, so the last row of a week is the last decision of
+    # that week.
+    last_of_week = {int(row.week): row.decision_id for row in captured.itertuples()}
     keys = list(
         zip(
             rows.decision_id,
@@ -548,12 +672,61 @@ def _flags(conn: sqlite3.Connection, rows: pd.DataFrame, known: set[str], season
             strict=True,
         )
     )
+    surface = set(keys)
+
+    events = _actions(conn, season)
+    recommended = set()
+    for e in events[events.kind.eq("advice")].itertuples():
+        player_id = _player(e.player_id)
+        if player_id is not None and e.decision_id in known:
+            recommended.add((e.decision_id, int(e.week), str(e.slot), player_id))
+
+    live, history = _surviving(events)
+    submitted, links = set(), list(history)
+    for entry in live.values():
+        record = dict(entry)
+        if record["attributed"] not in known:
+            record["attributed"] = last_of_week.get(record["week"])
+            record["reader_fallback"] = "latest in week"
+        if record["attributed"] is None:
+            links.append(dict(record, status="unattributed"))
+            continue
+        cell = (record["attributed"], record["week"], record["slot"], record["player_id"])
+        # The decision has to have forecast the player it was credited with picking.
+        # Without this a submission naming somebody absent from that capture reads as a
+        # successful attribution while contributing no forecast row to describe.
+        if cell not in surface:
+            links.append(dict(record, status="unmatched surface"))
+            continue
+        submitted.add(cell)
+        links.append(dict(record, status="matched"))
+
     at_decision = rows.lead_horizon.eq(0).to_numpy()
     return (
         pd.Series([k in recommended for k in keys], index=rows.index) & at_decision,
         pd.Series([k in submitted for k in keys], index=rows.index) & at_decision,
-        pd.DataFrame(links),
+        pd.DataFrame(links, columns=list(SUBMISSION_COLUMNS)).sort_values(
+            ["week", "slot", "status"], ignore_index=True
+        ),
     )
+
+
+def recorded_discounts(conn: sqlite3.Connection, captured: pd.DataFrame) -> dict[str, float]:
+    """The future discount each decision was actually made under.
+
+    A decision records its constants, so this is a fact about the capture rather than a
+    setting of the reader. Where a payload does not carry one -- nothing shipped has ever
+    omitted it, but a reader that assumed would be asserting something it had not checked
+    -- the current value stands in, and `provenance` says which decisions that applied to.
+    """
+    out = {}
+    for decision_id in captured.decision_id if len(captured) else []:
+        try:
+            constants = capture.recorded_identity(conn, decision_id).get("constants", {})
+        except ValueError:
+            constants = {}
+        out[decision_id] = float(constants.get("FUTURE_DISCOUNT", config.FUTURE_DISCOUNT))
+    return out
 
 
 def frame(conn: sqlite3.Connection, spec: dict) -> pd.DataFrame:
@@ -567,7 +740,8 @@ def frame(conn: sqlite3.Connection, spec: dict) -> pd.DataFrame:
     ruled-out player is masked to zero, and an undecidable one keeps his positive rate.
     """
     season = spec["season"]
-    known = set(decisions(conn, spec).decision_id)
+    captured = decisions(conn, spec)
+    known = set(captured.decision_id)
     rows = capture.outcomes(conn, season)
     if not len(rows):
         raise ValueError(f"No captured decisions for {season}; nothing to describe")
@@ -587,8 +761,15 @@ def frame(conn: sqlite3.Connection, spec: dict) -> pd.DataFrame:
     rows["hard_eligible"] = rows.hard_eligible.fillna(False).astype(bool) & decidable
     rows["baseline_spent"] = rows.used.fillna(False).astype(bool)
     rows["rank_available"] = _ranks(rows)
-    rows["recommended"], rows["submitted"], links = _flags(conn, rows, known, season)
-    out = diagnostics.prepare(rows, decision_week_flags=DECISION_WEEK_FLAGS)
+    rows["recommended"], rows["submitted"], links = _flags(conn, rows, captured, season)
+    # Each decision's own discount, not today's. The planning quantity is what the
+    # optimizer compares, and recomputing it under a setting that moved after the capture
+    # would report a different planning value for a decision that never changed.
+    out = diagnostics.prepare(
+        rows,
+        discount=rows.decision_id.map(recorded_discounts(conn, captured)),
+        decision_week_flags=DECISION_WEEK_FLAGS,
+    )
     out.attrs["submission_links"] = links
     return out
 
@@ -739,6 +920,7 @@ def provenance(conn: sqlite3.Connection, spec: dict) -> dict:
             "SELECT payload FROM decision_identities WHERE identity_hash = ?", (digest,)
         ).fetchone()
         payload = json.loads(row["payload"]) if row else {}
+        constants = payload.get("constants", {})
         identities.append(
             dict(
                 identity_hash=digest,
@@ -747,6 +929,12 @@ def provenance(conn: sqlite3.Connection, spec: dict) -> dict:
                 code_hash=payload.get("code_hash"),
                 revision=payload.get("revision"),
                 dirty=payload.get("dirty"),
+                # The planning quantity is derived under this, so it is part of what
+                # describes these decisions rather than a detail of the reader.
+                future_discount=float(constants.get("FUTURE_DISCOUNT", config.FUTURE_DISCOUNT)),
+                future_discount_source=(
+                    "decision" if "FUTURE_DISCOUNT" in constants else "current configuration"
+                ),
                 decisions=int(captured.identity_hash.eq(digest).sum()),
             )
         )
@@ -778,6 +966,9 @@ def provenance(conn: sqlite3.Connection, spec: dict) -> dict:
             "decision_events": list(EVENTS),
             "decision_identities": identities,
             "identity_drift": drift,
+            # More than one value here means the window holds two functions of the same
+            # name. It is reported rather than pooled over.
+            "future_discounts": sorted({i["future_discount"] for i in identities}),
         },
         "diagnostic_provenance": {
             "prospective_module": diagnostics.module_hash("prospective"),
@@ -793,7 +984,9 @@ def provenance(conn: sqlite3.Connection, spec: dict) -> dict:
     }
 
 
-def baseline_note(spec, rows, fits, checks, events, rates, coverage, identities) -> str:
+def baseline_note(
+    spec, rows, fits, checks, events, rates, coverage, submissions, identities
+) -> str:
     def table(frame, columns):
         head = "| " + " | ".join(columns) + " |"
         rule = "|" + "|".join("---" for _ in columns) + "|"
@@ -857,11 +1050,27 @@ def baseline_note(spec, rows, fits, checks, events, rates, coverage, identities)
         "missing: the week has not been played, and neither a missing-coverage count nor a "
         "zero would describe them.",
         "",
+    ]
+    if len(submissions):
+        counts = submissions.groupby("status").size().rename("submissions").reset_index()
+        described = int(submissions.status.eq("matched").sum())
+        lines += ["### Submissions", ""]
+        lines += table(counts, ["status", "submissions"])
+        lines += [
+            f"{described:,} of {len(submissions):,} recorded submissions are described by "
+            "the population. Corrections and removals are folded before counting, so a slot "
+            "carries the pick that still stands rather than every pick ever entered, and a "
+            "submission credited to a decision that never forecast that player is reported "
+            "as unmatched rather than counted as attributed.",
+            "",
+        ]
+    lines += [
         "## Group definitions",
         "",
         f"- Populations: {', '.join(POPULATIONS)}. `recommended` is the row each slot's "
-        "advice named; `submitted` is the row that was actually entered. Neither is a "
-        "replayed policy's selection, and no achieved-score comparison is made here.",
+        "advice named; `submitted` is the pick that still stands there after corrections "
+        "and removals. Neither is a replayed policy's selection, and no achieved-score "
+        "comparison is made here.",
         f"- Positions: {', '.join(diagnostics.POSITIONS)}, WR and TE separately throughout.",
         f"- Lead horizons: "
         f"{', '.join(label for _, _, label in diagnostics.HORIZON_BUCKETS)}, never pooled.",
@@ -912,12 +1121,13 @@ def export(
     described, fitted = diagnostics.strata(rows, masks)
     checks, events, rates = fidelity(conn, spec, allow_code_drift=allow_code_drift)
     coverage = outcome_coverage(rows, spec)
+    submissions = rows.attrs.get("submission_links", pd.DataFrame())
     tables = {
         "decisions.csv": checks,
         "events.csv": events,
         "fidelity.csv": rates,
         "outcome-coverage.csv": coverage,
-        "submissions.csv": rows.attrs.get("submission_links", pd.DataFrame()),
+        "submissions.csv": submissions,
         "strata.csv": described,
         "fits.csv": fitted,
         "reliability.csv": diagnostics.reliability(rows, masks),
@@ -932,7 +1142,7 @@ def export(
     identities = provenance(conn, spec)
     (out / "identities.json").write_text(json.dumps(identities, indent=2, sort_keys=True) + "\n")
     (out / "BASELINE.md").write_text(
-        baseline_note(spec, rows, fitted, checks, events, rates, coverage, identities)
+        baseline_note(spec, rows, fitted, checks, events, rates, coverage, submissions, identities)
     )
     log(f"Wrote {out}")
     return out

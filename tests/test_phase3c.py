@@ -401,7 +401,11 @@ def test_the_export_reads_its_floors_from_the_protocol(tmp_path):
     constant would report a threshold nobody signed."""
     conn, unplayed = _archived(tmp_path)
     _decide(conn, 3, datetime.fromisoformat(PRE_WEEK3))
-    _decide(conn, 3, datetime.fromisoformat(DECISION))
+    late, later, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    picked = later[later.week.eq(3) & later.slot.eq("QB")].player_id.iloc[0]
+    capture.record_action(
+        conn, SEASON, 3, "QB", "submitted", picked, {"player_name": "x"}, decision_id=late
+    )
     _publish(conn, unplayed, "rest")
     path = _protocol(
         tmp_path,
@@ -418,10 +422,15 @@ def test_the_export_reads_its_floors_from_the_protocol(tmp_path):
     assert float(future.floor) == 0.5
     note = (out / "BASELINE.md").read_text()
     assert "Identity only" in note and "not touchdowns gained or lost by waiting" in note
+    submissions = pd.read_csv(out / "submissions.csv")
+    assert list(submissions.columns)[1:] == list(prospective.SUBMISSION_COLUMNS)
+    assert submissions.status.iloc[0] == "matched" and submissions.link_source.iloc[0] == "named"
+    assert "### Submissions" in note and "1 of 1 recorded submissions" in note
     identities = json.loads((out / "identities.json").read_text())
     assert (
         identities["collection_provenance"]["specification_sha256"] == spec["specification_sha256"]
     )
+    assert identities["collection_provenance"]["future_discounts"] == [config.FUTURE_DISCOUNT]
     assert identities["diagnostic_provenance"]["populations"] == list(prospective.POPULATIONS)
 
 
@@ -469,3 +478,136 @@ def test_the_shipped_protocol_resolves_as_written():
     assert spec["floors"]["min_reconstruction_rate"] == 1.0
     assert list(spec["populations"]) == list(prospective.POPULATIONS)
     assert config.ROLE_SOURCE == spec["role_source"]
+
+
+# --- the review's findings, each as the regression it prevents ---------------
+BACKDATED = "2024-09-20T14:00:00+00:00"  # after every archived feed, before the decision
+
+
+def test_an_observation_archived_afterwards_is_not_agreement(tmp_path):
+    """Resolving the captured side at check time compares the archive against itself.
+    Both sides then move together, so an observation stamped before the decision but
+    written after it changes what the replay reads while the comparison goes on
+    reporting agreement -- and identical bytes are still two different readings."""
+    conn, _ = _archived(tmp_path)
+    decision_id, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    spec = prospective.resolve(_protocol(tmp_path))
+    assert prospective.parity(conn, decision_id, spec)["ok"]
+
+    archive_all(conn, BACKDATED)  # same content, later stamp: it wins the replay's rule
+    result = prospective.parity(conn, decision_id, spec)
+    assert not result["observations_match"] and not result["ok"]
+    assert result["differing_observations"]
+    assert result["differing_columns"] == []  # nothing about the forecast moved
+    assert "other observations" in result["reason"]
+
+
+def test_a_pick_replaced_then_removed_is_submitted_by_nobody(tmp_path):
+    """`record` writes a correction naming the player it replaced and `unrecord` writes
+    one that removes it. Reading only the submissions leaves every player ever entered in
+    the population, so a slot corrected once and then emptied contributes two forecast
+    rows for a pick that is in nobody's lineup."""
+    conn, _ = _archived(tmp_path)
+    decision_id, proj, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    qbs = list(proj[proj.week.eq(3) & proj.slot.eq("QB")].player_id)
+    first, second = qbs[0], qbs[1]
+    for slot, kind, player, detail in (
+        ("QB", "submitted", first, {"player_name": "first"}),
+        ("QB", "correction", first, {"replaced_by": second}),
+        ("QB", "submitted", second, {"player_name": "second"}),
+    ):
+        capture.record_action(conn, SEASON, 3, slot, kind, player, detail, decision_id=decision_id)
+    # `unrecord` links through the fallback, so the withdrawal can arrive under another id.
+    capture.record_action(conn, SEASON, 3, "QB", "correction", second, {"removed": True})
+
+    _spec, rows = _described(conn, tmp_path)
+    assert not prospective.population_masks(rows)["submitted"].any()
+    links = rows.attrs["submission_links"]
+    assert dict(zip(links.player_id, links.status, strict=True)) == {
+        first: "superseded",
+        second: "withdrawn",
+    }
+
+
+def test_a_submission_the_decision_never_forecast_is_reported_not_attributed(tmp_path):
+    """A link that names an existing decision is not yet a link to a described row. A
+    player absent from that capture produces an apparently successful attribution that
+    contributes no forecast, and an audit without the player identity cannot find it."""
+    conn, _ = _archived(tmp_path)
+    decision_id, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    capture.record_action(
+        conn, SEASON, 3, "QB", "submitted", "NOT-ON-THE-SURFACE", {}, decision_id=decision_id
+    )
+    _spec, rows = _described(conn, tmp_path)
+    assert not prospective.population_masks(rows)["submitted"].any()
+    link = rows.attrs["submission_links"].iloc[0]
+    assert link.player_id == "NOT-ON-THE-SURFACE"
+    assert link.status == "unmatched surface" and link.attributed == decision_id
+
+
+def test_parity_survives_a_constant_that_moved_after_the_decision(tmp_path):
+    """`build_projections` reads its multipliers when it is called. Replaying under
+    today's would report a configuration change as a live/archive divergence -- and would
+    report it while reconstruction passed, because the stored surface already has the old
+    multiplier in it."""
+    conn, _ = _archived(tmp_path)
+    decision_id, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    spec = prospective.resolve(_protocol(tmp_path))
+    assert prospective.parity(conn, decision_id, spec)["ok"]
+
+    with config.override(HOME_MULT=config.HOME_MULT + 0.5):
+        result = prospective.parity(conn, decision_id, spec)
+    assert result["ok"], result
+    assert result["differing_columns"] == []
+
+
+def test_the_planning_value_uses_the_discount_the_decision_was_made_under(tmp_path):
+    """The planning quantity is what the optimizer compares. Recomputing it under a
+    discount that moved after the capture reports a different planning value for a
+    decision that never changed."""
+    conn, _ = _archived(tmp_path)
+    _decide(conn, 3, datetime.fromisoformat(DECISION))
+    _spec, rows = _described(conn, tmp_path)
+    future = rows.lead_horizon.gt(0)
+    assert (rows.planning_lam[future] < rows.lam[future]).any()  # the discount is doing work
+
+    with config.override(FUTURE_DISCOUNT=0.5):
+        _moved_spec, moved = _described(conn, tmp_path)
+    pd.testing.assert_series_equal(rows.planning_lam, moved.planning_lam)
+
+
+def test_a_named_link_and_the_fallback_stay_distinguishable(tmp_path):
+    """A deliberate `--decision` link and the most-recent-advice fallback are different
+    claims about which decision a pick came from, and with two decisions in a week the
+    fallback is whichever happened last."""
+    conn, _ = _archived(tmp_path)
+    early, proj, _ = _decide(conn, 3, datetime.fromisoformat(PRE_WEEK3))
+    late, later, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    named = proj[proj.week.eq(3) & proj.slot.eq("QB")].player_id.iloc[0]
+    inferred = later[later.week.eq(3) & later.slot.eq("RB")].player_id.iloc[0]
+    capture.record_action(
+        conn, SEASON, 3, "QB", "submitted", named, {"player_name": "x"}, decision_id=early
+    )
+    capture.record_action(conn, SEASON, 3, "RB", "submitted", inferred, {"player_name": "y"})
+
+    _spec, rows = _described(conn, tmp_path)
+    links = rows.attrs["submission_links"].set_index("slot")
+    assert links.loc["QB", "link_source"] == "named"
+    assert links.loc["QB", "attributed"] == early
+    assert links.loc["RB", "link_source"] == "latest advice"
+    assert links.loc["RB", "attributed"] == late
+    assert links.reader_fallback.isna().all()
+
+
+def test_verifying_an_empty_window_is_not_a_verification(tmp_path):
+    """Completeness is checked by the protocol's capture floor, which a caller running
+    this command on its own never reaches. Exiting zero here would tell that caller the
+    window is sound when the window is empty."""
+    conn, _ = _archived(tmp_path)
+    conn.commit()
+    conn.close()
+    result = CliRunner().invoke(
+        app, ["verify-capture", "--season", str(SEASON), "--db", str(tmp_path / "parity.db")]
+    )
+    assert result.exit_code == 1
+    assert "nothing was verified" in result.output

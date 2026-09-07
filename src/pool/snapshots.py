@@ -138,6 +138,7 @@ def restore(
                             missing=True,
                             age_hours=None,
                             stale=None,
+                            observation_id=None,
                             observed_at=None,
                             content_hash=None,
                         )
@@ -170,6 +171,7 @@ def restore(
                         missing=False,
                         age_hours=age,
                         stale=age > config.FRESHNESS_HOURS[feed],
+                        observation_id=row["observation_id"],
                         observed_at=row["observed_at"],
                         source_timestamp=row["source_timestamp"],
                         content_hash=row["content_hash"],
