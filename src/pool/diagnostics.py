@@ -60,6 +60,11 @@ POSITIONS = ("QB", "RB", "WR", "TE")
 HORIZON_BUCKETS = ((0, 0, "0"), (1, 1, "1"), (2, 3, "2-3"), (4, 6, "4-6"), (7, 99, "7+"))
 
 AXES = ("overall", "position", "rate_bin", "availability")
+# Columns that describe the decision week itself rather than the forecast cell, so a
+# future row must not inherit them. A caller whose log carries different ones -- a
+# prospective capture has one recommendation and one submission where a bake-off has
+# two replayed policies -- names its own; the default is this study's.
+DECISION_WEEK_FLAGS = ("baseline_spent", "picked_greedy", "picked_optimizer")
 
 
 def horizon_bucket(horizon: pd.Series) -> pd.Series:
@@ -173,8 +178,19 @@ def load_run(run: Path, model: str = "shipped", seed: int = -1, seasons=None) ->
     )
 
 
-def prepare(rows: pd.DataFrame, discount: float | None = None) -> pd.DataFrame:
-    """Derive the frozen grouping axes from a joined surface."""
+def prepare(
+    rows: pd.DataFrame,
+    discount: float | pd.Series | None = None,
+    decision_week_flags=None,
+) -> pd.DataFrame:
+    """Derive the frozen grouping axes from a joined surface.
+
+    `discount` may be a per-row Series as well as a scalar. A study runs under one saved
+    setting, but a prospective window can span more than one: a discount that moved
+    mid-window makes the decisions on either side of the move two different functions of
+    the same name, and pooling them under today's value would rewrite the planning
+    quantity of captures that never changed.
+    """
     discount = config.FUTURE_DISCOUNT if discount is None else discount
     rows = rows.copy()
     rows["lead_horizon"] = rows.week.astype(int) - rows.decision_week.astype(int)
@@ -191,7 +207,8 @@ def prepare(rows: pd.DataFrame, discount: float | None = None) -> pd.DataFrame:
     # the week-17 cell the same decision was planning. Nullable dtypes, so "not a
     # decision-week row" stays distinct from False.
     future = rows.lead_horizon > 0
-    for column in ("baseline_spent", "picked_greedy", "picked_optimizer"):
+    flags = DECISION_WEEK_FLAGS if decision_week_flags is None else tuple(decision_week_flags)
+    for column in flags:
         rows[column] = rows[column].astype("boolean")
         rows.loc[future, column] = pd.NA
     rows["rank_available"] = rows.rank_available.astype("Float64")
@@ -314,9 +331,9 @@ def _describe(sub: pd.DataFrame) -> dict:
     }
 
 
-def strata(rows: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def strata(rows: pd.DataFrame, masks=None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """The descriptive table and the fits keyed to it, in one pass over the groups."""
-    masks = population_masks(rows)
+    masks = population_masks(rows) if masks is None else masks
     described, fitted = [], []
     for population, axis, level, horizon, sub in _stratum_rows(rows, masks):
         key = dict(population=population, axis=axis, level=level, horizon=horizon)
@@ -331,13 +348,13 @@ def strata(rows: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return pd.DataFrame(described), pd.DataFrame(fitted)
 
 
-def by_season(rows: pd.DataFrame) -> pd.DataFrame:
+def by_season(rows: pd.DataFrame, masks=None) -> pd.DataFrame:
     """Per-season fits for the whole of each population at each horizon.
 
     Season is the unit any later paired comparison would use, so the per-season fits
     are reported rather than a single pooled coefficient standing in for fifteen.
     """
-    masks = population_masks(rows)
+    masks = population_masks(rows) if masks is None else masks
     out = []
     for population, mask in masks.items():
         base = rows[mask]
@@ -352,9 +369,9 @@ def by_season(rows: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
-def reliability(rows: pd.DataFrame) -> pd.DataFrame:
+def reliability(rows: pd.DataFrame, masks=None) -> pd.DataFrame:
     """The bin table by population, position and horizon; a pooled ratio hides tilt."""
-    masks = population_masks(rows)
+    masks = population_masks(rows) if masks is None else masks
     out = []
     for population, mask in masks.items():
         base = rows[mask & rows.outcome_known]
@@ -368,7 +385,7 @@ def reliability(rows: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def zero_accounting(rows: pd.DataFrame) -> pd.DataFrame:
+def zero_accounting(rows: pd.DataFrame, masks=None) -> pd.DataFrame:
     """Every zero rate and every exclusion, in the classes that mean different things.
 
     An *eligible zero rate* is a candidate the tool would let you pick and forecasts at
@@ -390,7 +407,7 @@ def zero_accounting(rows: pd.DataFrame) -> pd.DataFrame:
     """
     out = []
     eligible = rows.hard_eligible.fillna(False).astype(bool)
-    groups = dict(population_masks(rows))
+    groups = dict(population_masks(rows) if masks is None else masks)
     groups["excluded_unavailable"] = ~eligible & rows.avail_mult.le(0)
     groups["excluded_undecidable"] = ~eligible & rows.avail_mult.gt(0)
     classes = {

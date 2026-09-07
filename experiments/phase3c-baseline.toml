@@ -1,0 +1,139 @@
+# Phase 3C: prospective identity-baseline collection.
+#
+# Frozen and dated before the first decision is captured. It declares the collection
+# window, the decision events, the live input policy, the populations, the parity
+# criteria and the fidelity/coverage floors, so none of them can be chosen once the
+# captures are on screen. Every key here enters the resolved protocol and therefore the
+# window identity: amending any of them starts a new collection window rather than
+# continuing this one, and an amendment must be dated before the review it affects.
+#
+# No candidate qualified in Phase 3B, so nothing is under evaluation here. This is
+# identity only: the shipped model, the shipped constants, the live path unchanged. The
+# floors below are data-quality and fidelity requirements, not performance targets, and
+# meeting them establishes that the capture is trustworthy -- not that the model is good,
+# not that any policy improved, and not that waiting for news is worth anything.
+schema_version = 1
+specification_date = "2026-09-07"
+season = 2026
+
+# Weeks 1-6, reviewed once week 6 is completely scored. Six weeks is sized to validate
+# capture, parity and coverage on real forward data. It is not sized to detect a forecast
+# or policy difference, and the review must not report one.
+collection_weeks = [1, 2, 3, 4, 5, 6]
+review_after_week = 6
+
+# Two decision events per week. `thursday_deadline` is the decision immediately before
+# the week's first confirmed kickoff deadline; `sunday_slate` is the decision immediately
+# before the main Sunday slate begins (`recommend.main_slate_start`). Recording both is
+# what preserves the Thursday-to-Sunday news change. It does not measure the value of
+# waiting: that needs a multi-event replay which does not exist, and which is a separate
+# prerequisite for any such claim.
+decision_events = ["thursday_deadline", "sunday_slate"]
+
+# The live path, unchanged. 3C observes production; it does not alter it.
+model = "shipped"
+calibrator = "identity"
+input_policy = "live"
+role_source = "depth"
+constants = "shipped"
+
+# Populations, declared for the prospective log rather than inherited from Phase 3A.
+# `selected_greedy` and `selected_optimizer` do not exist live: there is one shipped
+# recommendation and one submitted pick, and conflating either with a replayed policy's
+# selection would describe a comparison that was never run. Rank is taken within slot
+# among eligible unused candidates at the decision itself.
+populations = [
+  "all_eligible",
+  "available",
+  "depleted",
+  "recommended",
+  "submitted",
+  "common_top1",
+  "common_top3",
+  "common_top5",
+  "common_top10",
+]
+
+# Live/snapshot parity. The captured surface is compared against a snapshot replay
+# resolved at the same instant, on the model columns, keyed by (week, slot, player_id).
+# `hard_eligible` is deliberately not among them: the live path leaves the deadline out
+# of it and applies it in the recommender, while snapshot replay folds it in, so the two
+# differ by construction. The deadline is reconciled separately instead -- the captured
+# `decision_status` must reproduce exactly the cells the replay blocked -- which checks
+# the same fact without pretending the two columns are the same column.
+parity_columns = [
+  "base_rate",
+  "def_mult",
+  "vegas_mult",
+  "home_mult",
+  "avail_mult",
+  "role_mult",
+  "lam",
+]
+parity_reconciles_deadline = true
+# The captured side of the observation comparison is the decision's own append-only input
+# record, and identity is compared rather than content alone. Re-resolving the archive at
+# check time would compare it against itself: an observation archived afterwards but
+# stamped before the decision would change what the replay reads while the comparison
+# went on reporting agreement, and two readings carrying identical bytes are still two
+# readings.
+parity_requires_same_observations = true
+# The replay is rebuilt under the constants the decision recorded, not the current ones.
+# `build_projections` reads its multipliers when it is called, so a constant that moved
+# after the capture would otherwise be reported as a live/archive divergence -- and
+# reported while reconstruction still passed, because the stored surface already has the
+# old multiplier in it.
+parity_uses_recorded_settings = true
+# Submissions are reduced over the ordered action history before they are a population.
+# A pick that was corrected or removed is not a submitted pick, and one credited to a
+# decision that never forecast that player is reported rather than counted.
+submissions_reduce_corrections = true
+# Advice re-derived from the stored surface must equal the advice recorded beside it.
+# This is the check that the capture is sufficient: if they differ, something the
+# decision depended on was never written down.
+reconstruction_checks_advice = true
+
+# Outcome coverage is declared over the target weeks this window can actually settle. A
+# week-1 decision forecasts through week 18, and at a week-6 review those later target
+# weeks have no outcomes and cannot have any. Counting them as missing coverage would
+# measure the calendar; counting them as zeros would be worse. They are excluded from
+# the floor and reported separately as unsettled.
+current_coverage_population = "horizon_0_in_window"
+future_coverage_population = "target_week_in_window"
+
+# Floors. A missing floor blocks execution, for the same reason a missing margin blocked
+# Phase 3B: a threshold chosen once the numbers exist is not a threshold. These are not
+# margins -- nothing is being promoted -- they are the conditions under which the
+# collected evidence is fit to review at all.
+[floors]
+# Scheduled decision events that were actually captured. Two per week for six weeks is
+# twelve; a missed event is evidence that does not exist and cannot be recreated.
+min_event_capture_rate = 1.0
+# Captured decisions whose stored surface re-derives the advice recorded beside it.
+# Anything below one is a capture defect, not a tolerance.
+min_reconstruction_rate = 1.0
+# Captured decisions whose live surface matches a snapshot replay of the same instant on
+# every declared parity column. Also one: a mismatch means live and replay are different
+# functions, which is precisely what Phase 2 replay assumed they were not.
+min_parity_rate = 1.0
+# Resolved outcomes on the hard-eligible current-week surface, over the declared
+# population. Matches the Phase 3B floor so the two are read on the same scale.
+min_outcome_coverage_current = 0.98
+# Resolved outcomes on the future surface whose target week is inside the window.
+min_outcome_coverage_future = 0.95
+
+# What the review may and may not conclude, declared before the evidence exists so the
+# scope cannot widen to fit an interesting number. Carried as data rather than prose for
+# the same reason Phase 3B's promotion rule was.
+[review]
+# Baseline readiness only: was the capture faithful, was it complete, did live and
+# snapshot agree, and what do the descriptive diagnostics look like on forward data.
+reports = "baseline_readiness"
+# No candidate is under evaluation, so there is nothing to promote and no gate to pass.
+candidates = "none"
+max_promoted = 0
+# Achieved-score and waiting-value claims are out of scope for this window. A shadow
+# advice log is not a counterfactual season score, and static hold sensitivity is not
+# the dynamic value of waiting for news.
+policy_claims = "none"
+production_change = "none"

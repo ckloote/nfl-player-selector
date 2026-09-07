@@ -394,20 +394,42 @@ def record_action(
     decision_at: str | datetime | None = None,
     model: str = "shipped",
     calibrator: str = "identity",
+    decision_id: str | None = None,
 ) -> str:
     """Append a submitted pick or a later correction, linked to its decision.
 
-    Submissions happen outside this tool -- the pool's own site -- so the link is the
-    most recent decision for the same season, week and slot, and is null when a pick
-    was recorded without one.
+    Submissions happen outside this tool -- the pool's own site -- so the link has to be
+    supplied or inferred. Naming the decision is the reliable form and the only one that
+    survives more than one decision in a week: the fallback takes the most recent advice
+    for the slot, which with a Thursday and a Sunday decision is whichever happened last
+    rather than the one the pick actually came from. How the link was made is recorded
+    beside it, so a later reader is not left to guess which of the two this was.
+
+    A named decision that does not exist is refused. Minting a fresh decision id for a
+    typo would produce an event that reconstructs against nothing, and it would look
+    exactly like a pick submitted without advice.
     """
     stamp = snapshots.timestamp(decision_at or datetime.now(UTC))
-    row = conn.execute(
-        "SELECT decision_id FROM decision_events WHERE season = ? AND week = ? AND kind = 'advice'"
-        " AND (slot = ? OR ? IS NULL) ORDER BY event_id DESC LIMIT 1",
-        (season, week, slot, slot),
-    ).fetchone()
-    linked = row["decision_id"] if row else None
+    if decision_id is not None:
+        named = conn.execute(
+            "SELECT 1 FROM decision_events WHERE decision_id = ? AND season = ? AND week = ?"
+            " AND kind = 'advice' AND (slot = ? OR ? IS NULL) LIMIT 1",
+            (decision_id, season, week, slot, slot),
+        ).fetchone()
+        if named is None:
+            raise ValueError(
+                f"No captured decision {decision_id} advising {slot or 'any slot'} "
+                f"in {season} week {week}"
+            )
+        linked, link_source = decision_id, "named"
+    else:
+        row = conn.execute(
+            "SELECT decision_id FROM decision_events WHERE season = ? AND week = ?"
+            " AND kind = 'advice' AND (slot = ? OR ? IS NULL) ORDER BY event_id DESC LIMIT 1",
+            (season, week, slot, slot),
+        ).fetchone()
+        linked = row["decision_id"] if row else None
+        link_source = "latest advice" if linked else "unlinked"
     identity_hash = identity(conn, model, calibrator)
     decision_id = linked or uuid4().hex
     with db.transaction(conn):
@@ -419,7 +441,15 @@ def record_action(
             season,
             week,
             identity_hash,
-            [(slot, kind, player_id, dict(detail, linked_decision=linked), None)],
+            [
+                (
+                    slot,
+                    kind,
+                    player_id,
+                    dict(detail, linked_decision=linked, link_source=link_source),
+                    None,
+                )
+            ],
         )
     return decision_id
 
