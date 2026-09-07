@@ -73,7 +73,7 @@ dataset, and writes:
 | Artifact | Row definition |
 |---|---|
 | `decisions.csv` | Each captured decision, its declared event, and whether it reconstructs and matches a snapshot replay of its own instant |
-| `events.csv` | Scheduled decision events against captured ones, week by week; a week whose first game is already in the main slate schedules one, not two |
+| `events.csv` | Scheduled decision events against captured ones, week by week; a week whose first game is already in the main slate schedules one, not two. Decisions at kickoff waves the protocol does not require appear with `scheduled = 0`, classified by the deadline they beat — a Monday-game decision is its own wave, not a late pick — and `after_deadline` is kept for a decision that beat no deadline at all |
 | `fidelity.csv` | Event capture, reconstruction and parity rates against the protocol's floors; both fidelity rates divide by every captured decision, not by the ones that could be checked |
 | `outcome-coverage.csv` | Coverage over the declared current and future populations, with future target weeks outside the window reported as unsettled rather than missing |
 | `submissions.csv` | Every recorded submission in the declared weeks with its player, the decision it was attributed to, whether that link was named or inferred, any reader-side fallback, and its status: `matched` (described by the population), `not eligible` (on the decision's surface but reconciled out, with the reason in `exclusion`), `unmatched surface` (credited to a decision that never forecast that player), `unattributed`, `resubmitted`, `superseded` or `withdrawn`. `matched` is read off the population mask, so the count in the note is membership rather than a claim beside it |

@@ -151,6 +151,107 @@ def test_a_decision_is_the_event_whose_deadline_it_beat(tmp_path):
     assert prospective.classify_event(POST_SUN, events) == "after_deadline"
 
 
+def _wave(conn, game_id, kickoff, home, away):
+    """Add a kickoff wave to the fixture week without touching its rosters.
+
+    Teams nobody is rostered on, so the schedule gains a wave and the projection surface
+    gains nothing. Four real waves would need eight team-slots and the fixture has four
+    teams; what these tests are about is which deadline a decision beat.
+    """
+    with conn:
+        conn.execute(
+            "INSERT INTO games (game_id, season, week, game_type, kickoff, home_team, "
+            "away_team, spread_line, total_line, kickoff_known) "
+            "VALUES (?, ?, 3, 'REG', ?, ?, ?, -3.0, 45.0, 1)",
+            (game_id, SEASON, kickoff, home, away),
+        )
+
+
+def _four_waves(conn):
+    """The shape week 1 of the window actually has: Wed, Thu, Sun, Mon.
+
+    Week 3 ships as Thursday plus Sunday. Every week of the 2026 window has a Monday
+    game, and week 1 opens on a Wednesday and plays again on Thursday, so a two-wave
+    schedule cannot show what classification does with the others.
+    """
+    _wave(conn, "g2024-3-EEE", "2024-09-18T20:15", "EEE", "FFF")  # Wednesday opener
+    _wave(conn, "g2024-3-GGG", "2024-09-23T20:15", "GGG", "HHH")  # Monday closer
+
+
+def test_every_kickoff_wave_is_a_decision_point_but_only_two_are_required(tmp_path):
+    """A week offers a pick before each kickoff day. Declaring two events is a statement
+    about what must be captured, not about how many decisions the week contains, and the
+    two must stay exactly what they were."""
+    conn, _ = _staged(tmp_path)
+    _four_waves(conn)
+    waves = prospective.week_waves(conn, SEASON, 3)
+    assert list(waves) == ["thursday_deadline", "thursday_wave", "sunday_slate", "monday_wave"]
+    assert sorted(waves.values()) == list(waves.values())  # in the order they fall
+    # The required schedule is unchanged by the waves around it.
+    assert list(prospective.week_events(conn, SEASON, 3)) == list(prospective.EVENTS)
+    assert prospective.week_events(conn, SEASON, 3)["sunday_slate"] == waves["sunday_slate"]
+
+
+def test_a_decision_is_classified_by_the_wave_it_beat_not_the_next_declared_event(tmp_path):
+    """Filing a Thursday decision as the Sunday one describes a cadence nobody worked to,
+    and filing a Monday-game decision as late describes a pick made before its own
+    kickoff as one made after the slate."""
+    conn, _ = _staged(tmp_path)
+    _four_waves(conn)
+    waves = prospective.week_waves(conn, SEASON, 3)
+    assert prospective.classify_event("2024-09-18T18:00:00+00:00", waves) == "thursday_deadline"
+    assert prospective.classify_event(PRE_WEEK3, waves) == "thursday_wave"
+    assert prospective.classify_event(DECISION, waves) == "sunday_slate"
+    assert prospective.classify_event(POST_SUN, waves) == "monday_wave"
+    # Beating no deadline at all still has its own name.
+    assert prospective.classify_event("2024-09-24T12:00:00+00:00", waves) == "after_deadline"
+
+
+def test_an_undeclared_wave_is_reported_but_not_demanded(tmp_path):
+    """A Monday decision is real evidence and belongs in the record, verified like any
+    other. Requiring it would put a floor of 1.0 behind an event the protocol never
+    scheduled, so one missed Monday would fail a window whose declared events were all
+    captured."""
+    conn, unplayed = _archived(tmp_path)
+    _wave(conn, "g2024-3-GGG", "2024-09-23T20:15", "GGG", "HHH")  # Monday closer
+    _decide(conn, 3, datetime.fromisoformat(PRE_WEEK3))  # thursday_deadline
+    _decide(conn, 3, datetime.fromisoformat(DECISION))  # sunday_slate
+    _publish(conn, unplayed, "rest")
+    _decide(conn, 3, datetime.fromisoformat(POST_SUN))  # monday_wave, undeclared
+    spec = prospective.resolve(_protocol(tmp_path))
+    events = prospective.event_coverage(conn, spec)
+
+    declared = events[events.scheduled.eq(1)].set_index("event")
+    assert set(declared.index) == set(prospective.EVENTS)
+    assert list(declared.captured) == [1, 1]
+    extra = events[events.scheduled.eq(0)].set_index("event")
+    assert list(extra.index) == ["monday_wave"]
+    assert int(extra.loc["monday_wave", "captured"]) == 1
+    assert extra.loc["monday_wave", "deadline"]  # it beat a real deadline of its own
+
+    _table, _events, rates = prospective.fidelity(conn, spec)
+    capture = rates[rates.measure.eq("event_capture")].iloc[0]
+    assert capture.numerator == 2 and capture.denominator == 2 and capture.rate == 1.0
+    # Every captured decision is still held to reconstruction and parity, declared or not.
+    assert int(rates[rates.measure.eq("parity")].iloc[0].denominator) == 3
+
+
+def test_the_protocol_must_declare_how_it_classifies_events(tmp_path):
+    """The method travels in the file. A reader who could not tell whether a Monday
+    decision was a wave or a late pick could not tell what the event table means."""
+    path = _protocol(
+        tmp_path,
+        replace=[
+            (
+                "events_classify_by_kickoff_wave = true",
+                "events_classify_by_kickoff_wave = false",
+            )
+        ],
+    )
+    with pytest.raises(ValueError, match="events_classify_by_kickoff_wave must be declared true"):
+        prospective.resolve(path)
+
+
 def test_a_missed_event_is_a_miss_not_a_smaller_denominator(tmp_path):
     """Two events were scheduled and one was captured. Reporting a rate of one over the
     events that happened to be captured would make a missed week look like a clean one."""

@@ -2,25 +2,43 @@
 
 **Specification date:** 2026-09-07 (UTC).
 
-**Status:** signed off 2026-09-07 (UTC), before the first captured decision. Authorised
-for collection; unamended since.
+**Status:** amended 2026-09-07 (UTC), after the first sign-off and before any decision was
+captured. **The amendment awaits owner sign-off.**
 
 **Decision maker:** project owner, before the 2026 week 1 pick deadline.
 
-**Sign-off.** The project owner approved this protocol on
-[PR #6](https://github.com/ckloote/nfl-player-selector/pull/6) at commit
-`48a9f3303110a659d38dca735644bdf905b0cd05`, for prospective identity-only collection over
-2026 weeks 1-6. The approval authorises collection, fidelity verification and the
-descriptive diagnostics below. It authorises no candidate promotion, no production change,
-no achieved-score claim and no waiting-value claim. The declared floors and window will not
-be relaxed after inspection, and a failing floor will be reported as an outcome rather than
-adjusted away.
+**Scope of approval, unchanged by the amendment.** Signing authorises collection, fidelity
+verification and the descriptive diagnostics below. It authorises no candidate promotion,
+no production change, no achieved-score claim and no waiting-value claim. The declared
+floors and window will not be relaxed after inspection, and a failing floor will be
+reported as an outcome rather than adjusted away.
 
-This record changes no declaration. The machine-readable specification is
-`experiments/phase3c-baseline.toml`, whose SHA-256 is
-`958118e635d5b2718a10dbe0846335e0e39306a4445a23386fb370656fa474ab`; that hash is what every
-export carries, and it is unchanged by writing the sign-off down here. A window whose
-export reports a different one was not run under the protocol approved above.
+### Sign-off history
+
+**Signed 2026-09-07** on [PR #6](https://github.com/ckloote/nfl-player-selector/pull/6) at
+commit `48a9f3303110a659d38dca735644bdf905b0cd05`, covering specification
+`958118e635d5b2718a10dbe0846335e0e39306a4445a23386fb370656fa474ab`.
+
+**Amended 2026-09-07**, the same day, before the first captured decision. The declared
+schedule named two decision events per week, but every week of this window has three
+kickoff waves and week 1 has four: `classify_event` filed a Thursday decision as the
+Sunday one and a Monday-game decision -- made before its own kickoff -- as `after_deadline`.
+Decisions are now classified by the wave whose deadline they beat, and undeclared waves are
+reported with `scheduled = 0` rather than required. The required schedule, the floors, the
+populations, the parity criteria and the window are untouched.
+
+The specification is now
+`14541e7253acb97f20cc9cf045fbbc21d9b8dfae44ab3e645b54ab7b682e8b75`, so the approval above
+no longer covers it and the amended protocol needs a fresh sign-off before the first
+capture. That hash is what every export carries: a window whose export reports a different
+one was not run under the protocol that was signed.
+
+This is an amendment against no evidence. The operational database held zero captured
+decisions when it was written, so there was nothing to inspect and nothing that could have
+suggested it; it is a correction to a preregistration still in its pre-registration state,
+not an adjustment to a window in flight. After the first capture the rule in
+[Freeze And Limits](#freeze-and-limits) applies instead, and a change of this kind would
+start a new window rather than amend this one.
 
 This is the dated collection protocol for Phase 3C, the counterpart to the
 [Phase 3B margin sign-off](PHASE3B_MARGIN_SIGNOFF.md). It fixes the window, the decision
@@ -42,7 +60,8 @@ below; it authorises no production change, no candidate, and no policy claim.
 | Season | 2026 |
 | Collection weeks | 1 through 6 |
 | Review point | after week 6 is completely scored |
-| Decision events | two per week: `thursday_deadline`, `sunday_slate` |
+| Required decision events | two per week: `thursday_deadline`, `sunday_slate` |
+| Other kickoff waves | captured when worked, classified by their own deadline, `scheduled = 0` |
 | Model / calibrator | `shipped` / `identity` |
 | Input policy / roles | `live` / depth chart |
 | Constants | shipped, unchanged |
@@ -59,6 +78,26 @@ deadline. `sunday_slate` is the decision made before the main Sunday slate begin
 whose first game is already in the main slate schedules one event, not two: counting an
 impossible event as a miss would make the schedule, rather than the operator, decide
 whether the window passed.
+
+These two are what the capture floor requires. They are not the only decisions a week
+offers. A week has as many decision points as it has kickoff waves -- distinct kickoff
+days, each with its own deadline -- and in this window every week has a Monday game while
+week 1 opens on Wednesday and plays again on Thursday, giving four. Picks are really made
+at those waves, so captures are expected there too.
+
+A captured decision is therefore classified by the wave whose deadline it beat, not by the
+first declared event it happens to precede. Without that a Thursday decision is filed as
+the Sunday one, three days early, and a Monday-game decision is filed as `after_deadline`
+when it was made before its own kickoff. `after_deadline` keeps its meaning: a decision
+that beat no deadline at all.
+
+Waves the protocol does not declare are reported with `scheduled = 0` and enter neither
+side of the capture rate. Describing a decision correctly is not the same as demanding it:
+requiring a capture at every wave would put roughly twenty mandatory events behind a floor
+of `1.0`, where a single missed Monday would fail a window that was otherwise sound. The
+obligation stays at the two events that carry the news change this window is about, and
+every extra decision is still held to reconstruction and parity, because those divide by
+every captured decision rather than by the scheduled ones.
 
 Capturing both is what puts the Thursday-to-Sunday news change in the record. It does not
 measure the value of waiting for news. Current replay makes one decision per week and
@@ -201,13 +240,18 @@ so the window is genuinely prospective. That is the one methodological advantage
 phase has over 3B, whose seasons had all been explored before its margins were signed, and
 it survives only if the floors are not relaxed to make the collected window pass. They
 will not be. Any later methodological amendment must be explicitly dated and treated as a
-new window, not attached to this one after inspection.
+new window, not attached to this one after inspection. The event-classification amendment
+recorded above was made the same day, before any decision existed to inspect; it is the
+last change this document takes without starting a new window.
 
-Known limits at sign-off. The operational database has never captured a decision: the
-capture tables are created by the next migration on open, `my_picks` is empty, and the
-only 2026 observations are the schedule, rosters and depth charts imported 2026-09-05,
-with no injury report. A refresh is a prerequisite for a meaningful week-1 decision and
-for any parity check at all, and its freshness warnings belong in the record rather than
-dismissed. Six weeks of one season is a small sample under one set of shipped constants;
+Known limits at the first sign-off. The operational database had never captured a
+decision: the capture tables are created by the next migration on open, `my_picks` was
+empty, and the only 2026 observations were the schedule, rosters and depth charts imported
+2026-09-05, with no injury report. A refresh is a prerequisite for a meaningful week-1
+decision and for any parity check at all, and its freshness warnings belong in the record
+rather than dismissed. That refresh was run on 2026-09-07 at 16:27 UTC: injuries entered
+the 2026 archive for the first time, and `player_stats` and `touchdowns` remain unpublished
+because no 2026 game has been played, which both the live path and the replay see as
+absent. Nothing has been captured yet. Six weeks of one season is a small sample under one set of shipped constants;
 if a constant moves mid-window the decisions are two different functions of the same name,
 and the export reports that drift rather than pooling across it.

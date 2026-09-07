@@ -127,6 +127,53 @@ Outcomes are never stored beside it; they are joined from finalized scoring when
 more than one decision in a week the fallback link — the most recent advice for that slot
 — is whichever happened last, which is not the same thing as the one the pick came from.
 
+### Working a week
+
+A week has one decision point before each **kickoff wave** — a distinct kickoff day, with
+its deadline 60 minutes before that day's first kickoff. Week 1 of 2026 opens Wednesday,
+plays again Thursday, holds the main slate Sunday and closes Monday; every later week is
+Thursday, Sunday, Monday. Work each wave the same way:
+
+> The Sunday deadline is the week's **first** Sunday kickoff, not the 1pm block. A week
+> with an early London game moves it to 08:30 ET — 2026 weeks 4, 5 and 6 all do. Check the
+> deadline rather than assuming noon; `pool captures` and the protocol's event table both
+> report it.
+
+```bash
+uv run pool refresh --season 2026                    # immediately before the capture
+uv run pool recommend --season 2026 --no-capture     # look as much as you like
+uv run pool recommend --season 2026                  # capture once; prints the decision id
+uv run pool record --decision <id> --qb "Herbert"    # only the slots you are committing now
+```
+
+- **Refresh immediately before every capture, no exceptions.** Parity divides by every
+  captured decision against a floor of `1.0`, and a decision whose feeds were never
+  archived at that instant cannot be verified — unverifiable is not verified. One
+  unrefreshed capture fails the window's parity floor.
+- **`recommend` commits nothing.** It writes only the capture log; `my_picks` is untouched.
+  Only `record` commits a pick, and only a recorded pick locks its slot or spends the
+  player for the season.
+- **Use `--no-capture` to look.** Every plain `recommend` writes a permanent decision that
+  then has to reconstruct and match a snapshot replay. Browse freely without capture;
+  capture once per wave.
+- **Honour the hold.** When the recommended player is in an early game and the best later
+  alternative costs less than `INFO_PREMIUM_TD` season-TDs, the advice says hold. That is
+  the signal to leave the slot open and decide at the next wave rather than commit now.
+- **Name the decision when you record.** Without `--decision` the pick links to the most
+  recent advice for that slot, which across several waves is whichever happened last, not
+  the one you acted on.
+- **News after you recorded is not a problem.** `pool unrecord <week> <slot>` removes the
+  pick and frees the player; `pool record` over the slot replaces him. Either way the log
+  keeps the history — the earlier entry is reported as withdrawn or superseded and the
+  population counts only the pick that still stands.
+
+Two of a week's waves are the events the [3C protocol](docs/PHASE3C_PROTOCOL.md) requires:
+`thursday_deadline`, before the week's first kickoff, and `sunday_slate`, before the main
+slate. Missing either fails `min_event_capture_rate`, and a missed event cannot be
+recreated. Decisions at the other waves are welcome and are classified by the deadline they
+beat rather than as late picks, but they are reported with `scheduled = 0` — described, not
+demanded.
+
 ```bash
 uv run pool captures --season 2026 --week 1          # captured decisions, or one in full
 uv run pool verify-capture --season 2026             # reconstruction and live/snapshot parity
