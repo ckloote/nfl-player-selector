@@ -133,6 +133,11 @@ fitted; every one of those keys enters the resolved configuration and so the run
 `benchmark.resolve` refuses a run that omits a margin. Amending any of them starts a new
 experiment rather than continuing this one.
 
+The project owner approved the unchanged margins on 2026-09-07 (UTC), before the full
+benchmark. The [sign-off and rationale](../docs/PHASE3B_MARGIN_SIGNOFF.md) record the
+accepted policy downside, the limits of the inference, and the distinction between
+Phase 3C advancement and production deployment.
+
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 uv run pool benchmark \
   --config experiments/phase3-calibration.toml \

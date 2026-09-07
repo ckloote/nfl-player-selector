@@ -137,6 +137,11 @@ in [`calibration.py`](../src/pool/calibration.py); fixtures are in `tests/test_p
 The declarations below are keys of the dated specification, and `benchmark.resolve` refuses a
 run that is missing any of them.
 
+**Margins approved 2026-09-07 (UTC).** The project owner signed off on the unchanged
+thresholds and their accepted policy downside before the full benchmark. See the
+[margin decision and rationale](PHASE3B_MARGIN_SIGNOFF.md). This is approval of the
+pre-run decision rule, not experiment completion or a candidate promotion.
+
 1. **Freeze the specification before fitting.** Deliver a dated
    `experiments/phase3-calibration.toml` with source/data/input hashes, candidate families,
    populations/weights, rate and lead-horizon strata, cutoffs, refit schedule, minimum samples,
