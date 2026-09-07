@@ -81,9 +81,11 @@ PARITY_COLUMNS = (
 PARITY_KEYS = ("week", "slot", "player_id")
 
 # Every recorded submission, and what became of it. A pick that was corrected, removed,
-# attributed to no captured decision, or credited to a decision that never forecast it
-# is a fact about the collection; leaving any of them out of the audit would report a
-# tidier history than the one the log holds.
+# re-entered, attributed to no captured decision, credited to a decision that never
+# forecast it, or reconciled out of the population by the deadline is a fact about the
+# collection; leaving any of them out of the audit would report a tidier history than the
+# one the log holds. `matched` is the one status that means described, and it is read off
+# the population rather than asserted beside it.
 SUBMISSION_COLUMNS = (
     "week",
     "slot",
@@ -92,8 +94,17 @@ SUBMISSION_COLUMNS = (
     "link_source",
     "reader_fallback",
     "status",
+    "exclusion",
 )
-SUBMISSION_STATUS = ("matched", "unmatched surface", "unattributed", "superseded", "withdrawn")
+SUBMISSION_STATUS = (
+    "matched",
+    "not eligible",
+    "unmatched surface",
+    "unattributed",
+    "resubmitted",
+    "superseded",
+    "withdrawn",
+)
 
 # `state.availability` values that mean the cell could not be acted on. The forecast was
 # usable; the cell was not.
@@ -588,13 +599,28 @@ def _ranks(rows: pd.DataFrame) -> pd.Series:
     return out
 
 
-def _actions(conn: sqlite3.Connection, season: int) -> pd.DataFrame:
-    """Every advice, submission and correction of the season, in the order they happened."""
+def _actions(conn: sqlite3.Connection, season: int, weeks) -> pd.DataFrame:
+    """Every advice, submission and correction of the declared weeks, in the order they happened.
+
+    The window is restricted here rather than downstream. A week outside it belongs to
+    another collection: its submission is linked to a decision this window filtered out,
+    so reading the whole season would report a correctly linked pick as an attribution
+    failure and move this window's totals with actions taken after it closed.
+
+    The filter is on the week, not on the captured decisions. A submission in a declared
+    week whose decision was never captured is a genuine failure of this window and has to
+    stay visible; only the weeks the protocol did not declare are out of scope.
+    """
+    weeks = sorted({int(w) for w in weeks})
+    if not weeks:
+        weeks = [None]
+    holes = ", ".join("?" * len(weeks))
     return db.read_df(
         conn,
         "SELECT decision_id, week, slot, kind, player_id, detail FROM decision_events "
-        "WHERE season = ? AND kind IN ('advice', 'submitted', 'correction') ORDER BY event_id",
-        (season,),
+        f"WHERE season = ? AND week IN ({holes}) "
+        "AND kind IN ('advice', 'submitted', 'correction') ORDER BY event_id",
+        (season, *weeks),
     )
 
 
@@ -617,6 +643,10 @@ def _surviving(events: pd.DataFrame) -> tuple[dict, list[dict]]:
     the latest-advice fallback, so the withdrawal of a Thursday pick can arrive carrying a
     Sunday decision's id; keying the reduction on the slot is what makes it find the pick
     it actually replaced.
+
+    Nothing is dropped on the way. Every entry a later action displaces is returned as
+    history with the status that displaced it, so each recorded submission is accounted
+    for exactly once whether or not it is the one still standing.
     """
     live: dict[tuple[int, str], dict] = {}
     history: list[dict] = []
@@ -635,6 +665,19 @@ def _surviving(events: pd.DataFrame) -> tuple[dict, list[dict]]:
         player_id = _player(e.player_id)
         if player_id is None:
             continue
+        # A submission over an occupied slot displaces whatever was there, and the entry it
+        # displaces is kept. `record` writes a correction only when the player changes but
+        # writes the submission either way, so re-entering a lineup on Sunday after naming
+        # Thursday's decision would otherwise erase the Thursday link -- the deliberate one
+        # -- and leave an audit that says the pick was only ever attributed by fallback.
+        displaced = live.pop(key, None)
+        if displaced is not None:
+            history.append(
+                dict(
+                    displaced,
+                    status="resubmitted" if displaced["player_id"] == player_id else "superseded",
+                )
+            )
         live[key] = dict(
             week=key[0],
             slot=key[1],
@@ -649,7 +692,7 @@ def _surviving(events: pd.DataFrame) -> tuple[dict, list[dict]]:
     return live, history
 
 
-def _flags(conn: sqlite3.Connection, rows: pd.DataFrame, captured: pd.DataFrame, season: int):
+def _flags(conn: sqlite3.Connection, rows: pd.DataFrame, captured: pd.DataFrame, spec: dict):
     """Which surface row each slot's advice recommended, and which one is still submitted.
 
     A submission happens on the pool's own site, so the link back to a decision is
@@ -659,6 +702,7 @@ def _flags(conn: sqlite3.Connection, rows: pd.DataFrame, captured: pd.DataFrame,
     silently dropped is a population that quietly shrinks, and one silently re-attributed
     is a population that quietly lies.
     """
+    season = spec["season"]
     known = set(captured.decision_id)
     # `decisions` reads in event order, so the last row of a week is the last decision of
     # that week.
@@ -674,7 +718,7 @@ def _flags(conn: sqlite3.Connection, rows: pd.DataFrame, captured: pd.DataFrame,
     )
     surface = set(keys)
 
-    events = _actions(conn, season)
+    events = _actions(conn, season, spec["collection_weeks"])
     recommended = set()
     for e in events[events.kind.eq("advice")].itertuples():
         player_id = _player(e.player_id)
@@ -698,6 +742,9 @@ def _flags(conn: sqlite3.Connection, rows: pd.DataFrame, captured: pd.DataFrame,
         if cell not in surface:
             links.append(dict(record, status="unmatched surface"))
             continue
+        # `matched` is provisional here: it says the credited decision forecast the player,
+        # not that the population describes him. `_reconciled` settles that against the
+        # mask itself, once eligibility has been reconciled with the deadline.
         submitted.add(cell)
         links.append(dict(record, status="matched"))
 
@@ -709,6 +756,56 @@ def _flags(conn: sqlite3.Connection, rows: pd.DataFrame, captured: pd.DataFrame,
             ["week", "slot", "status"], ignore_index=True
         ),
     )
+
+
+def _reconciled(links: pd.DataFrame, rows: pd.DataFrame) -> pd.DataFrame:
+    """Settle each surviving submission against the population that claims to describe it.
+
+    Being on the credited decision's surface is not the same as being described. The
+    population reconciles the deadline and the live surface does not, so a Thursday pick
+    credited to a Sunday decision sits on that surface with its kickoff already gone: it
+    matches, and eligibility reconciles it straight back out. Counting it as described
+    would report a submission the diagnostics contain no row for.
+
+    Membership is read off `population_masks` rather than recomputed from the same
+    ingredients, so the audit cannot come to a different answer than the population it is
+    auditing. The exclusion carries the cell's own `decision_status`, which names the
+    reason it was reconciled out rather than leaving the reader to infer one.
+    """
+    if not len(links):
+        return links
+    described = population_masks(rows)["submitted"]
+    at = rows.lead_horizon.eq(0)
+    cells = {
+        (d, int(w), str(s), str(pid)): str(status)
+        for d, w, s, pid, status in zip(
+            rows.decision_id[at],
+            rows.week[at],
+            rows.slot[at],
+            rows.player_id[at],
+            rows.decision_status[at],
+            strict=True,
+        )
+    }
+    keys = set(
+        zip(
+            rows.decision_id[described],
+            rows.week[described].astype(int),
+            rows.slot[described].astype(str),
+            rows.player_id[described].astype(str),
+            strict=True,
+        )
+    )
+    out = links.copy()
+    # An all-empty column reads back as float, and a reason is not a number.
+    out["exclusion"] = out["exclusion"].astype(object)
+    for i, link in out[out.status.eq("matched")].iterrows():
+        cell = (link.attributed, int(link.week), str(link.slot), str(link.player_id))
+        if cell in keys:
+            continue
+        out.loc[i, "status"] = "not eligible"
+        out.loc[i, "exclusion"] = cells.get(cell) or "outside the described population"
+    return out
 
 
 def recorded_discounts(conn: sqlite3.Connection, captured: pd.DataFrame) -> dict[str, float]:
@@ -761,7 +858,7 @@ def frame(conn: sqlite3.Connection, spec: dict) -> pd.DataFrame:
     rows["hard_eligible"] = rows.hard_eligible.fillna(False).astype(bool) & decidable
     rows["baseline_spent"] = rows.used.fillna(False).astype(bool)
     rows["rank_available"] = _ranks(rows)
-    rows["recommended"], rows["submitted"], links = _flags(conn, rows, captured, season)
+    rows["recommended"], rows["submitted"], links = _flags(conn, rows, captured, spec)
     # Each decision's own discount, not today's. The planning quantity is what the
     # optimizer compares, and recomputing it under a setting that moved after the capture
     # would report a different planning value for a decision that never changed.
@@ -770,7 +867,7 @@ def frame(conn: sqlite3.Connection, spec: dict) -> pd.DataFrame:
         discount=rows.decision_id.map(recorded_discounts(conn, captured)),
         decision_week_flags=DECISION_WEEK_FLAGS,
     )
-    out.attrs["submission_links"] = links
+    out.attrs["submission_links"] = _reconciled(links, out)
     return out
 
 
@@ -1058,12 +1155,34 @@ def baseline_note(
         lines += table(counts, ["status", "submissions"])
         lines += [
             f"{described:,} of {len(submissions):,} recorded submissions are described by "
-            "the population. Corrections and removals are folded before counting, so a slot "
-            "carries the pick that still stands rather than every pick ever entered, and a "
-            "submission credited to a decision that never forecast that player is reported "
-            "as unmatched rather than counted as attributed.",
+            "the population, counted by membership of it rather than asserted beside it. "
+            "Corrections, removals and re-entries are folded first, so a slot carries the "
+            "pick that still stands rather than every pick ever entered, and a submission "
+            "credited to a decision that never forecast that player is reported as "
+            "unmatched rather than counted as attributed.",
             "",
         ]
+        excluded = submissions[submissions.status.eq("not eligible")]
+        if len(excluded):
+            reasons = ", ".join(
+                f"{n:,} {reason}" for reason, n in excluded.exclusion.value_counts().items()
+            )
+            lines += [
+                f"{len(excluded):,} further submissions are on their decision's surface but "
+                f"outside the eligible population ({reasons}). Being picked and being "
+                "describable are different facts: the live surface leaves the deadline out "
+                "of eligibility and the population folds it in, so a pick made against an "
+                "earlier decision can be real and still have no row here.",
+                "",
+            ]
+        outside = submissions[submissions.status.eq("unattributed")]
+        if len(outside):
+            lines += [
+                f"{len(outside):,} submissions in the declared weeks are attributed to no "
+                "captured decision. Actions outside those weeks belong to another window "
+                "and are not read here at all.",
+                "",
+            ]
     lines += [
         "## Group definitions",
         "",

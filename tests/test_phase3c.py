@@ -401,11 +401,15 @@ def test_the_export_reads_its_floors_from_the_protocol(tmp_path):
     constant would report a threshold nobody signed."""
     conn, unplayed = _archived(tmp_path)
     _decide(conn, 3, datetime.fromisoformat(PRE_WEEK3))
-    late, later, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
-    picked = later[later.week.eq(3) & later.slot.eq("QB")].player_id.iloc[0]
-    capture.record_action(
-        conn, SEASON, 3, "QB", "submitted", picked, {"player_name": "x"}, decision_id=late
-    )
+    late, _later, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    _spec, surface = _described(conn, tmp_path)
+    # One pick the population describes and one the deadline reconciled out of it.
+    picked = _cell(surface, "QB", decision=late)
+    elapsed = _cell(surface, "RB", eligible=False, decision=late)
+    for slot, player in (("QB", picked), ("RB", elapsed)):
+        capture.record_action(
+            conn, SEASON, 3, slot, "submitted", player, {"player_name": slot}, decision_id=late
+        )
     _publish(conn, unplayed, "rest")
     path = _protocol(
         tmp_path,
@@ -424,8 +428,13 @@ def test_the_export_reads_its_floors_from_the_protocol(tmp_path):
     assert "Identity only" in note and "not touchdowns gained or lost by waiting" in note
     submissions = pd.read_csv(out / "submissions.csv")
     assert list(submissions.columns)[1:] == list(prospective.SUBMISSION_COLUMNS)
-    assert submissions.status.iloc[0] == "matched" and submissions.link_source.iloc[0] == "named"
-    assert "### Submissions" in note and "1 of 1 recorded submissions" in note
+    submissions = submissions.set_index("slot")
+    assert submissions.loc["QB", "status"] == "matched"
+    assert submissions.loc["QB", "link_source"] == "named"
+    assert submissions.loc["RB", "status"] == "not eligible"
+    assert submissions.loc["RB", "exclusion"] == "deadline passed"
+    assert "### Submissions" in note and "1 of 2 recorded submissions" in note
+    assert "1 deadline passed" in note and "outside the eligible population" in note
     identities = json.loads((out / "identities.json").read_text())
     assert (
         identities["collection_provenance"]["specification_sha256"] == spec["specification_sha256"]
@@ -599,6 +608,22 @@ def test_a_named_link_and_the_fallback_stay_distinguishable(tmp_path):
     assert links.reader_fallback.isna().all()
 
 
+def _cell(rows, slot, *, eligible=True, n=0, decision=None):
+    """A player the decision forecast in that slot, on the eligible or the elapsed side.
+
+    Derived from the described frame rather than named, so the fixture's kickoff times
+    stay the fixture's business and the test says which side of the deadline it wants.
+    Which decision matters: a player eligible on Wednesday's surface has had his kickoff
+    by Friday, so a frame holding two decisions has him on both sides at once.
+    """
+    at = rows[rows.lead_horizon.eq(0) & rows.slot.eq(slot)]
+    if decision is not None:
+        at = at[at.decision_id.eq(decision)]
+    side = at[at.hard_eligible] if eligible else at[at.decision_status.eq("deadline passed")]
+    assert len(side) > n, (slot, eligible)
+    return side.player_id.iloc[n]
+
+
 def test_verifying_an_empty_window_is_not_a_verification(tmp_path):
     """Completeness is checked by the protocol's capture floor, which a caller running
     this command on its own never reaches. Exiting zero here would tell that caller the
@@ -611,3 +636,122 @@ def test_verifying_an_empty_window_is_not_a_verification(tmp_path):
     )
     assert result.exit_code == 1
     assert "nothing was verified" in result.output
+
+
+# --- the follow-up review's findings ----------------------------------------
+def test_a_submission_the_deadline_ruled_out_is_not_described(tmp_path):
+    """Being on the credited decision's surface is not being described. The live path
+    leaves the deadline out of eligibility and the population folds it in, so a pick made
+    against an earlier decision matches a later decision's surface with its kickoff
+    already gone -- and the audit would report it described while the population that is
+    supposed to describe it holds no row at all."""
+    conn, _ = _archived(tmp_path)
+    decision_id, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    _spec, surface = _described(conn, tmp_path)
+    elapsed = _cell(surface, "QB", eligible=False)
+    capture.record_action(
+        conn, SEASON, 3, "QB", "submitted", elapsed, {"player_name": "x"}, decision_id=decision_id
+    )
+
+    _spec, rows = _described(conn, tmp_path)
+    assert not prospective.population_masks(rows)["submitted"].any()
+    link = rows.attrs["submission_links"].iloc[0]
+    assert link.player_id == elapsed and link.attributed == decision_id
+    assert link.status == "not eligible" and link.exclusion == "deadline passed"
+
+
+def test_the_described_count_is_population_membership_not_a_claim_beside_it(tmp_path):
+    """The note counts `matched` as described, so `matched` has to be read off the
+    population itself. Two submissions the decision forecast, one of them past its
+    kickoff: any count that does not come from the mask reports two."""
+    conn, _ = _archived(tmp_path)
+    decision_id, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    _spec, surface = _described(conn, tmp_path)
+    standing, elapsed = _cell(surface, "QB"), _cell(surface, "RB", eligible=False)
+    for slot, player in (("QB", standing), ("RB", elapsed)):
+        capture.record_action(
+            conn,
+            SEASON,
+            3,
+            slot,
+            "submitted",
+            player,
+            {"player_name": slot},
+            decision_id=decision_id,
+        )
+
+    _spec, rows = _described(conn, tmp_path)
+    links = rows.attrs["submission_links"]
+    described = prospective.population_masks(rows)["submitted"]
+    assert int(links.status.eq("matched").sum()) == int(described.sum()) == 1
+    assert set(rows.player_id[described]) == {standing}
+    assert sorted(links.status) == ["matched", "not eligible"]
+
+
+def test_an_action_outside_the_window_is_not_read_into_it(tmp_path):
+    """The protocol declares the collection weeks and the captures are restricted to
+    them, so reading the whole season reports a correctly linked pick from another week
+    as this window's attribution failure -- and lets a submission made after the window
+    closed move the totals of a baseline regenerated afterwards."""
+    conn, unplayed = _archived(tmp_path)
+    inside, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    _publish(conn, unplayed, "rest")
+    outside, later, _ = _decide(conn, 4, datetime.fromisoformat(POST_SUN))
+    _spec, surface = _described(conn, tmp_path)
+    capture.record_action(
+        conn,
+        SEASON,
+        3,
+        "QB",
+        "submitted",
+        _cell(surface, "QB"),
+        {"player_name": "x"},
+        decision_id=inside,
+    )
+    # Correctly linked, and none of this window's business.
+    capture.record_action(
+        conn,
+        SEASON,
+        4,
+        "QB",
+        "submitted",
+        later[later.week.eq(4) & later.slot.eq("QB")].player_id.iloc[0],
+        {"player_name": "y"},
+        decision_id=outside,
+    )
+
+    _spec, rows = _described(conn, tmp_path, weeks="[3]")
+    links = rows.attrs["submission_links"]
+    assert set(links.week) == {3}
+    assert list(links.status) == ["matched"] and links.attributed.iloc[0] == inside
+
+
+def test_recording_the_same_player_again_keeps_the_first_attribution(tmp_path):
+    """`record` writes a correction only when the player changes but writes the
+    submission either way, so re-entering an unchanged lineup against the Sunday decision
+    overwrites the Thursday entry. The deliberate link disappears and the audit reports a
+    pick that was only ever attributed by fallback."""
+    conn, _ = _archived(tmp_path)
+    early, _, _ = _decide(conn, 3, datetime.fromisoformat(PRE_WEEK3))
+    late, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    _spec, surface = _described(conn, tmp_path)
+    standing = _cell(surface, "QB", decision=late)
+    for decision_id in (early, late):
+        capture.record_action(
+            conn,
+            SEASON,
+            3,
+            "QB",
+            "submitted",
+            standing,
+            {"player_name": "x"},
+            decision_id=decision_id,
+        )
+
+    _spec, rows = _described(conn, tmp_path)
+    links = rows.attrs["submission_links"]
+    assert len(links) == 2 and set(links.player_id) == {standing}
+    by_status = dict(zip(links.status, links.attributed, strict=True))
+    assert by_status == {"resubmitted": early, "matched": late}
+    # One pick still stands, so re-entering it does not double the population.
+    assert int(prospective.population_masks(rows)["submitted"].sum()) == 1

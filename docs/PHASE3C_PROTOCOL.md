@@ -69,14 +69,28 @@ either of them a policy's selection would name a comparison that was never run.
 
 `all_eligible`, `available`, `depleted`, `recommended`, `submitted`, and
 `common_top1/3/5/10` by rank within slot among the eligible unused candidates at the
-decision itself. `submitted` is the pick that still stands in a slot: corrections and
-removals are folded over the ordered action history first, across decision ids, because a
-withdrawal recorded without naming a decision arrives linked to whichever advice came
-last. Reading only the submissions would leave every player ever entered in the
-population. A submission credited to a decision that never forecast that player is
+decision itself. `submitted` is the pick that still stands in a slot: corrections,
+removals and re-entries are folded over the ordered action history first, across decision
+ids, because a withdrawal recorded without naming a decision arrives linked to whichever
+advice came last. Reading only the submissions would leave every player ever entered in
+the population. A submission credited to a decision that never forecast that player is
 reported as unmatched rather than counted, so a link that names nothing describable is
 visible instead of silently absent. Positions keep WR and TE separate. Lead horizons use the frozen buckets
 and are never pooled: repeated forecasts of one target week share its single outcome.
+
+The fold reads the declared collection weeks and nothing else. An action taken in another
+week belongs to another window: its decision is not in this one, so reading it here would
+report a correctly linked pick as an attribution failure and would let a submission made
+after this window closed move its totals. Within the declared weeks nothing is filtered,
+so a submission whose decision was never captured stays visible as the failure it is.
+
+Every recorded submission is accounted for in the audit exactly once, including the
+entries later actions displaced. Whether one is *described* is read off the population
+itself rather than asserted beside it, because being submitted and being describable are
+different facts: eligibility reconciles the deadline and the live surface does not, so a
+pick made against an earlier decision can appear on a later decision's captured surface
+with its kickoff already gone. Those are reported as outside the eligible population,
+with the status that excluded them, rather than counted as described.
 
 Eligibility reconciles the deadline. The live path leaves the deadline out of
 `hard_eligible` and applies it in the recommender, so a cell whose kickoff had already
