@@ -9,6 +9,7 @@ by a rescale and then counted as touchdowns gained by waiting.
 
 import hashlib
 import json
+import re
 import shutil
 import sqlite3
 from pathlib import Path
@@ -18,7 +19,7 @@ import pandas as pd
 import pytest
 from scipy import stats
 
-from pool import benchmark, capture, config, db, diagnostics, models
+from pool import backtest, benchmark, capture, config, db, diagnostics, models
 from pool import calibration as cal
 from pool import evaluate as ev
 from pool.recommend import advise_slot
@@ -34,6 +35,12 @@ PAIRS = [("AAA", "BBB"), ("CCC", "DDD")]
 # nothing but byes. Without one the fixture cannot see a whole class of training row.
 BYE_WEEK, BYE_PAIR = 3, PAIRS[1]
 GAMES_PER_SEASON = len(WEEKS) * len(PAIRS) - 1
+# One backup on each of the other two teams is released partway through. He is projected
+# for the rest of the season by every decision before that and is not a candidate in any
+# of those weeks when they arrive, which is the only way a forecast can outlive the pool
+# it was made from. Reading his outcome off the target week's forecast row finds nothing;
+# the ledger records that he scored nothing, and the two are not the same statement.
+RELEASED_FROM, RELEASED = 3, tuple(f"{team}-WR2" for team in PAIRS[0])
 
 
 # --- a multi-season fixture --------------------------------------------------
@@ -82,6 +89,8 @@ def _seed_seasons(conn, seasons, flipped=()):
                     )
                 )
             for pid, name, pos, team, depth in people:
+                if pid in RELEASED and week >= RELEASED_FROM:
+                    continue
                 if week == BYE_WEEK and team in BYE_PAIR:
                     # A bye is an absent row, not a zero: the player did not play.
                     rosters.append((season, week, pid, name, pos, team, "ACT", pos))
@@ -442,7 +451,7 @@ def test_no_training_key_reaches_the_season_it_is_applied_to(experiment):
     "the fit saw nothing from Y" is verifiable rather than asserted."""
     run, spec = experiment
     for fold in APPLY:
-        rows, digest = cal.training_pairs(run / "pairs", spec, fold)
+        rows, digest, _counts = cal.training_pairs(run / "pairs", spec, fold)
         assert int(rows.season.max()) < fold
         assert rows.actual_tds.notna().all(), "a pair without an outcome is not a pair"
         assert (rows.lam > 0).all() and rows.hard_eligible.all()
@@ -461,7 +470,7 @@ def test_a_bye_week_forecast_trains_in_the_group_it_is_applied_by(experiment):
     """
     run, spec = experiment
     for fold in APPLY:
-        rows, _digest = cal.training_pairs(run / "pairs", spec, fold)
+        rows, _digest, _counts = cal.training_pairs(run / "pairs", spec, fold)
         assert set(rows.position) <= set(cal.POSITION_GROUPS)
         # The reconciliation: the four groups a position map fits are the whole pooled
         # population, so no row can be scored by a map that was not fitted on its kind.
@@ -520,7 +529,7 @@ def test_relabelling_the_evaluation_season_moves_no_coefficient_and_no_pick(expe
     assert list(picks[0].player_id) == list(picks[1].player_id)
 
     # And the invariance is not vacuous: the fit does read the labels it is given.
-    rows, digest = cal.training_pairs(run / "pairs", spec, APPLY[-1])
+    rows, digest, _counts = cal.training_pairs(run / "pairs", spec, APPLY[-1])
     assert cal.fit_family("log_affine", rows, 2)["intercept"] != pytest.approx(
         cal.fit_family("log_affine", rows.assign(actual_tds=rows.actual_tds * 7 + 3), 2)[
             "intercept"
@@ -543,10 +552,13 @@ def test_a_fold_cannot_move_when_only_the_labels_it_never_saw_change(experiment,
     run, spec = experiment
     shutil.copytree(run / "pairs", tmp_path / "pairs")
     perturbed = APPLY[0]
-    path = tmp_path / "pairs" / str(perturbed) / "forecasts.parquet"
+    path = tmp_path / "pairs" / str(perturbed) / "surface-shipped--1.parquet"
     frame = pd.read_parquet(path)
+    rates = frame.lam.copy()
     frame["actual_tds"] = np.where(frame.actual_tds > 0, 0.0, 1.0)
     frame.to_parquet(path, index=False)
+    # The forecast itself is untouched: only what happened afterwards moved.
+    pd.testing.assert_series_equal(pd.read_parquet(path).lam, rates)
     cal.fit_folds(tmp_path, spec, log=lambda *_: None)
 
     for _f, _g, name in cal.candidates(spec):
@@ -558,6 +570,47 @@ def test_a_fold_cannot_move_when_only_the_labels_it_never_saw_change(experiment,
         assert later["artifact_hash"] != _artifact(run, APPLY[1], name)["artifact_hash"], (
             f"{name} ignored a season it does train on; the perturbation proves nothing"
         )
+        # The artifact is unchanged, so the forecasts it produced are too -- asserted
+        # rather than inferred, by re-applying it to the identity rates it was applied to.
+        surface = pd.read_parquet(run / "apply" / str(perturbed) / f"surface-{name}--1.parquet")
+        keys = ["decision_week", "week", "slot", "player_id"]
+        surface = surface.sort_values(keys).reset_index(drop=True)
+        identity = surface.drop(columns=["lam"]).rename(columns={"original_lam": "lam"})
+        np.testing.assert_array_equal(surface.lam.to_numpy(), cal.mapped_lam(identity, after))
+
+
+def test_inverting_the_labels_cannot_move_a_pick(experiment):
+    """The other half of the same property, on the decision rather than the fit.
+
+    `backtest.replay` reads the outcomes only to score the picks it has already made --
+    selection is a function of the rates and of who is already spent. So a season's labels
+    cannot reach its own decisions, and the cheapest way to know that is to invert every
+    one of them and walk the season again.
+    """
+    run, spec = experiment
+    season = APPLY[0]
+    picks = pd.read_csv(run / "apply" / str(season) / "picks.csv")
+    picks = picks[picks.model.eq(spec["baseline"]) & picks.strategy.eq("greedy")]
+    surface = pd.read_parquet(run / "apply" / str(season) / "surface-shipped--1.parquet")
+    # The saved surface carries rates and masks, not the labels a pick is reported with.
+    surface = surface.assign(player_name=surface.player_id, team=surface.player_id.str[:3])
+    frames = {
+        int(week): group.drop(columns=["decision_week"]).reset_index(drop=True)
+        for week, group in surface.groupby("decision_week")
+    }
+    actuals = {
+        (int(r.week), r.player_id): float(r.actual_tds)
+        for r in surface[surface.decision_week.eq(surface.week)].itertuples()
+    }
+    inverted = {k: (0.0 if v > 0 else 1.0) for k, v in actuals.items()}
+    chosen = [
+        {(p.week, p.slot): p.player_id for p in backtest.replay(frames, a, season, "greedy").picks}
+        for a in (actuals, inverted)
+    ]
+    assert chosen[0] == chosen[1]
+    # And the walk is the run's own, so a difference here would mean the surface does not
+    # describe the decisions that were made from it.
+    assert chosen[0] == {(r.week, r.slot): r.player_id for r in picks.itertuples()}
 
 
 @pytest.mark.parametrize("directory", ["experiment", "relabelled"])
@@ -769,6 +822,35 @@ def test_resume_refuses_a_fold_whose_artifact_changed_underneath_it(experiment, 
         benchmark.checkpoint_complete(directory, "fold 2024")
 
 
+def test_a_fold_fitted_on_other_values_is_refused_even_with_matching_keys(experiment, tmp_path):
+    """Restoring another run's fold directory, checkpoint and all, was accepted.
+
+    The digest named which rows were fitted but not what was in them, so a fold trained on
+    the same players in the same weeks with different rates or different outcomes hashed
+    identically. Every metadata check passed, the checkpoint verified, and the surfaces
+    reconciled against the substituted coefficients -- so nothing downstream could see it.
+    The digest now covers the values the coefficients are a function of.
+    """
+    run, spec = experiment
+    shutil.copytree(run / "pairs", tmp_path / "pairs")
+    fold = APPLY[1]
+    path = tmp_path / "pairs" / str(SEASONS[0]) / "surface-shipped--1.parquet"
+    frame = pd.read_parquet(path)
+    frame["actual_tds"] = np.where(frame.actual_tds > 0, 0.0, 1.0)
+    frame.to_parquet(path, index=False)
+    cal.fit_folds(tmp_path, spec, log=lambda *_: None)
+
+    foreign = cal.load_artifact(tmp_path / "folds" / str(fold) / "cal-level-pooled.json")
+    genuine = _artifact(run, fold, "cal-level-pooled")
+    # Same rows, same configuration, different labels -- and now a different digest.
+    assert foreign["training_rows"] == genuine["training_rows"]
+    assert foreign["train_seasons"] == genuine["train_seasons"]
+    assert foreign["training_digest"] != genuine["training_digest"]
+    # Which is what lets the verifier's recomputation reject it: the digest it recomputes
+    # from this run's own pairs is the genuine one.
+    assert cal.training_pairs(run / "pairs", spec, fold)[1] == genuine["training_digest"]
+
+
 def test_an_interrupted_write_does_not_leave_the_run_unresumable(tmp_path):
     """Every writer here renames a `.tmp` sibling into place, so an interruption can leave
     one behind. Sealing the directory recorded it, and the very next line -- writing the
@@ -786,6 +868,70 @@ def test_an_interrupted_write_does_not_leave_the_run_unresumable(tmp_path):
     # The leftovers are still on disk and still not part of the sealed record.
     benchmark.write_checkpoint(directory)
     assert benchmark.checkpoint_complete(directory, "2024")
+
+
+def test_an_outcome_is_a_fact_about_the_week_not_about_the_candidate_pool(experiment):
+    """A player forecast for a later week need not still be a candidate when it arrives,
+    and whether he is says nothing about what he scored.
+
+    Reading the outcome off the target week's own forecast row made it conditional on
+    membership: on the real 2016 apply season 9,502 eligible surface rows -- 444 at
+    horizon 1 rising to 5,772 at seven or more -- had no outcome for that reason alone,
+    every week was completely scored, and not one of them had scored a touchdown. The
+    fit dropped a population that is almost entirely zeros, which moves the coefficient
+    rather than merely narrowing it.
+    """
+    run, spec = experiment
+    for stage, seasons in (("pairs", SEASONS), ("apply", APPLY)):
+        for season in seasons:
+            surface = pd.read_parquet(run / stage / str(season) / "surface-shipped--1.parquet")
+            assert {"actual_tds", "outcome_complete", "played", "in_target_pool"} <= set(surface)
+            # Every week of the fixture is scored, so every row is settled -- including
+            # the ones whose player is no longer in the target week's pool.
+            assert surface.outcome_complete.all()
+            assert surface.actual_tds.notna().all()
+            departed = surface[~surface.in_target_pool]
+            assert not departed.empty, "the fixture should have someone leave the pool"
+            assert departed.actual_tds.notna().all()
+    rows = diagnostics.load_run(run / "apply", seasons=[APPLY[0]])
+    assert rows.outcome_known.all()
+    assert not rows.in_target_pool.all(), "retention and coverage must not be the same column"
+    # The ledger lookup has to have found the rows it was meant to, not quietly returned
+    # zero for everything. The forecast export reaches the same outcomes by another route,
+    # so where the two overlap -- the decision week's own rows -- they must agree.
+    surface = pd.read_parquet(run / "apply" / str(APPLY[0]) / "surface-shipped--1.parquet")
+    head = surface[surface.decision_week.eq(surface.week)]
+    forecasts = pd.read_parquet(run / "apply" / str(APPLY[0]) / "forecasts.parquet")
+    forecasts = forecasts[forecasts.model.eq(spec["baseline"])]
+    keys = ["season", "week", "slot", "player_id"]
+    merged = forecasts.merge(head[keys + ["actual_tds"]], on=keys, suffixes=("", "_surface"))
+    assert len(merged) == len(forecasts)
+    assert merged.actual_tds.gt(0).any(), "somebody scored; a broken lookup would be all zeros"
+    pd.testing.assert_series_equal(merged.actual_tds, merged.actual_tds_surface, check_names=False)
+
+
+def test_a_departed_player_is_a_retention_fact_and_not_a_missing_outcome(experiment):
+    """Coverage and retention answer different questions, and answering one with the other
+    is what made a roster exit look like an unavailable outcome."""
+    run, spec = experiment
+    margins = cal.coverage_tables(run / "apply", spec)["coverage_margins"].set_index("population")
+    assert (margins.coverage == 1.0).all()
+    assert margins.loc[cal.FUTURE, "retention"] < 1.0
+    assert margins.loc[cal.FUTURE, "retention"] < margins.loc[cal.FUTURE, "coverage"]
+
+
+def test_every_training_row_is_counted_before_it_is_filtered(experiment):
+    """ "Excluded and counted" was declared of the training population and implemented only
+    for the applied one, so the first fold's discarded rows appeared in no table at all."""
+    run, spec = experiment
+    table = cal.training_accounting(run / "folds", spec).set_index("fold")
+    parts = ["hard_excluded", "eligible_zero_lam", "unresolved_outcome", "fitted_rows"]
+    for fold in APPLY:
+        row = table.loc[fold]
+        assert row[parts].sum() == row.surface_rows
+        assert row.fitted_rows == len(cal.training_pairs(run / "pairs", spec, fold)[0])
+        assert row.fitted_rows == _artifact(run, fold, "cal-level-pooled")["training_rows"]
+        assert row.eligible_zero_lam > 0, "the fixture should have an eligible zero rate"
 
 
 # --- out-of-fold evidence ------------------------------------------------------
@@ -855,8 +1001,49 @@ def test_the_family_is_adjusted_by_a_step_down_and_not_by_four_separate_levels()
     assert list(out.reject) == [True, True, True, False]
     # The last step is tested at the full level, so its two intervals coincide; earlier
     # steps are tested at a stricter one, so theirs are wider.
-    assert out.loc["d", "holm_lo"] == pytest.approx(out.loc["d", "lo"])
-    assert out.loc["a", "holm_lo"] < out.loc["a", "lo"]
+    assert out.loc["d", "stage_lo"] == pytest.approx(out.loc["d", "lo"])
+    assert out.loc["a", "stage_lo"] < out.loc["a", "lo"]
+
+
+def test_a_step_the_procedure_never_reached_cannot_supply_a_decision_bound():
+    """The reason the promotion rule reads `reject` and not an interval.
+
+    Holm's per-step levels widen down the ranking, so a later step is tested at a laxer
+    level and gets a *narrower* interval than an earlier one. With four comparisons all at
+    the same difference and raw p of 0.020, 0.021, 0.022 and 0.040, the step-down rejects
+    nothing -- and the third and fourth local intervals still lie entirely below zero. A
+    rule written against those intervals would promote a candidate Holm declined.
+    """
+    delta = -0.02
+    raw = [0.020, 0.021, 0.022, 0.040]
+    se = [abs(delta) / abs(stats.t.isf(p / 2, 9)) for p in raw]
+    frame = pd.DataFrame(dict(model=list("abcd"), delta=[delta] * 4, se=se, seasons=[10] * 4))
+    out = cal.paired_inference(frame).set_index("model")
+    assert not out.reject.any(), "the family should fail at its first step"
+    assert (out.p_holm > 0.05).all()
+    # The trap: local intervals that exclude zero on steps the procedure never took.
+    assert (out.loc[["c", "d"], "stage_hi"] < 0).all()
+    # The unadjusted interval is the one the report shows beside the decision, and it is
+    # not claimed to be adjusted; nothing named `holm_` carries an interval any more.
+    assert not [c for c in out.columns if c.startswith("holm_") and c.endswith(("lo", "hi"))]
+    assert (out.hi < 0).all(), "each comparison is individually significant, and says so"
+
+
+def test_an_unchanged_policy_still_supplies_a_non_inferiority_bound():
+    """A shared increasing map reproduces identity's whole pick history, so a difference of
+    exactly zero in every season is the expected case here, not a corner one. Treating its
+    zero standard error as missing inference erased the bound from precisely the candidates
+    the rule was least worried about."""
+    frame = pd.DataFrame(
+        dict(model=["same", "thin"], mean=[0.0, 1.0], se=[0.0, np.nan], seasons=[10, 10])
+    )
+    out = cal.paired_t(frame, "mean", "se").set_index("model")
+    assert out.loc["same", "comparison"] == cal.COMPARISON_DEGENERATE
+    assert (out.loc["same", "lo"], out.loc["same", "hi"]) == (0.0, 0.0)
+    assert np.isnan(out.loc["same", "p_value"]), "an exact difference has no sampling test"
+    # Genuinely missing inference stays missing, and is labelled as a different thing.
+    assert out.loc["thin", "comparison"] == cal.COMPARISON_UNAVAILABLE
+    assert np.isnan(out.loc["thin", "lo"]) and np.isnan(out.loc["thin", "hi"])
 
 
 def test_an_unusable_comparison_does_not_halt_the_family_behind_it():
@@ -938,6 +1125,7 @@ def test_editing_only_a_comment_still_starts_a_new_experiment(tmp_path):
         ({"multiplicity": "none"}, "multiplicity"),
         ({"promotion": {}}, "unsupported"),
         ({"promotion": {"policy_strategies": "either"}}, "unsupported"),
+        ({"zero_variance_policy": "drop"}, "zero_variance_policy"),
         # A threshold has to be a finite real number to be compared against anything, and
         # `isinstance(True, int)` and `isinstance(nan, float)` are both true.
         ({"margins": {"min_deviance_improvement": float("nan")}}, "missing"),
@@ -951,6 +1139,30 @@ def test_an_undeclared_experiment_is_refused_before_it_runs(patch, message, tmp_
     spec = tomllib.load(open("experiments/phase3-calibration.toml", "rb"))
     spec["calibration_experiment"].update(patch)
     with pytest.raises(ValueError, match=message):
+        benchmark.resolve_calibration(spec)
+
+
+@pytest.mark.parametrize(
+    "margin",
+    [
+        {"min_outcome_coverage_current": -0.1},
+        {"min_outcome_coverage_current": 1.1},
+        {"min_outcome_coverage_future": -0.0001},
+        {"min_outcome_coverage_future": 1.0001},
+        {"min_deviance_improvement": -0.005},
+        {"max_policy_loss_td_per_season": -0.5},
+    ],
+)
+def test_a_margin_outside_its_own_domain_is_refused(margin):
+    """A finite number is not yet a threshold. A coverage floor below zero is satisfied by
+    anything and one above one by nothing, and a negative improvement or loss margin
+    inverts the comparison it appears in -- each freezes a condition that cannot do its
+    job, which is worse than freezing no condition at all."""
+    import tomllib
+
+    spec = tomllib.load(open("experiments/phase3-calibration.toml", "rb"))
+    spec["calibration_experiment"]["margins"].update(margin)
+    with pytest.raises(ValueError, match="out of domain"):
         benchmark.resolve_calibration(spec)
 
 
@@ -986,8 +1198,10 @@ def test_the_report_states_the_population_and_recommends_nothing(experiment):
     assert "walk-forward evaluation, not an untouched holdout" in text
     assert "Production constants are unchanged" in text
     assert "separate, dated authoring step" in text
-    for banned in ("we recommend", "should be deployed", "the winner", "ship "):
+    for banned in ("we recommend", "should be deployed", "the winner"):
         assert banned not in text.lower()
+    # The word, not the substring: `membership` and `shipped` are both ordinary here.
+    assert not re.search(r"\bship\b", text.lower())
 
 
 def test_each_candidate_is_measured_against_its_own_strategy(experiment):

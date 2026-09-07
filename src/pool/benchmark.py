@@ -190,6 +190,7 @@ def resolve_calibration(spec, path=None):
         ("primary_population", cal.PRIMARY_POPULATION),
         ("uncertainty", cal.UNCERTAINTY),
         ("multiplicity", cal.MULTIPLICITY),
+        ("zero_variance_policy", cal.ZERO_VARIANCE_POLICY),
     ):
         if c.get(name) != expected:
             raise ValueError(
@@ -216,6 +217,16 @@ def resolve_calibration(spec, path=None):
     if absent:
         raise ValueError(
             f"calibration_experiment.margins is missing {absent}; a missing margin blocks the run"
+        )
+    # A finite number is not yet a threshold. A coverage floor outside [0, 1] is either
+    # vacuous or unreachable, and a negative improvement or loss margin inverts the
+    # comparison it appears in, so each would freeze a condition that cannot do its job.
+    outside = [k for k in cal.COVERAGE_MARGINS if not 0.0 <= margins[k] <= 1.0]
+    negative = [k for k in cal.NONNEGATIVE_MARGINS if margins[k] < 0.0]
+    if outside or negative:
+        raise ValueError(
+            f"calibration_experiment.margins is out of domain: coverage floors {outside} must "
+            f"lie in [0, 1] and margins {negative} must not be negative"
         )
     promotion = c.get("promotion") or {}
     wrong = [k for k, allowed in cal.PROMOTION.items() if promotion.get(k) not in allowed]
@@ -502,6 +513,35 @@ def checkpoint_complete(directory, label):
     return True
 
 
+def resolve_surface_outcomes(surfaces, forecasts, actuals, scored, played):
+    """Settle each future forecast's outcome from the ledger, not from pool membership.
+
+    A surface row says "at decision week w, this player was projected for week t". What
+    happened in week t is a fact about week t. Reading it off week t's own forecast row
+    made it conditional on the player still being a candidate then, and he need not be:
+    on 2016's apply season 9,502 eligible rows -- 444 at horizon 1 rising to 5,772 at
+    seven or more -- had no outcome for that reason alone, every week was completely
+    scored, and not one of them had scored a touchdown. Dropping them removed a
+    population that is almost entirely zeros, which biases the level upward rather than
+    merely narrowing it: fold 2016's scale moved 0.9413 to 0.9355 once they were back.
+
+    Absence is zero only where the week is completely scored, the rule `capture` states
+    and the current-week export already follows. `in_target_pool` keeps the membership
+    question separate rather than letting it masquerade as a missing outcome.
+    """
+    weeks = surfaces.week.astype(int)
+    complete = weeks.isin(scored).to_numpy()
+    pairs = list(zip(weeks, surfaces.player_id, strict=True))
+    resolved = np.array([actuals.get(pair, 0.0) for pair in pairs], dtype=float)
+    out = surfaces.copy()
+    out["outcome_complete"] = complete
+    out["actual_tds"] = np.where(complete, resolved, np.nan)
+    out["played"] = [pair in played for pair in pairs]
+    current = set(zip(forecasts.week.astype(int), forecasts.player_id, strict=True))
+    out["in_target_pool"] = [pair in current for pair in pairs]
+    return out
+
+
 def evaluate_season(conn, season, spec, directory, log, candidates=None):
     directory.mkdir(parents=True, exist_ok=True)
     chosen = {name: models.get(name) for name in spec["models"]}
@@ -514,6 +554,11 @@ def evaluate_season(conn, season, spec, directory, log, candidates=None):
     base_frames = None
     advice_parts = []
     actuals = backtest.actual_tds(conn, season)
+    # A future forecast's outcome is a fact about the target week, and the ledger settles
+    # it whether or not the player is still in that week's candidate pool. Both are read
+    # once here, outside the model loop, because every model shares them.
+    scored = set(backtest.scored_weeks(conn, season))
+    played = ev.played_pairs(conn, season)
     reference = None
     metrics = {
         name: []
@@ -654,6 +699,7 @@ def evaluate_season(conn, season, spec, directory, log, candidates=None):
                     surfaces = surfaces.merge(raw, on=keys, how="left", validate="one_to_one")
                 else:
                     surfaces["original_lam"] = surfaces.lam
+                surfaces = resolve_surface_outcomes(surfaces, df, actuals, scored, played)
             save_frame(directory / f"surface-{model}-{seed}.parquet", surfaces)
         if model == spec["baseline"]:
             for trial in range(spec["random_trials"]):
@@ -798,7 +844,12 @@ def calibration_reports(output, spec, manifest, config_path=None):
     data.update(coverage)
     save_frame(compact / "coverage-out-of-fold.csv", coverage["coverage_out_of_fold"])
     save_frame(compact / "coverage-margins.csv", coverage["coverage_margins"])
-    save_frame(compact / "zero-accounting.csv", coverage["zero_accounting"])
+    # Named for the population it describes. The training population is accounted for
+    # separately, from the folds, because its seasons are the ones before any apply
+    # season and none of them appears here.
+    save_frame(compact / "zero-accounting-out-of-fold.csv", coverage["zero_accounting"])
+    data["training_accounting"] = cal.training_accounting(output / "folds", spec)
+    save_frame(compact / "training-accounting.csv", data["training_accounting"])
     data["strata"] = cal.stratified_scores(output / "apply", spec, spec["baseline"])
     save_frame(compact / "strata-out-of-fold.csv", data["strata"])
     write_json(compact / "manifest.json", manifest)
@@ -890,9 +941,12 @@ def render_calibration_report(data, spec, manifest, output, config_path=None):
         "loss, so a negative `delta` is a better forecast than identity's. Uncertainty is the "
         f"paired season t on {int(data['paired_deviance'].df.max()) + 1} season differences, "
         "and `p_holm` is the Holm step-down adjustment over the pre-registered family, which "
-        "stops at the first comparison it does not reject. `holm_lo`/`holm_hi` is the interval "
-        "at that row's adjusted level -- the boundary the frozen promotion rule names, not a "
-        "simultaneous confidence set. Nothing here is a verdict: the rule is applied in a "
+        "stops at the first comparison it does not reject. **`reject` is the adjusted result "
+        "and the only one the promotion rule reads.** `lo`/`hi` is the ordinary unadjusted "
+        "interval a single comparison would report. `stage_lo`/`stage_hi` is each step's own "
+        "local test boundary, and Holm's levels widen down the ranking, so a later step's "
+        "local interval can exclude zero on a step the procedure never reached; it is a "
+        "diagnostic, never a bound. Nothing here is a verdict: the rule is applied in a "
         "separate, dated note.\n\n"
         + markdown_table(
             data["paired_deviance"],
@@ -906,8 +960,8 @@ def render_calibration_report(data, spec, manifest, output, config_path=None):
                 "holm_rank",
                 "p_holm",
                 "reject",
-                "holm_lo",
-                "holm_hi",
+                "lo",
+                "hi",
             ],
         )
         + "\n\n## Achieved Season Scores\n\n"
@@ -916,7 +970,10 @@ def render_calibration_report(data, spec, manifest, output, config_path=None):
         "better proper score and more touchdowns are different claims.\n\n"
         f"The declared non-inferiority bound is {c['margins']['max_policy_loss_td_per_season']} "
         "touchdowns per season, and it is compared against `lo` -- the lower end of the paired "
-        "interval -- rather than against the point estimate.\n\n"
+        "interval -- rather than against the point estimate. A candidate that reproduced "
+        "identity's whole pick history differs from it by exactly nothing in every season, "
+        "which is `degenerate_zero_variance`: an interval of width zero, and a bound, rather "
+        "than the missing inference a zero standard error would otherwise read as.\n\n"
         + markdown_table(
             data["policy"],
             [
@@ -925,6 +982,7 @@ def render_calibration_report(data, spec, manifest, output, config_path=None):
                 "tds_per_season",
                 "delta_vs_own_identity",
                 "paired_se",
+                "comparison",
                 "lo",
                 "hi",
                 "seasons",
@@ -966,12 +1024,12 @@ def render_calibration_report(data, spec, manifest, output, config_path=None):
     report += (
         "\n\n## Outcome Coverage\n\n"
         "Whether the applied surface has an outcome to be scored against, which is what the "
-        "declared coverage floors are conditions on. Every game can be complete and scored "
-        "while a player forecast for a later week has left the pool by then and has no target "
-        "row at all, so this is a different question from the schedule audit. Over "
-        "hard-eligible rows, measured on identity: a map preserves keys, masks and zeros, so "
-        "every candidate is scored on exactly these rows. `meets_floor` is a comparison of "
-        "two measured numbers, not a promotion decision.\n\n"
+        "declared coverage floors are conditions on. An outcome is settled from the finalized "
+        "scoring ledger, absence counting as zero only where the target week is completely "
+        "scored, so what is missing here is a week the feed has not finished rather than a "
+        "player the pool has not kept. Over hard-eligible rows, measured on identity: a map "
+        "preserves keys, masks and zeros, so every candidate is scored on exactly these rows. "
+        "`meets_floor` is a comparison of two measured numbers, not a promotion decision.\n\n"
         + markdown_table(
             data["coverage_margins"],
             [
@@ -982,6 +1040,35 @@ def render_calibration_report(data, spec, manifest, output, config_path=None):
                 "coverage",
                 "declared_floor",
                 "meets_floor",
+            ],
+        )
+        + "\n\nRetention is a different question, reported so that it cannot be mistaken for "
+        "the first: what fraction of the surface belonged to a player still in the candidate "
+        "pool at the week he was forecast for. It is the lower number, and it should be. "
+        "Taking outcomes from the target week's own forecast row conflated the two and "
+        "reported this as coverage, which understated coverage by exactly the players who "
+        "left -- and dropped their outcomes, nearly all of them zeros, from the fit.\n\n"
+        + markdown_table(
+            data["coverage_margins"],
+            ["population", "rows", "in_target_pool", "retention"],
+        )
+        + "\n\n## Training Population\n\n"
+        "What each fold discarded before fitting, in the classes that mean different "
+        "things. A hard exclusion is a mask rather than a forecast; an eligible zero rate "
+        "cannot enter a fit on `log(lambda)`; an unresolved outcome is a week that is not "
+        "completely scored. The counts reconcile to the surface each fold started from, so "
+        '"excluded and counted" covers the training population and not only the applied '
+        "one.\n\n"
+        + markdown_table(
+            data["training_accounting"],
+            [
+                "fold",
+                "surface_rows",
+                "hard_excluded",
+                "eligible_zero_lam",
+                "unresolved_outcome",
+                "fitted_rows",
+                "fitted_share",
             ],
         )
         + "\n\n## Out-Of-Fold Diagnostics\n\n"

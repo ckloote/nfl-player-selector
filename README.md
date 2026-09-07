@@ -214,10 +214,12 @@ before pruning and discount and replayed with its own no-reuse history. The map 
 zero and hard exclusions stay masks, so every candidate is scored on the same rows. Fold
 schedule, families, population, weighting, fallback, primary estimand, the promotion conditions
 and the decision margins are all declared in the dated configuration, whose text is hashed into
-the run identity, and a missing margin blocks the run. The run measures the outcome coverage its
-floors are stated over and scores each candidate by forecast horizon and availability as well as
-in the pooled primary estimand. See [experiments/README.md](experiments/README.md) for the
-stages and artifacts.
+the run identity; a missing margin blocks the run, and so does one outside its own domain. The
+run measures the outcome coverage its floors are stated over, reports retention beside it, counts
+every training row it discards, and scores each candidate by forecast horizon and availability as
+well as in the pooled primary estimand. The primary comparison is a paired season t with a Holm
+step-down, and the step-down's own decision is what the promotion rule reads. See
+[experiments/README.md](experiments/README.md) for the stages and artifacts.
 
 Decision CSVs require `season,week,decision_at`, with one timezone-aware timestamp for every
 requested week, such as `2026,1,2026-09-10T18:00:00-04:00`. Observations become available when

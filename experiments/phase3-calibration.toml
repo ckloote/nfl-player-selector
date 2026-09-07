@@ -76,6 +76,11 @@ primary_population = "all_eligible_current_week"
 deviance_floor = 0.0
 uncertainty = "paired_season_t"
 multiplicity = "holm"
+# A policy difference that never varies between seasons is exactly determined and has no
+# sampling distribution. It reports an interval of width zero at that difference rather
+# than no interval at all: a shared increasing map reproduces identity's whole pick
+# history, so this is the expected case here and its treatment is frozen, not discovered.
+zero_variance_policy = "degenerate_interval"
 advice_sensitivity = true
 
 # Decision margins. A missing margin blocks the run. These are thresholds chosen in
@@ -93,17 +98,27 @@ min_outcome_coverage_current = 0.98
 min_outcome_coverage_future = 0.95
 
 # Promotion, declared before fitting and carried as data rather than prose: at most one
-# candidate is carried into Phase 3C, and only if it beats identity on the primary metric
-# by more than min_deviance_improvement with a Holm-adjusted 95% paired interval excluding
-# zero, and its policy difference lower bound exceeds -max_policy_loss_td_per_season for
-# both strategies, and both coverage floors are met. Otherwise the outcome is defer or
-# no-change. These keys enter the run identity, so the rule cannot be relaxed after the
-# estimates exist. Applying it is a separate, dated authoring step, and nothing in the run
-# applies it; keeping the model unchanged is a valid result.
+# candidate is carried into Phase 3C, and only if all four of these hold. The Holm
+# step-down rejects its comparison at alpha over the pre-registered family; the change is
+# an improvement larger than min_deviance_improvement (deviance is a loss, so that means
+# delta below -min_deviance_improvement); its policy difference lower bound exceeds
+# -max_policy_loss_td_per_season for both strategies; and both coverage floors are met.
+# Otherwise the outcome is defer or no-change.
+#
+# The decision is the step-down's own result and not an interval. Holm's per-step levels
+# widen down the ranking, so a step's local interval can exclude zero on a step the
+# procedure never reached, and a rule written against those intervals would admit a
+# candidate Holm declined. `stage_lo`/`stage_hi` are reported as diagnostics only.
+#
+# These keys enter the run identity, so the rule cannot be relaxed after the estimates
+# exist. Applying it is a separate, dated authoring step, and nothing in the run applies
+# it; keeping the model unchanged is a valid result.
 [calibration_experiment.promotion]
 max_promoted = 1
 require_deviance_margin = true
-interval = "holm_95"
+decision = "holm_step_down"
+alpha = 0.05
+direction = "improvement"
 policy_strategies = "both"
 require_coverage_floors = true
 

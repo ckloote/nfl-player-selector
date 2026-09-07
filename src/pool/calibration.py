@@ -60,12 +60,9 @@ PRIMARY_POPULATION = "all_eligible_current_week"
 UNCERTAINTY = "paired_season_t"
 MULTIPLICITY = "holm"
 
-REQUIRED_MARGINS = (
-    "min_deviance_improvement",
-    "max_policy_loss_td_per_season",
-    "min_outcome_coverage_current",
-    "min_outcome_coverage_future",
-)
+COVERAGE_MARGINS = ("min_outcome_coverage_current", "min_outcome_coverage_future")
+NONNEGATIVE_MARGINS = ("min_deviance_improvement", "max_policy_loss_td_per_season")
+REQUIRED_MARGINS = NONNEGATIVE_MARGINS + COVERAGE_MARGINS
 # The promotion rule as data. In comments it was outside the parsed configuration and so
 # outside the run identity: "both strategies" could become "either strategy" without
 # moving `config_hash`. Nothing here applies the rule -- that is a separate, dated
@@ -74,10 +71,21 @@ REQUIRED_MARGINS = (
 PROMOTION = {
     "max_promoted": (1,),
     "require_deviance_margin": (True,),
-    "interval": ("holm_95",),
+    # The decision is the step-down's own result, not an interval. Holm's per-step levels
+    # widen down the ranking, so a later step's local interval can exclude zero on a step
+    # the procedure never reached; a rule written against those intervals would admit a
+    # candidate Holm declined. `reject` is the adjusted answer and the rule reads it.
+    "decision": ("holm_step_down",),
+    "alpha": (0.05,),
+    "direction": ("improvement",),
     "policy_strategies": ("both",),
     "require_coverage_floors": (True,),
 }
+# A comparison whose season differences never vary has an exactly determined bound and no
+# sampling distribution. Declared here rather than discovered: a shared increasing map
+# reproduces identity's whole pick history, so it is the expected case for the policy
+# comparison and its treatment must be frozen with everything else.
+ZERO_VARIANCE_POLICY = "degenerate_interval"
 ALPHA = 0.05
 
 
@@ -275,6 +283,8 @@ def build_artifact(
     rows: pd.DataFrame,
     training_digest: str,
     pooled_fit: dict,
+    counts: dict | None = None,
+    upstream: dict | None = None,
 ) -> dict:
     cal = spec["calibration_experiment"]
     min_rows, min_clusters = cal["min_rows"], cal["min_clusters"]
@@ -312,6 +322,8 @@ def build_artifact(
         train_seasons=list(range(cal["train_start"], fold)),
         cutoff_season=fold - 1,
         training_digest=training_digest,
+        training_counts=dict(counts or {}),
+        training_upstream=dict(upstream or {}),
         training_rows=int(len(rows)),
         base_model=spec["baseline"],
         base_seed=-1,
@@ -367,8 +379,24 @@ def candidate_builders(folds: Path, spec: dict, season: int) -> dict:
 
 
 # --- training pairs ---------------------------------------------------------
-def training_pairs(pairs: Path, spec: dict, fold: int) -> tuple[pd.DataFrame, str]:
-    """The forecast/outcome pairs fold `fold` is allowed to see, and their digest.
+# What the fold digest covers. The keys alone said which rows were fitted but not what was
+# in them, so two folds trained on identical keys and different rates, positions or
+# outcomes hashed the same -- and one run's fold directory, checkpoint included, could be
+# restored into another and pass every metadata and reconciliation check. These are the
+# columns the coefficients are a function of, so a digest over them is a digest of the fit.
+DIGEST_COLUMNS = ("season", "decision_week", "week", "player_id", "position", "lam", "actual_tds")
+
+TRAINING_COUNTS = (
+    "surface_rows",
+    "hard_excluded",
+    "eligible_zero_lam",
+    "unresolved_outcome",
+    "fitted_rows",
+)
+
+
+def training_pairs(pairs: Path, spec: dict, fold: int) -> tuple[pd.DataFrame, str, dict]:
+    """The forecast/outcome pairs fold `fold` is allowed to see, their digest and its counts.
 
     Allowed means two things, and the second is the one that is easy to lose: the
     forecast was made before the cutoff, *and* the week it forecast has already been
@@ -376,25 +404,39 @@ def training_pairs(pairs: Path, spec: dict, fold: int) -> tuple[pd.DataFrame, st
     an outcome that did not exist yet; training on it would be reading the future
     through a row that looks past.
 
-    The digest covers the exact keys that entered the fit, so "no evaluation-season row
-    reached this artifact" is checkable afterwards rather than asserted.
+    Everything this drops is counted on the way past. "Excluded and counted" was declared
+    of the training population and only implemented for the applied one, so the first
+    fold's discarded rows -- 2011-2015 for fold 2016 -- appeared in no table at all. The
+    counts reconcile: exclusions plus zero rates plus unresolved outcomes plus the fitted
+    rows are the surface it started from.
+
+    The digest covers the values the fit is a function of, not merely the keys, so "this
+    artifact was fitted on these rows" is checkable and not just "on rows named these".
     """
     cal = spec["calibration_experiment"]
     seasons = list(range(cal["train_start"], fold))
     if not seasons:
         raise ValueError(f"Fold {fold} has no training seasons from {cal['train_start']}")
     rows = diagnostics.load_run(Path(pairs), model=spec["baseline"], seed=-1, seasons=seasons)
-    rows = rows[
-        rows.hard_eligible.fillna(False).astype(bool) & (rows.lam > 0) & rows.outcome_known
-    ].reset_index(drop=True)
+    eligible = rows.hard_eligible.fillna(False).astype(bool)
+    positive = eligible & rows.lam.gt(0)
+    counts = dict(
+        surface_rows=int(len(rows)),
+        hard_excluded=int((~eligible).sum()),
+        eligible_zero_lam=int((eligible & ~rows.lam.gt(0)).sum()),
+        unresolved_outcome=int((positive & ~rows.outcome_known).sum()),
+    )
+    rows = rows[positive & rows.outcome_known].reset_index(drop=True)
+    counts["fitted_rows"] = int(len(rows))
     if rows.empty:
         raise ValueError(f"Fold {fold} has no eligible positive-rate training pairs")
     if int(rows.season.max()) >= fold:
         raise ValueError(f"Fold {fold} training pairs reach season {int(rows.season.max())}")
-    keys = rows[["season", "decision_week", "week", "player_id"]].sort_values(
-        ["season", "decision_week", "week", "player_id"]
-    )
-    return rows, hashlib.sha256(keys.to_csv(index=False).encode()).hexdigest()
+    if sum(counts[k] for k in TRAINING_COUNTS[1:]) != counts["surface_rows"]:
+        raise ValueError(f"Fold {fold} training accounting does not reconcile: {counts}")
+    values = rows[list(DIGEST_COLUMNS)].sort_values(list(DIGEST_COLUMNS))
+    digest = hashlib.sha256(values.to_csv(index=False).encode()).hexdigest()
+    return rows, digest, counts
 
 
 def fit_folds(output: Path, spec: dict, log=print) -> Path:
@@ -410,8 +452,15 @@ def fit_folds(output: Path, spec: dict, log=print) -> Path:
             log(f"Resume: verified fitted fold {fold}")
             continue
         directory.mkdir(parents=True, exist_ok=True)
-        rows, training_digest = training_pairs(output / "pairs", spec, fold)
+        rows, training_digest, counts = training_pairs(output / "pairs", spec, fold)
         log(f"Fitting fold {fold} on {len(rows)} pairs from {min(rows.season)}-{max(rows.season)}")
+        # The stages that produced those pairs, named by the digest their checkpoints
+        # recorded: a fold is then bound to the run it was fitted inside, not only to the
+        # rows it saw.
+        upstream = {
+            str(season): benchmark.digest(output / "pairs" / str(season) / "checkpoint.json")
+            for season in range(spec["calibration_experiment"]["train_start"], fold)
+        }
         for family in spec["calibration_experiment"]["families"]:
             pooled_fit = fit_family(family, rows, spec["calibration_experiment"]["min_clusters"])
             for grouping in spec["calibration_experiment"]["groupings"]:
@@ -423,6 +472,8 @@ def fit_folds(output: Path, spec: dict, log=print) -> Path:
                     rows=rows,
                     training_digest=training_digest,
                     pooled_fit=pooled_fit,
+                    counts=counts,
+                    upstream=upstream,
                 )
                 benchmark.write_json(directory / f"{artifact['candidate']}.json", artifact)
         benchmark.write_checkpoint(directory)
@@ -511,6 +562,31 @@ def _out_of_fold(apply_dir: Path, model: str, season: int) -> pd.DataFrame:
     return diagnostics.load_run(Path(apply_dir), model=model, seed=-1, seasons=[season])
 
 
+def training_accounting(folds: Path, spec: dict) -> pd.DataFrame:
+    """Every training row each fold discarded, in the classes that mean different things.
+
+    Read back from the fitted artifacts rather than recomputed, so the table describes the
+    fit that happened. `fitted_rows` is the population the coefficients came from and the
+    four counts before it are what stood between that and the surface it started with.
+    """
+    rows = []
+    for fold in spec["calibration_experiment"]["apply_seasons"]:
+        # One fit per fold reads one training population, so any candidate's artifact
+        # carries it; take the first and check the rest agree rather than repeating it.
+        counts = None
+        for _f, _g, name in candidates(spec):
+            artifact = load_artifact(Path(folds) / str(fold) / f"{name}.json")
+            if counts is None:
+                counts = artifact["training_counts"]
+            elif artifact["training_counts"] != counts:
+                raise ValueError(f"Fold {fold} candidates disagree about their training rows")
+        rows.append(dict(fold=fold, **{k: counts[k] for k in TRAINING_COUNTS}))
+    out = pd.DataFrame(rows)
+    out["discarded"] = out.surface_rows - out.fitted_rows
+    out["fitted_share"] = out.fitted_rows / out.surface_rows
+    return out
+
+
 def coverage_tables(apply_dir: Path, spec: dict) -> dict[str, pd.DataFrame]:
     """Where the applied surface has an outcome to be scored against, and where it has none.
 
@@ -528,16 +604,24 @@ def coverage_tables(apply_dir: Path, spec: dict) -> dict[str, pd.DataFrame]:
     for season in cal["apply_seasons"]:
         rows = _out_of_fold(apply_dir, spec["baseline"], season)
         eligible = rows[rows.hard_eligible.fillna(False).astype(bool)]
-        by_horizon.append(diagnostics.coverage(eligible))
+        by_horizon.append(
+            diagnostics.coverage(eligible).merge(
+                eligible.groupby(["season", "horizon"], as_index=False).in_target_pool.sum(),
+                on=["season", "horizon"],
+            )
+        )
         zeros.append(diagnostics.zero_accounting(rows).assign(season=season))
     coverage = pd.concat(by_horizon, ignore_index=True)
     # Collapse to the two populations the margins are stated over. The current week is
     # the primary metric's own population; everything beyond it is the surface the
     # optimizer plans against.
     coverage["population"] = np.where(coverage.horizon.eq("0"), CURRENT, FUTURE)
-    counts = ["rows", "outcomes_known", "outcomes_missing"]
+    counts = ["rows", "outcomes_known", "outcomes_missing", "in_target_pool"]
     grouped = coverage.groupby("population", as_index=False)[counts].sum()
     grouped["coverage"] = grouped.outcomes_known / grouped["rows"]
+    # Retention is a different question and answering it with coverage is what made a
+    # departed player look like an unavailable outcome. Both are reported.
+    grouped["retention"] = grouped.in_target_pool / grouped["rows"]
     floors = {
         CURRENT: float(cal["margins"]["min_outcome_coverage_current"]),
         FUTURE: float(cal["margins"]["min_outcome_coverage_future"]),
@@ -662,8 +746,22 @@ def policy_table(replays: pd.DataFrame, baseline: str = IDENTITY) -> pd.DataFram
     if not delta.empty:
         delta = paired_t(delta, "mean", "se")
     delta = delta.rename(columns={"mean": "delta_vs_own_identity", "se": "paired_se"})
-    columns = ("delta_vs_own_identity", "paired_se", "df", "t", "p_value", "lo", "hi")
-    return levels.merge(delta[keys + [c for c in columns if c in delta]], on=keys, how="left")
+    columns = (
+        "delta_vs_own_identity",
+        "paired_se",
+        "seasons",
+        "df",
+        "t",
+        "p_value",
+        # Which kind of statement the bound is. A policy that reproduced identity's whole
+        # history has a difference of exactly zero, and saying so is not the same as
+        # having no bound to offer.
+        "comparison",
+        "lo",
+        "hi",
+    )
+    picked = [c for c in columns if c in delta and c not in levels]
+    return levels.merge(delta[keys + picked], on=keys, how="left")
 
 
 def decision_changes(picks: pd.DataFrame, baseline: str = IDENTITY) -> pd.DataFrame:
@@ -694,15 +792,33 @@ def advice_changes(advice: pd.DataFrame, baseline: str = IDENTITY) -> pd.DataFra
     )
 
 
+# How a row's interval was arrived at. `t` is the ordinary paired case. A comparison whose
+# season differences are all identical has no sampling variation to describe: the bound is
+# the difference itself, exactly, and that is a different statement from having no bound at
+# all. Erasing it removed the non-inferiority bound from precisely the candidates that
+# changed no decision -- a shared increasing map reproduces identity's whole pick history,
+# so this is the expected case here, not a corner one.
+COMPARISON_T = "t"
+COMPARISON_DEGENERATE = "degenerate_zero_variance"
+COMPARISON_UNAVAILABLE = "unavailable"
+
+
 def _interval(frame: pd.DataFrame, column: str, se: str, level, prefix: str = "") -> pd.DataFrame:
-    """A two-sided t interval on the season differences, at `level`, added in place."""
+    """A two-sided t interval on the season differences, at `level`, added in place.
+
+    A degenerate comparison gets width zero at its own difference -- it is exact, not
+    unknown -- and an unavailable one gets nothing.
+    """
     out = frame
     delta = out[column].to_numpy(dtype=float)
     error = out[se].to_numpy(dtype=float)
     df = out.df.to_numpy(dtype=float)
     with np.errstate(invalid="ignore"):
         half = stats.t.isf(np.asarray(level, dtype=float) / 2.0, np.where(df > 0, df, 1.0)) * error
-    half = np.where(out.p_value.notna().to_numpy(), half, np.nan)
+    degenerate = out.comparison.eq(COMPARISON_DEGENERATE).to_numpy()
+    half = np.where(
+        out.comparison.eq(COMPARISON_T).to_numpy(), half, np.where(degenerate, 0.0, np.nan)
+    )
     out[f"{prefix}lo"], out[f"{prefix}hi"] = delta - half, delta + half
     return out
 
@@ -716,15 +832,28 @@ def paired_t(
     what this adds is the reference distribution the specification declares. Ten seasons
     is nine degrees of freedom, and a normal would report a narrower interval than the
     evidence supports.
+
+    A zero standard error is not a missing one. Every season differing by the same amount
+    -- most often by nothing at all -- leaves the mean difference exactly determined and
+    the t undefined, which is `degenerate_zero_variance`: no p-value, and an interval of
+    width zero at the difference itself. `unavailable` is the genuinely uninformative
+    case, a season too few or a difference that is not a number.
     """
     out = frame.copy()
     df = out.seasons.to_numpy(dtype=float) - 1.0
     error = out[se].to_numpy(dtype=float)
+    delta = out[column].to_numpy(dtype=float)
     with np.errstate(invalid="ignore", divide="ignore"):
-        out["t"] = np.where(error > 0, out[column].to_numpy(dtype=float) / error, np.nan)
+        out["t"] = np.where(error > 0, delta / error, np.nan)
     out["df"] = df
-    usable = np.isfinite(out.t.to_numpy(dtype=float)) & (df > 0)
+    known = np.isfinite(delta) & np.isfinite(error) & (df > 0)
+    out["comparison"] = np.where(
+        known & (error > 0),
+        COMPARISON_T,
+        np.where(known, COMPARISON_DEGENERATE, COMPARISON_UNAVAILABLE),
+    )
     safe = np.where(df > 0, df, 1.0)
+    usable = out.comparison.eq(COMPARISON_T).to_numpy()
     out["p_value"] = np.where(usable, 2.0 * stats.t.sf(np.abs(out.t.to_numpy()), safe), np.nan)
     return _interval(out, column, se, np.full(len(out), alpha))
 
@@ -743,13 +872,19 @@ def paired_inference(
     So this returns the finished quantities. `p_holm` is the step-down adjusted p-value
     with monotonicity enforced -- a later step can have a smaller raw p than an earlier
     step, and the adjusted sequence must not go back down -- and `reject` is the
-    procedure's own decision, which is exactly "every step up to here rejected".
+    procedure's own decision, which is exactly "every step up to here rejected". `reject`
+    is the adjusted result; nothing else here is.
 
-    Two intervals travel with it. `lo`/`hi` is the ordinary 95% paired interval, which is
-    what a single comparison would report. `holm_lo`/`holm_hi` is the interval at that
-    row's Holm level, which is the boundary the frozen promotion rule names when it asks
-    for a Holm-adjusted 95% interval excluding zero; it is a decision boundary, not a
-    simultaneous confidence set, and the two coincide only for the first step.
+    In particular `stage_lo`/`stage_hi` is not. It is the interval of each step's own
+    local test, at that step's level, and Holm's levels *widen* down the ranking -- 0.0125
+    then 0.0167 then 0.025 then 0.05 for four comparisons -- so a later step gets a
+    narrower interval than an earlier one. It can therefore exclude zero on a step the
+    procedure never reached. Four comparisons at delta = -0.02 with raw p of 0.020, 0.021,
+    0.022 and 0.040 all have p_holm = 0.08 and reject nothing, yet the third and fourth
+    local intervals lie entirely below zero. A promotion rule written against those
+    intervals would admit a candidate the step-down declined, which is why the rule is
+    written against `reject`. `lo`/`hi` is the ordinary unadjusted 95% interval, reported
+    because it is what a single comparison would say and it is honest about being that.
     """
     out = paired_t(frame, column, se, alpha)
     # Sort by evidence, which for an unusable comparison is none: a fit that produced no
@@ -764,4 +899,4 @@ def paired_inference(
     scaled = out.p_value.to_numpy(dtype=float) * (total - out.holm_rank.to_numpy() + 1)
     out["p_holm"] = np.minimum(np.maximum.accumulate(np.nan_to_num(scaled, nan=1.0)), 1.0)
     out["reject"] = (out.p_holm <= alpha) & out.p_value.notna()
-    return _interval(out, column, se, out.holm_alpha.to_numpy(dtype=float), "holm_")
+    return _interval(out, column, se, out.holm_alpha.to_numpy(dtype=float), "stage_")

@@ -152,8 +152,12 @@ else:
         assert benchmark.checkpoint_complete(directory, f"fold {fold}"), fold
         # Recomputed from the saved pairs: the digest names the exact keys that entered
         # the fit, and none of them may be at or after the season it is applied to.
-        rows, digest = cal.training_pairs(out / "pairs", spec, fold)
+        rows, digest, accounting = cal.training_pairs(out / "pairs", spec, fold)
         assert int(rows.season.max()) < fold
+        upstream = {
+            str(season): benchmark.digest(out / "pairs" / str(season) / "checkpoint.json")
+            for season in range(calibrated["train_start"], fold)
+        }
         for family, grouping, name in cal.candidates(spec):
             # `load_artifact` refuses an artifact that no longer hashes as recorded. Every
             # field below is checked for every candidate, because checking one candidate's
@@ -165,7 +169,13 @@ else:
             assert artifact["fold"] == fold
             assert artifact["train_seasons"] == list(range(calibrated["train_start"], fold))
             assert artifact["cutoff_season"] == fold - 1
+            # Recomputed over the values the coefficients are a function of, not the keys
+            # alone: another run's fold directory can name the same rows and hold different
+            # rates, positions or outcomes, and with keys alone it passed everything here.
             assert artifact["training_digest"] == digest
+            assert artifact["training_upstream"] == upstream
+            assert artifact["training_counts"] == accounting
+            assert artifact["training_rows"] == accounting["fitted_rows"]
             assert artifact["base_model"] == spec["baseline"] and artifact["base_seed"] == -1
             assert artifact["map_target"] == calibrated["map_target"]
             assert artifact["fallback"] == list(calibrated["fallback"])
@@ -209,12 +219,39 @@ else:
         # Every candidate's saved surface must be its own fold artifact applied to those
         # identity rates -- otherwise a surface can be replaced, or built from the wrong
         # fold, and no later table would show it.
+        surface_keys = ["season", "decision_week", "week", "slot", "player_id"]
+        current = pd.read_parquet(out / "apply" / str(season) / "forecasts.parquet")
         for name in names:
             artifact = cal.load_artifact(out / "folds" / str(season) / f"{name}.json")
             saved = saved_surface(out / "apply" / str(season), name)
+            # The keys and the scaffold first. Comparing rate arrays alone compares two
+            # orderings and calls them the same population.
+            pd.testing.assert_frame_equal(saved[surface_keys], base_surface[surface_keys])
+            for column in ("avail_mult", "hard_eligible", "position", "actual_tds"):
+                pd.testing.assert_series_equal(saved[column], base_surface[column])
             pd.testing.assert_series_equal(saved.original_lam, base_surface.lam, check_names=False)
             expected_lam = cal.mapped_lam(base_surface, artifact)
             np.testing.assert_array_equal(saved.lam.to_numpy(), expected_lam)
+            # And the horizon-zero slice against the forecast rows the primary score reads,
+            # which are exported separately and could disagree with the surface.
+            rows = current[current.model.eq(name)]
+            head = saved[saved.decision_week.eq(saved.week)]
+            merged = rows.merge(
+                head[["season", "week", "slot", "player_id", "lam", "actual_tds"]],
+                on=["season", "week", "slot", "player_id"],
+                how="inner",
+                suffixes=("", "_surface"),
+                validate="one_to_one",
+            )
+            assert len(merged) == len(rows), (season, name)
+            np.testing.assert_array_equal(merged.lam.to_numpy(), merged.lam_surface.to_numpy())
+            # The outcomes too, which the two files reach by different routes: the forecast
+            # export resolves the decision week's own row, the surface settles every target
+            # week from the ledger. Agreeing where they overlap is what says the ledger
+            # lookup found the rows it was supposed to.
+            np.testing.assert_array_equal(
+                merged.actual_tds.to_numpy(), merged.actual_tds_surface.to_numpy()
+            )
         print(season, "apply verified", flush=True)
     checks += [
         "fitted artifacts hash as recorded",
@@ -222,6 +259,10 @@ else:
         "no training key reaches its own apply season",
         "identity reproduces the pairs stage exactly",
         "candidate surfaces are their own artifact applied to identity",
+        "candidate surfaces keep identity's keys, scaffold and outcomes",
+        "scored forecast rows match the surface they were exported from",
+        "fold digests cover the values that determined the coefficients",
+        "training rows are accounted for before they are filtered",
     ]
 
 coverage = pd.read_csv(out / "coverage.csv")

@@ -194,9 +194,15 @@ forecast trains in the group it is applied by. `experiments/verify.py` works fro
 resolved configuration, checked against the identity the run recorded; it reconciles that every
 fitted artifact still hashes as recorded and carries its own declared fit, that no training key
 reaches its own apply season, and that each candidate surface is exactly that artifact applied
-to identity's rates. The run measures the outcome coverage its floors are stated over and the
-proper score by horizon and availability, and reports the primary comparison as a paired season
-t with a Holm step-down adjustment.
+to identity's rates, and that each fold's digest covers the values its coefficients are a
+function of rather than only the keys. Outcomes are settled from the finalized scoring ledger
+rather than from the target week's candidate pool, so a player who leaves the pool contributes
+the zero he recorded instead of an unavailable outcome; membership travels separately as
+retention. The run measures the outcome coverage its floors are stated over, counts every
+training row it discards, and reports the proper score by horizon and availability. The primary
+comparison is a paired season t with a Holm step-down, and the step-down's own decision is what
+the promotion rule reads -- a per-step interval widens with its level and can exclude zero on a
+step the procedure never reached.
 
 ### Phase 3C: Shadow-Live Validation
 

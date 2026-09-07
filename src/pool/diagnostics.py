@@ -92,8 +92,8 @@ def study_constants(run: Path) -> dict:
 def load_run(run: Path, model: str = "shipped", seed: int = -1, seasons=None) -> pd.DataFrame:
     """Join a study's future surface to the outcomes recorded on its forecast rows.
 
-    The surface carries no outcome, and the forecast export keeps only each week's own
-    decision row, so the outcome has to be joined back.
+    A surface saved before outcomes were settled on it carries none, and the forecast
+    export keeps only each week's own decision row, so the outcome has to be joined back.
 
     Outcomes belong to the target week: whether the player scored, and whether he has a
     row at all. Everything describing the forecast belongs to the *decision* week --
@@ -109,6 +109,11 @@ def load_run(run: Path, model: str = "shipped", seed: int = -1, seasons=None) ->
     when it is not. Joining it cannot describe a player with no forecast row that week --
     a bye is exactly that -- and 6.5% of one season's eligible surface rows are in that
     position, every one of them a future forecast.
+
+    Outcomes work the same way and for a sharper reason. Joining them to the target
+    week's forecast row conditions the outcome on the player still being a candidate that
+    week, so a departure arrives as an unavailable outcome rather than as the zero the
+    ledger recorded. A surface that settled its own outcomes is used as it stands.
     """
     run = Path(run)
     years = sorted(int(p.name) for p in run.iterdir() if p.is_dir() and p.name.isdigit())
@@ -125,6 +130,12 @@ def load_run(run: Path, model: str = "shipped", seed: int = -1, seasons=None) ->
         surface = pd.read_parquet(path)
         forecasts = pd.read_parquet(directory / "forecasts.parquet")
         forecasts = forecasts[forecasts.model.eq(model) & forecasts.seed.eq(seed)]
+        # A surface that settled its own outcomes is authoritative, for the same reason it
+        # is for position: the join below can only describe a player who is still in the
+        # target week's candidate pool, and whether he is says nothing about what happened
+        # in that week. The join is the fallback for a study saved before the columns
+        # existed, and it reports a departed player's outcome as missing.
+        settled = {"actual_tds", "outcome_complete", "played"} <= set(surface.columns)
         outcome = forecasts[
             ["season", "week", "player_id", "actual_tds", "played"]
         ].drop_duplicates(["season", "week", "player_id"])
@@ -148,9 +159,12 @@ def load_run(run: Path, model: str = "shipped", seed: int = -1, seasons=None) ->
             .drop_duplicates(["season", "week", "player_id"])
             .rename(columns={"week": "decision_week"})
         )
-        joined = surface.merge(outcome, on=["season", "week", "player_id"], how="left").merge(
-            decision, on=["season", "decision_week", "player_id"], how="left"
+        joined = (
+            surface
+            if settled
+            else surface.merge(outcome, on=["season", "week", "player_id"], how="left")
         )
+        joined = joined.merge(decision, on=["season", "decision_week", "player_id"], how="left")
         parts.append(joined)
     saved = study_constants(run)
     return prepare(
@@ -183,6 +197,13 @@ def prepare(rows: pd.DataFrame, discount: float | None = None) -> pd.DataFrame:
     rows["rank_available"] = rows.rank_available.astype("Float64")
     rows.loc[future, "rank_available"] = pd.NA
     rows["outcome_known"] = rows.actual_tds.notna()
+    # Whether the player was still a candidate in the week he was forecast for. On a
+    # surface that settled its own outcomes this is an independent fact; on one that
+    # joined them, it is the same fact, because the join could only find a row for a
+    # player who was still there. Naming it separately is what keeps a departure from
+    # reading as an unavailable outcome.
+    if "in_target_pool" not in rows:
+        rows["in_target_pool"] = rows.outcome_known
     # A player with no forecast row at his decision week has no forecast-time position.
     # Label it rather than leave it null: a groupby drops nulls, and the strata that
     # exist to report missing coverage would be the ones hiding it.

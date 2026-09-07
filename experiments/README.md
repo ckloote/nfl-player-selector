@@ -160,12 +160,22 @@ Phase 3A described — before pruning and before the future discount. `avail_mul
 primary metric scores is identical for every candidate.
 
 Fold Y trains on `train_start..Y-1` only. A training row needs its target week played and
-scored, not merely an early forecast timestamp, and the artifact records a digest of the exact
-keys that entered the fit so that "no evaluation-season row reached this coefficient" is
-checkable afterwards rather than asserted. Eligible zero rates cannot enter a fit on
-`log(lambda)`: they are excluded and counted, as in the 3A export. A group below the declared
-row or cluster minimum, or whose fit is unsupported, takes the declared fallback and records
-which one it took.
+scored, not merely an early forecast timestamp, and the artifact records a digest of the
+*values* that entered the fit — keys, rates, positions and outcomes — so that "this artifact was
+fitted on these rows" is checkable afterwards rather than asserted; the keys alone would let one
+run's fold sit in another's directory unnoticed. The artifact also names the checkpoint digest of
+each training season it read. Eligible zero rates cannot enter a fit on `log(lambda)`: they are
+excluded and counted, in `training-accounting.csv`, as in the 3A export. A group below the
+declared row or cluster minimum, or whose fit is unsupported, takes the declared fallback and
+records which one it took.
+
+An outcome is settled from the finalized scoring ledger at export time and travels on the
+surface, absence counting as zero only where the week is completely scored. Reading it instead
+off the target week's own forecast row would make it conditional on the player still being a
+candidate then, which is a fact about roster churn rather than about what he scored: on 2016 that
+alone left 9,502 eligible rows unscored, none of which had scored a touchdown, and dropping them
+moved fold 2016's fitted scale from 0.9413 to 0.9355. Membership is reported separately as
+retention.
 
 | Artifact | Row definition |
 |---|---|
@@ -174,10 +184,11 @@ which one it took.
 | `policy.csv` | Achieved TDs per season and each candidate against identity's replay of the *same* strategy, never against identity greedy, with the paired interval the non-inferiority bound is compared against |
 | `decision-changes.csv` | How often a candidate's replay chose a different player than identity's did |
 | `advice.csv`, `advice-changes.csv` | Static `advise_slot` sensitivity: replay makes one decision per week through `plan_slot`, so a flipped hold is a mechanism, not a touchdown gained by waiting |
-| `coverage-out-of-fold.csv`, `coverage-margins.csv` | Whether the applied surface has an outcome to score against, by season and horizon and then collapsed to the two populations the declared floors are stated over. Different from the schedule audit in `coverage.csv`: every game can be complete while a forecast for a later week has no target row |
-| `zero-accounting.csv` | Eligible zero rates and the two kinds of exclusion, in the classes that mean different things |
+| `coverage-out-of-fold.csv`, `coverage-margins.csv` | Whether the applied surface has an outcome to score against, by season and horizon and then collapsed to the two populations the declared floors are stated over, with retention — how much of the surface belonged to a player still in the pool at the week he was forecast for — reported beside it. Different from the schedule audit in `coverage.csv` and from each other |
+| `zero-accounting-out-of-fold.csv` | Eligible zero rates and the two kinds of exclusion over the applied seasons, in the classes that mean different things |
+| `training-accounting.csv` | The same for the training population, per fold: hard exclusions, eligible zero rates and unresolved outcomes, reconciling to the rows each fold actually fitted |
 | `strata-out-of-fold.csv` | The proper score by forecast horizon and availability, per candidate — the diagnostics the pooled fit declares consequences for and cannot itself show |
-| `surface-<candidate>-<seed>.parquet` | The out-of-fold surface, carrying the mapped rate as `lam`, the rate it was mapped from as `original_lam`, and the decision-time `position` the map was selected by |
+| `surface-<candidate>-<seed>.parquet` | The out-of-fold surface, carrying the mapped rate as `lam`, the rate it was mapped from as `original_lam`, the decision-time `position` the map was selected by, and the target week's settled outcome (`actual_tds`, `outcome_complete`, `played`) beside `in_target_pool` |
 
 `experiments/phase3-calibration-smoke.toml` is a two-season mechanics check, not evidence. It
 exists so the stages, the barrier, the artifact hashes and resume can be exercised end to end.
