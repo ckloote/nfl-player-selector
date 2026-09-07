@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -21,6 +22,7 @@ from . import (
     ingest,
     models,
     projections,
+    prospective,
     scoring,
     snapshots,
     state,
@@ -172,8 +174,9 @@ def recommend(
         proj = _projections(conn, season, wk)
         used, locked = state.used_ids(conn, season), state.locked_by_slot(conn, season)
         advice = advise_week(proj, wk, used, locked, now=now)
+        decision_id = None
         if capture_decision:
-            capture.record_decision(
+            decision_id = capture.record_decision(
                 conn, season, wk, proj, advice, used, locked, decision_at=decided
             )
         # Read inside the snapshot too: a data-age line or a pick name drawn from a
@@ -182,6 +185,11 @@ def recommend(
         recorded_names = state.picks(conn, season).set_index("player_id").player_name.to_dict()
     console.print(f"[bold]Week {wk} — {season}[/bold]")
     _print_freshness(freshness_rows, freshness_warnings)
+    if decision_id:
+        # Printed so the submission can name it. With two decisions in a week the
+        # fallback link -- the most recent advice for the slot -- is whichever happened
+        # last, which is not the same thing as the one the pick came from.
+        console.print(f"[dim]Captured decision {decision_id}[/dim]")
     for a in advice:
         if a.locked_player in recorded_names:
             a.locked_player = recorded_names[a.locked_player]
@@ -257,6 +265,9 @@ def record(
     flex: str | None = typer.Option(None, help="WR/TE pick (name)"),
     season: int = SeasonOpt,
     db_path: Path | None = DbOpt,
+    decision: str | None = typer.Option(
+        None, "--decision", help="Captured decision these picks came from (see `recommend`)"
+    ),
 ):
     """Log submitted picks, including historical entries and corrections."""
     conn = _conn(db_path)
@@ -313,6 +324,7 @@ def record(
                         "correction",
                         prior,
                         dict(replaced_by=e["player_id"]),
+                        decision_id=decision,
                     )
                 capture.record_action(
                     conn,
@@ -322,8 +334,9 @@ def record(
                     "submitted",
                     e["player_id"],
                     dict(player_name=e["player_name"], team=e.get("team"), replaced=prior),
+                    decision_id=decision,
                 )
-    except state.PickError as e:
+    except (state.PickError, ValueError) as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1) from e
     for warning in warnings:
@@ -1023,6 +1036,209 @@ def diagnose(
             seasons=_seasons(seasons) if seasons else None,
             log=console.print,
         )
+    except (ValueError, OSError, KeyError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+
+def _capture_weeks(conn, season: int, week: int | None) -> list[int]:
+    if week is not None:
+        return [week]
+    rows = conn.execute(
+        "SELECT DISTINCT week FROM decision_events WHERE season = ? ORDER BY week", (season,)
+    ).fetchall()
+    return [int(r["week"]) for r in rows]
+
+
+def _adhoc_window(conn, season: int, week: int | None) -> dict:
+    """A window for checking captures directly, outside any protocol.
+
+    It carries the season, the weeks that have captures and the live role source, which
+    is all the mechanical checks read. It declares no floors and evaluates none: a
+    reconstruction or parity result is a fact about one decision, and reading it against
+    a threshold is what the dated protocol is for.
+    """
+    return {
+        "season": season,
+        "collection_weeks": _capture_weeks(conn, season, week),
+        "role_source": prospective.ROLE_SOURCE,
+    }
+
+
+@app.command()
+def captures(
+    season: int = SeasonOpt,
+    week: int | None = WeekOpt,
+    decision: str | None = typer.Option(None, "--decision", help="Show one decision in full"),
+    db_path: Path | None = DbOpt,
+):
+    """List captured decisions, or show one with its identity, inputs and advice."""
+    conn = _conn(db_path)
+    if decision:
+        _one_capture(conn, decision)
+        return
+    spec = _adhoc_window(conn, season, week)
+    found = prospective.decisions(conn, spec)
+    if not len(found):
+        console.print(f"[yellow]No captured decisions for {season}.[/yellow]")
+        return
+    events = capture.events(conn, season)
+    t = Table("Decision", "Week", "Event", "Decision time (UTC)", "Events", "Submitted")
+    for row in found.itertuples():
+        mine = events[events.decision_id.eq(row.decision_id)]
+        kinds = mine.kind.value_counts().to_dict()
+        submitted = mine[mine.kind.eq("submitted")]
+        t.add_row(
+            row.decision_id[:12],
+            str(row.week),
+            row.event,
+            row.decision_at,
+            ", ".join(f"{k}x{v}" for k, v in sorted(kinds.items())),
+            ", ".join(f"{r.slot}:{r.player_id}" for r in submitted.itertuples()) or "-",
+        )
+    console.print(t)
+
+
+def _one_capture(conn, decision_id: str) -> None:
+    events = db.read_df(
+        conn,
+        "SELECT * FROM decision_events WHERE decision_id = ? ORDER BY event_id",
+        (decision_id,),
+    )
+    if not len(events):
+        console.print(f"[red]No captured decision {decision_id}[/red]")
+        raise typer.Exit(1)
+    identity = capture.recorded_identity(conn, decision_id)
+    head = events[events.kind.eq("surface")]
+    console.print(f"[bold]{decision_id}[/bold]")
+    console.print(
+        f"  {int(events.season.iloc[0])} week {int(events.week.iloc[0])} "
+        f"at {events.decision_at.iloc[0]}"
+    )
+    console.print(f"  model {identity.get('model')} / calibrator {identity.get('calibrator')}")
+    console.print(f"  source {identity.get('code_hash')} (revision {identity.get('revision')})")
+    drift = capture.constants_drift(identity.get("constants", {}))
+    if drift:
+        console.print("[yellow]  Constants have moved since this decision:[/yellow]")
+        for name, change in sorted(drift.items()):
+            console.print(f"    {name}: recorded {change['recorded']}, now {change['current']}")
+    if len(head):
+        detail = json.loads(head.detail.iloc[0])
+        console.print(
+            f"  surface {detail['rows']:,} rows over weeks "
+            f"{detail['weeks'][0]}-{detail['weeks'][-1]}; {len(detail['used'])} used"
+        )
+    inputs = db.read_df(
+        conn,
+        "SELECT season, feed, observed_at, missing, age_hours, stale FROM decision_inputs "
+        "WHERE decision_id = ? ORDER BY season, feed",
+        (decision_id,),
+    )
+    t = Table("Season", "Feed", "Observed (UTC)", "Age (h)", "State")
+    for row in inputs.itertuples():
+        state_text = "missing" if row.missing else ("stale" if row.stale else "fresh")
+        t.add_row(
+            str(int(row.season)),
+            row.feed,
+            row.observed_at or "-",
+            "-" if row.age_hours is None or pd.isna(row.age_hours) else f"{row.age_hours:.1f}",
+            state_text,
+        )
+    console.print(t)
+    for row in events[events.kind.isin(["advice", "hold", "commit"])].itertuples():
+        detail = json.loads(row.detail)
+        if row.kind == "advice":
+            pick = detail.get("recommended")
+            console.print(
+                f"  {row.slot}: "
+                + (
+                    f"{pick['player_name']} ({pick['lam']:.3f} xTD)"
+                    if pick
+                    else (
+                        f"locked {detail['locked_player']}"
+                        if detail.get("locked_player")
+                        else "no candidate"
+                    )
+                )
+            )
+        else:
+            console.print(f"    {row.slot} {row.kind} against premium {detail['premium']}")
+
+
+@app.command()
+def verify_capture(
+    season: int = SeasonOpt,
+    week: int | None = WeekOpt,
+    decision: str | None = typer.Option(None, "--decision", help="Verify one decision"),
+    db_path: Path | None = DbOpt,
+    allow_code_drift: bool = typer.Option(
+        False, help="Verify against a source tree the decisions were not captured under"
+    ),
+):
+    """Reconstruct captured decisions and check them against a snapshot replay.
+
+    Reconstruction re-derives the advice from the stored surface alone: if it differs
+    from what was recorded, something the decision depended on was never written down.
+    Parity rebuilds the same instant from the archived feeds: if that differs, the live
+    path and replay are not the same function, which is what every replay assumes.
+    """
+    conn = _conn(db_path)
+    spec = _adhoc_window(conn, season, week)
+    found = prospective.decisions(conn, spec)
+    if decision:
+        found = found[found.decision_id.eq(decision)]
+        if not len(found):
+            console.print(f"[red]No captured decision {decision} in {season}[/red]")
+            raise typer.Exit(1)
+    if not len(found):
+        console.print(f"[yellow]No captured decisions for {season}.[/yellow]")
+        return
+    t = Table("Decision", "Week", "Event", "Reconstructs", "Parity", "Detail")
+    failed = 0
+    for row in found.itertuples():
+        rebuilt = prospective.reconstruction(
+            conn, row.decision_id, allow_code_drift=allow_code_drift
+        )
+        matched = prospective.parity(conn, row.decision_id, spec, allow_code_drift=allow_code_drift)
+        ok = rebuilt["ok"] and matched["ok"]
+        failed += not ok
+        notes = [n for n in (rebuilt.get("reason"), matched.get("reason")) if n]
+        t.add_row(
+            row.decision_id[:12],
+            str(row.week),
+            row.event,
+            "[green]yes[/green]" if rebuilt["ok"] else "[red]no[/red]",
+            "[green]yes[/green]" if matched["ok"] else "[red]no[/red]",
+            "; ".join(notes) or "-",
+        )
+    console.print(t)
+    if failed:
+        console.print(f"[red]{failed} of {len(found)} captured decisions did not verify.[/red]")
+        raise typer.Exit(1)
+    console.print(
+        f"[green]All {len(found)} captured decisions reconstruct and match replay.[/green]"
+    )
+
+
+@app.command()
+def baseline(
+    config_path: Annotated[Path, typer.Option("--config", help="Phase 3C protocol TOML")],
+    out: Annotated[Path, typer.Option("--out", help="Where to write the baseline export")],
+    db_path: Path | None = DbOpt,
+    allow_code_drift: bool = typer.Option(
+        False, help="Describe decisions captured under a different source tree"
+    ),
+):
+    """Describe the captured prospective decisions under a dated collection protocol.
+
+    Descriptive only: it fits no correction, promotes no candidate and changes nothing.
+    The protocol declares the window, the populations and the floors before any decision
+    is captured, so none of them can be chosen once the numbers exist.
+    """
+    try:
+        spec = prospective.resolve(config_path)
+        conn = _conn(db_path)
+        prospective.export(conn, spec, out, allow_code_drift=allow_code_drift, log=console.print)
     except (ValueError, OSError, KeyError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc

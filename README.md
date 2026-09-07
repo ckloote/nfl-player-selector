@@ -14,6 +14,7 @@ appetite change with your position on the leaderboard?
 - [`docs/EVALUATION.md`](docs/EVALUATION.md) - generated season scores, forecast diagnostics, methods and provenance
 - [`docs/ANALYSIS.md`](docs/ANALYSIS.md) - dated, authored interpretation and research limits; not refreshed by reruns
 - [`docs/PHASE3B_OUTCOME.md`](docs/PHASE3B_OUTCOME.md) - completed calibration experiment: no candidate promoted, rationale and next step
+- [`docs/PHASE3C_PROTOCOL.md`](docs/PHASE3C_PROTOCOL.md) - dated prospective baseline protocol: window, decision events, parity criteria and floors, fixed before collection
 - [`docs/REVIEW.md`](docs/REVIEW.md) — September 2026 review: open defects, validation limitations, and recommended priorities
 
 ## Status
@@ -25,8 +26,10 @@ The [Phase 3B report](experiments/results/phase3-calibration/CALIBRATION.md) cov
 2016-2025 walk-forward calibration experiment. Position-specific log-affine maps improved
 forecast accuracy, but no candidate passed all signed forecast and policy gates. The
 [authored outcome](docs/PHASE3B_OUTCOME.md) is no promotion; production remains unchanged.
-The recommended next step is an identity-only prospective baseline protocol and capture for
-Phase 3C live/snapshot validation, not a calibrated deployment or another tuning sweep.
+Phase 3C follows as identity-only prospective collection, not a calibrated deployment or
+another tuning sweep. Its [protocol](docs/PHASE3C_PROTOCOL.md) is dated 2026-09-07 and
+frozen before the first captured decision; collection covers 2026 weeks 1-6 with two
+decision events a week, and the review is baseline readiness only.
 Leaderboard strategy comes later.
 
 The [evaluation report](docs/EVALUATION.md) combines actual season scores from each model's
@@ -119,6 +122,25 @@ so a captured decision can be reconstructed later even after the feeds have move
 Outcomes are never stored beside it; they are joined from finalized scoring when read. Use
 `--no-capture` to skip recording. This evidence is what
 [Phase 3](docs/IMPLEMENTATION_PLAN.md) needs and is not used to make picks.
+
+`recommend` prints the decision it captured, and `record --decision <id>` names it. With
+more than one decision in a week the fallback link — the most recent advice for that slot
+— is whichever happened last, which is not the same thing as the one the pick came from.
+
+```bash
+uv run pool captures --season 2026 --week 1          # captured decisions, or one in full
+uv run pool verify-capture --season 2026             # reconstruction and live/snapshot parity
+uv run pool baseline --config experiments/phase3c-baseline.toml \
+  --out experiments/results/phase3c-baseline         # the descriptive export and dated note
+```
+
+`verify-capture` re-derives each decision's advice from its stored surface alone, then
+rebuilds the same instant from the archived feeds and compares the model columns. The
+archive is written by `refresh`, so a decision made without one cannot be verified and is
+reported as unverified rather than skipped. `baseline` describes the captures under the
+dated [3C protocol](experiments/phase3c-baseline.toml), which declares the window, the
+decision events, the populations and the floors before any decision is captured; a missing
+floor blocks the export. It promotes nothing and changes nothing.
 
 Scoring counts every touchdown thrown or scored, including returns and recoveries.
 The importer uses nflverse's explicit scorer identifier and separately credits the

@@ -54,6 +54,38 @@ Artifact schema version 1:
 | `coverage.csv` | Each scheduled game in every required history/evaluation season, with completion and reason |
 | `presentation.json` | Publication-only source hashes for the report/figure renderers, plus the original metric source and dataset identities; does not replace the metric manifest |
 
+`phase3c-baseline.toml` is the dated Phase 3C collection protocol. It is not a benchmark
+specification: no run reads a frozen research dataset and nothing is fitted. It declares
+the collection window, the two weekly decision events, the live input policy, the
+populations, the parity criteria and the fidelity and coverage floors, and
+`prospective.resolve` refuses it if any declaration is missing — a missing floor blocks
+the collection the way a missing margin blocks Phase 3B. The file's text is hashed into
+the window identity, so an edit to its reasoning starts a new window.
+
+```bash
+uv run pool baseline --config experiments/phase3c-baseline.toml \
+  --out experiments/results/phase3c-baseline
+```
+
+It reads the operational database's append-only decision log rather than a research
+dataset, and writes:
+
+| Artifact | Row definition |
+|---|---|
+| `decisions.csv` | Each captured decision, its declared event, and whether it reconstructs and matches a snapshot replay of its own instant |
+| `events.csv` | Scheduled decision events against captured ones, week by week; a week whose first game is already in the main slate schedules one, not two |
+| `fidelity.csv` | Event capture, reconstruction and parity rates against the protocol's floors; both fidelity rates divide by every captured decision, not by the ones that could be checked |
+| `outcome-coverage.csv` | Coverage over the declared current and future populations, with future target weeks outside the window reported as unsettled rather than missing |
+| `submissions.csv` | Each submitted pick, the decision it was attributed to, and whether that link was named or inferred |
+| `strata.csv`, `fits.csv`, `reliability.csv`, `zero-accounting.csv`, `coverage.csv` | The Phase 3A descriptive tables over the captured surface, under the prospective populations |
+| `identities.json` | The protocol hash, the distinct decision identities in the window and any constants drift between them, beside the module hashes that computed the description |
+| `BASELINE.md` | The dated note: measurements and identities only, no conclusion |
+
+Eligibility is reconciled with the deadline before any population is described, and parity
+compares the model columns rather than the two eligibility columns, which differ by
+construction: the live path leaves the deadline out of `hard_eligible` and the replay folds
+it in.
+
 Seed −1 identifies a deterministic forecast/strategy. Seeds 0–19 identify shuffled projections
 or shipped random-strategy trials; the `model` and `strategy` columns distinguish them.
 Shuffled seeds do not multiply the number of independent seasons. An empty common comparison

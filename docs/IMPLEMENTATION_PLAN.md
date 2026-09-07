@@ -13,7 +13,7 @@ after F11. The superseded Phase 2 results remain published for comparison.
 | Weekly reliability (review step 1) | Implemented: F01, F05, F09 |
 | Validation repairs (review step 2) | Implemented: F02–F04, F06, F08, F10; F07 documentation corrected |
 | Candidate-pool repair (review step 2) | Implemented: F11; benchmark rerun on the same frozen dataset |
-| Phase 3: readiness, calibration and shadow validation (review step 3) | 3A complete; 3B completed 2026-09-07 with no candidate promoted. Next: identity-only prospective baseline protocol/capture for 3C; production unchanged |
+| Phase 3: readiness, calibration and shadow validation (review step 3) | 3A complete; 3B completed 2026-09-07 with no candidate promoted. 3C identity-baseline protocol dated 2026-09-07 and its collection tooling implemented; collection and review pending. Production unchanged |
 | Leaderboard strategy (review step 4) | Pending |
 
 ## Weekly reliability
@@ -64,13 +64,15 @@ historical replay. Both 2011–2018 and 2019–2025 summaries are retrospective.
 
 ## Phase 3 — calibration validation
 
-**Status as of 2026-09-07 (UTC):** 3A and the full 3B experiment are complete; 3C validation
-remains planned. The [published calibration report](../experiments/results/phase3-calibration/CALIBRATION.md)
+**Status as of 2026-09-07 (UTC):** 3A and the full 3B experiment are complete. The 3C
+identity-baseline protocol is written, dated and implemented; the collection window and
+its review remain to be run. The [published calibration report](../experiments/results/phase3-calibration/CALIBRATION.md)
 and [authored outcome](PHASE3B_OUTCOME.md) apply the unchanged signed margins: no candidate
 passes every gate. Position-specific log-affine calibration passes the forecast gate but
 does not establish either policy's required non-inferiority. Production stays unchanged;
-no calibrated candidate advances into 3C. The next step is an identity-baseline prospective
-protocol and capture, not further tuning on these inspected results.
+no calibrated candidate advances into 3C. That next step is now specified: the
+identity-baseline protocol is dated 2026-09-07 and its collection begins with 2026 week 1.
+It is baseline collection, not further tuning on these inspected results.
 
 Scope remains to diagnose rate errors, test past-only mappings and validate their decision
 effects without changing the underlying model. Full projection/action logging is implemented
@@ -81,7 +83,7 @@ validation, and descriptive research does not require waiting for an entire pros
 |---|---|---|
 | 3A: Evidence, capture and readiness | Implemented 2026-09-06 | Guarded diagnostics, reproducible capture, regression tests and a dated [readiness note](../experiments/results/phase3a-readiness/READINESS.md) |
 | 3B: Chronological train/apply experiment | Completed 2026-09-07; no promotion | Frozen [specification](../experiments/phase3-calibration.toml), [published metrics](../experiments/results/phase3-calibration), fitted artifacts/surfaces and [outcome note](PHASE3B_OUTCOME.md) |
-| 3C: Shadow-live transfer and policy validation | Next: identity baseline only; no 3B candidate qualified | Reviewed prospective baseline protocol, matched live/snapshot evidence, then a dated validation assessment; candidate promotion requires separate qualifying evidence |
+| 3C: Shadow-live transfer and policy validation | Identity baseline only; no 3B candidate qualified. Protocol dated 2026-09-07 | Frozen [protocol](../experiments/phase3c-baseline.toml) and its [signed note](PHASE3C_PROTOCOL.md), captured decisions with reconstruction and live/snapshot parity, a descriptive baseline export, then a dated validation assessment; candidate promotion requires separate qualifying evidence |
 
 ### Phase 3A: Evidence And Readiness
 
@@ -210,17 +212,39 @@ can exclude zero on a step the procedure never reached.
 
 ### Phase 3C: Shadow-Live Validation
 
-**Recommended next deliverable:** a dated identity-baseline prospective protocol, reviewed
-before evaluating subsequent outcomes. No calibrated candidate qualified in 3B; starting
-baseline collection is not an exception to that promotion rule.
+**Protocol dated 2026-09-07; collection and review pending.** No calibrated candidate
+qualified in 3B, so this window is identity only; starting baseline collection is not an
+exception to that promotion rule. The machine-readable protocol is
+[`experiments/phase3c-baseline.toml`](../experiments/phase3c-baseline.toml) and its
+authored rationale and sign-off are in [PHASE3C_PROTOCOL.md](PHASE3C_PROTOCOL.md).
 
 1. Fix the collection/review window, decision-event schedule, live role/input policy,
    diagnostic populations, coverage requirements and live/snapshot parity criteria.
+   *Declared:* 2026 weeks 1-6 reviewed after week 6 is completely scored; two decision
+   events per week, before the first confirmed deadline and before the main Sunday slate;
+   the live path with depth roles and shipped constants; populations named for a
+   prospective log, where `recommended` and `submitted` replace a bake-off's two replayed
+   policy selections; and fidelity, parity and coverage floors that block the collection
+   if any is missing. `prospective.resolve` enforces every declaration and hashes the
+   file, so an amendment starts a new window rather than reinterpreting this one.
 2. Use the existing capture infrastructure to retain identity's full surfaces, advice,
    input identities and submitted actions at real events. Reconstruct with the same
    timestamp, roles and used/locked state; keep submitted picks and production settings unchanged.
+   `pool recommend` prints the decision it captured and `pool record --decision` names it,
+   because with two decisions in a week the fallback link is whichever advice happened
+   last rather than the one the pick came from.
 3. Review matched coverage and horizon/availability diagnostics at the declared review point.
    Report baseline readiness separately from any claim of improved policy or waiting value.
+   `pool verify-capture` runs reconstruction and parity per decision; `pool baseline`
+   writes the descriptive export and a dated note under the protocol's own floors.
+
+Eligibility is reconciled with the deadline before any population is described: the live
+path leaves the deadline out of `hard_eligible` and applies it in the recommender, so an
+elapsed cell is still marked eligible on the captured surface. Parity compares the model
+columns and reconciles that difference rather than comparing the two eligibility columns,
+which differ by construction. Both fidelity rates divide by every captured decision, not
+by the ones that could be checked: the archive is written by `refresh`, and a decision
+whose feeds were never snapshotted cannot be verified.
 
 Do not immediately rerun a calibration sweep. The opposing current/future results for
 level maps motivate a bounded, separately specified horizon-weighting experiment if that
