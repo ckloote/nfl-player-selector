@@ -1,0 +1,11 @@
+schema_version,model,strategy,tds_per_season,se,seasons,shuffle_sd,delta_vs_own_identity,paired_se,df,t,p_value,comparison,lo,hi
+1,cal-level-pooled,greedy,54.4,3.09910381311,10,0,0,0,9,,,degenerate_zero_variance,0,0
+1,cal-level-pooled,optimizer,55.8,3.37243729865,10,0,0,0,9,,,degenerate_zero_variance,0,0
+1,cal-level-position,greedy,54.3,2.99276906337,10,0,-0.1,0.406885187191,9,-0.245769576156,0.811373655241,t,-1.02043824064,0.820438240641
+1,cal-level-position,optimizer,56,3.44157586644,10,0,0.2,0.290593262903,9,0.688247201612,0.508646491596,t,-0.457367631136,0.857367631136
+1,cal-logaffine-pooled,greedy,54.4,3.09910381311,10,0,0,0,9,,,degenerate_zero_variance,0,0
+1,cal-logaffine-pooled,optimizer,55.6,3.16649122321,10,0,-0.2,0.611010092661,9,-0.327326835354,0.75090586877,t,-1.58220085765,1.18220085765
+1,cal-logaffine-position,greedy,54.4,2.97097066069,10,0,0,0.557773351023,9,0,1,t,-1.26177098123,1.26177098123
+1,cal-logaffine-position,optimizer,56.3,3.3,10,0,0.5,0.749073501808,9,0.667491239235,0.521204198345,t,-1.19452198758,2.19452198758
+1,shipped,greedy,54.4,3.09910381311,10,0,,,,,,,,
+1,shipped,optimizer,55.8,3.37243729865,10,0,,,,,,,,

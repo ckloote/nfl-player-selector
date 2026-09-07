@@ -32,6 +32,11 @@ def run_verification(verification):
         if len(seasons) > 1
         else f"The {seasons[0]} season completed"
     )
+    if len(set(seasons)) != len(seasons):
+        completed = (
+            f"All {len(seasons)} stage-season records completed, "
+            f"covering {len(set(seasons))} unique seasons"
+        )
     games = (
         f"All {scheduled:,} required games have"
         if complete == scheduled

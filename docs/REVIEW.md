@@ -11,7 +11,22 @@ for planning and season-cost explanations is reasonable. Its season-scoring
 advantage remains uncertain. The original deadline/eligibility repairs are implemented;
 calibration readiness and live-policy validation now take priority over leaderboard simulation.
 
-## Current Update: 2026-09-05
+## Current Update: 2026-09-07
+
+Phase 3B's full 2016-2025 calibration experiment is complete. The
+[report](../experiments/results/phase3-calibration/CALIBRATION.md) and
+[separately authored outcome](PHASE3B_OUTCOME.md) show that no candidate passes all signed
+gates. Position-specific log-affine calibration improves the primary forecast score, but
+neither policy establishes non-inferiority within the approved loss allowance. This is
+insufficient policy evidence, not demonstrated harm or equivalence. No candidate is
+promoted and production remains unchanged.
+
+The [implementation plan](IMPLEMENTATION_PLAN.md#phase-3c-shadow-live-validation) now
+recommends an identity-only prospective baseline protocol and ongoing capture/parity work.
+Any new calibration experiment requires its own reviewed design; these results do not
+authorize threshold relaxation or promotion by a different retrospective metric.
+
+## Historical Update: 2026-09-05
 
 Current documentation review basis: main `abc8523` and the saved
 [`roster-snapshot-repair` study](../experiments/results/roster-snapshot-repair), with metric
@@ -418,7 +433,7 @@ observations remain archived. Operational picks and imported data were preserved
 schema migration triggered by a CLI error-path test was reverted; hashes of all ten existing
 tables matched, and the tests now use temporary databases.
 
-Recommended order (September 5 status):
+Historical recommended order (September 5 status; superseded by the current update above):
 
 1. **Weekly reliability: implemented.** Deadline eligibility, scoring semantics,
    pick validation, `pool score`, and input freshness/missing-feed status are shipped.

@@ -1,0 +1,1053 @@
+{
+  "assumptions": [
+    "Scoring: one credit for each touchdown scored and each credited passing touchdown thrown; negated plays and conversions excluded; complete game coverage required.",
+    "Historical: current-season closing lines for weeks >= decision week are masked before all team/league averages. Week one uses the shipped league fallback.",
+    "Stats through W-1; weekly roster and injury rows through W; usage roles. Final schedule revisions, report timing within a week and later stat corrections remain approximations.",
+    "One decision per week immediately before the first confirmed pick deadline. Unknown current-week kickoffs are hard exclusions; future planning estimates remain usable.",
+    "Snapshot observations represent import availability, not backdated source publication. Finalized outcome scoring is separate from archived projection inputs.",
+    "Ranking population: pool-position players listed active on their own team's latest weekly roster snapshot at or before the decision week, before assignment pruning; hard exclusions unranked. Zero estimates eligible. Ties use player ID.",
+    "Common-pool depletion uses the selected deterministic baseline greedy history. Top-k diagnostics are TDs per ranked candidate, never achieved season scores.",
+    "Slot-week means are averaged within season. Seeds are averaged within season before uncertainty across seasons; seed SD is reported separately. Empty cells are reported.",
+    "Each greedy/optimizer replay has its own no-reuse history. Random-top-10 strategy trials use shipped forecasts and differ from shuffled projection models. Hindsight is retrospective.",
+    "All seasons and era summaries are retrospective; neither era is an untouched holdout. Production constants are fixed; no calibration correction or tuning is applied.",
+    "Research scoring includes the checked correction in experiments/scoring-corrections.json: duplicate rushing touchdowns in 2011_13_DET_NO reconciled to the official Saints game report."
+  ],
+  "code": {
+    "code_hash": "6934e773fbcc13699c9670b20d849ea561ac8925be2b1fccae435a8cbf9e84ea",
+    "dirty": false,
+    "dirty_diff_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "revision": "bce82abeea3dfb43b8c3319a8a742d07939bcbff",
+    "source_hashes": {
+      "pyproject.toml": "26d7d21a3bbee9f3e87a7d82cd4745d77f29fd646853defeebf28bda9755f2d1",
+      "src/pool/__init__.py": "91f51522fa9a410c5ef94b42aee1f1a7248ee4ce49df187268505c70c760a328",
+      "src/pool/backtest.py": "17a7ddfb6c8ab249290854f6a8866419336dd9a555a50e9f678defeabf7a8640",
+      "src/pool/benchmark.py": "43f472bc3d1cf0e714242f9f60d5c2391d5436ae67525876b8c6077c59ab5a35",
+      "src/pool/calibration.py": "457cb617018eaf6fcbaeb69f91b0e6ea8af296da79eb050fe73f20a2dd845a45",
+      "src/pool/capture.py": "a8cc5fabb643d62eb96def0a4e6f6fa9fa4576134343f796c845300af0146e65",
+      "src/pool/cli.py": "3eb7e92da10daa6021bafeb500b9714838c944d23f9ad81502b2297f24e18741",
+      "src/pool/config.py": "e5dc772176bea8081bfd194a8a75fc8004d39848659f252afe60959a7a8c894b",
+      "src/pool/db.py": "459198ac4e4f0a0b2b90d53fbb59b154ebf8c5e3d657142fb7762c69ca4f4b65",
+      "src/pool/diagnostics.py": "e22e8206899684f9549238e891a18dee005737a54253a95a57faaeccd5d4e910",
+      "src/pool/evaluate.py": "33299d0d092568661cd677a3941b41eb9f7f11faa52c35c78b8624b994aa29dd",
+      "src/pool/freshness.py": "e733c62176aeed6de52144dbb4be485e27e9a95c8b16923fdb82be54cdd3bf25",
+      "src/pool/ingest.py": "87d20013e38cf4281d4bf2431e23098115be7bdb11f9315126c7783e8b4d5409",
+      "src/pool/models/__init__.py": "714e1f3a34d076d08249449ff77737c25a4c9a9dbbaa5090c5d30197ba179149",
+      "src/pool/models/baselines.py": "6711aecb5a2ff4d37b0d67736db62d8aaeb95bc2225e8eb4ef40d0ccc1c650c5",
+      "src/pool/optimizer.py": "a9360915f45d1756323ca11cba241d06585f939ce3f997cfd983c3680692d7ec",
+      "src/pool/projections.py": "ca96f3b246796809c29955598ece2043c5cb6513b7047fa0fb46346923c060e5",
+      "src/pool/recommend.py": "cb0eab3d7f5c2d889ff251a504d9202a973188a45bc363e63472bdef8c2cf367",
+      "src/pool/scoring.py": "dd7dee11ca320d66365b04b3d51c9f6bc7cbb37357a9f12e3a7f2e5849ee6aa5",
+      "src/pool/snapshots.py": "625016e6e1fa03b940ad85b1dc5c417518313b8a7b18d53ecb692482dee3b9dd",
+      "src/pool/state.py": "97ab9d29d2a721ea670688d632c2d48baad56fe665c9e209d65731ce75ee71b9",
+      "uv.lock": "24c6204a6c989f06b20d6ffe3ffb159142264392a7e0dee28e036c1d95a07a3d"
+    },
+    "working_tree_status": ""
+  },
+  "database_schema": 3,
+  "dataset_hash": "c0f564496c8011e9c1ad10144b9370eca3a399e722fff9f2ace10e9a260e2151",
+  "dependencies": {
+    "nfl-pool": "0.1.0",
+    "nflreadpy": "0.1.5",
+    "numpy": "2.5.2",
+    "pandas": "3.0.5",
+    "polars": "1.44.1",
+    "pyarrow": "25.0.1",
+    "scipy": "1.18.1"
+  },
+  "identity": {
+    "code_hash": "6934e773fbcc13699c9670b20d849ea561ac8925be2b1fccae435a8cbf9e84ea",
+    "config_hash": "0f079f9c5a12aea4437ec1c7346f371d92a117eca59cd17a5dccbc7082358b3f",
+    "dataset_hash": "c0f564496c8011e9c1ad10144b9370eca3a399e722fff9f2ace10e9a260e2151",
+    "dependencies": {
+      "nfl-pool": "0.1.0",
+      "nflreadpy": "0.1.5",
+      "numpy": "2.5.2",
+      "pandas": "3.0.5",
+      "polars": "1.44.1",
+      "pyarrow": "25.0.1",
+      "scipy": "1.18.1"
+    },
+    "python": "3.12.13",
+    "thread_environment": {
+      "MKL_NUM_THREADS": null,
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1"
+    }
+  },
+  "input_metadata": {
+    "feed_provenance": [
+      {
+        "coverage": "{\"rows\": 458, \"as_of\": \"2010-W17\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:04:54+00:00",
+        "last_success": "2026-09-07T04:04:54+00:00",
+        "outcome": "success",
+        "season": 2010,
+        "source_timestamp": "Sun, 04 Aug 2024 21:31:32 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1374, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:04:53+00:00",
+        "last_success": "2026-09-07T04:04:54+00:00",
+        "outcome": "success",
+        "season": 2010,
+        "source_timestamp": "Tue, 26 Jul 2022 05:22:22 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 5223, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:04:53+00:00",
+        "last_success": "2026-09-07T04:04:53+00:00",
+        "outcome": "success",
+        "season": 2010,
+        "source_timestamp": "Thu, 13 Aug 2026 12:48:28 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 8005, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:04:53+00:00",
+        "last_success": "2026-09-07T04:04:53+00:00",
+        "outcome": "success",
+        "season": 2010,
+        "source_timestamp": "Wed, 06 Sep 2023 17:37:14 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 267, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:04:52+00:00",
+        "last_success": "2026-09-07T04:04:53+00:00",
+        "outcome": "success",
+        "season": 2010,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 256, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], \"complete_games\": 256, \"scheduled_games\": 256}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:04:54+00:00",
+        "last_success": "2026-09-07T04:04:56+00:00",
+        "outcome": "success",
+        "season": 2010,
+        "source_timestamp": "Wed, 30 Apr 2025 06:34:41 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 483, \"as_of\": \"2011-W17\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:04:57+00:00",
+        "last_success": "2026-09-07T04:04:57+00:00",
+        "outcome": "success",
+        "season": 2011,
+        "source_timestamp": "Sun, 04 Aug 2024 21:32:51 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1594, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:04:56+00:00",
+        "last_success": "2026-09-07T04:04:57+00:00",
+        "outcome": "success",
+        "season": 2011,
+        "source_timestamp": "Tue, 26 Jul 2022 05:22:29 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 5320, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:04:56+00:00",
+        "last_success": "2026-09-07T04:04:56+00:00",
+        "outcome": "success",
+        "season": 2011,
+        "source_timestamp": "Thu, 13 Aug 2026 12:48:57 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 8146, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:04:56+00:00",
+        "last_success": "2026-09-07T04:04:56+00:00",
+        "outcome": "success",
+        "season": 2011,
+        "source_timestamp": "Wed, 06 Sep 2023 17:40:42 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 267, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:04:52+00:00",
+        "last_success": "2026-09-07T04:04:53+00:00",
+        "outcome": "success",
+        "season": 2011,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 256, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], \"complete_games\": 255, \"scheduled_games\": 256}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:04:57+00:00",
+        "last_success": "2026-09-07T04:04:59+00:00",
+        "outcome": "success",
+        "season": 2011,
+        "source_timestamp": "Wed, 30 Apr 2025 06:38:47 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 484, \"as_of\": \"2012-W17\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:05:00+00:00",
+        "last_success": "2026-09-07T04:05:00+00:00",
+        "outcome": "success",
+        "season": 2012,
+        "source_timestamp": "Sun, 04 Aug 2024 21:34:07 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1686, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:05:00+00:00",
+        "last_success": "2026-09-07T04:05:00+00:00",
+        "outcome": "success",
+        "season": 2012,
+        "source_timestamp": "Tue, 26 Jul 2022 05:22:36 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 5320, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:04:59+00:00",
+        "last_success": "2026-09-07T04:04:59+00:00",
+        "outcome": "success",
+        "season": 2012,
+        "source_timestamp": "Thu, 13 Aug 2026 12:48:25 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 8295, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:04:59+00:00",
+        "last_success": "2026-09-07T04:05:00+00:00",
+        "outcome": "success",
+        "season": 2012,
+        "source_timestamp": "Wed, 06 Sep 2023 17:44:16 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 267, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:04:59+00:00",
+        "last_success": "2026-09-07T04:04:59+00:00",
+        "outcome": "success",
+        "season": 2012,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 256, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], \"complete_games\": 256, \"scheduled_games\": 256}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:05:00+00:00",
+        "last_success": "2026-09-07T04:05:02+00:00",
+        "outcome": "success",
+        "season": 2012,
+        "source_timestamp": "Wed, 30 Apr 2025 06:33:24 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 476, \"as_of\": \"2013-W17\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:05:03+00:00",
+        "last_success": "2026-09-07T04:05:03+00:00",
+        "outcome": "success",
+        "season": 2013,
+        "source_timestamp": "Sun, 04 Aug 2024 21:35:23 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1580, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:05:03+00:00",
+        "last_success": "2026-09-07T04:05:03+00:00",
+        "outcome": "success",
+        "season": 2013,
+        "source_timestamp": "Tue, 26 Jul 2022 05:22:44 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 5251, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:05:02+00:00",
+        "last_success": "2026-09-07T04:05:02+00:00",
+        "outcome": "success",
+        "season": 2013,
+        "source_timestamp": "Thu, 13 Aug 2026 12:51:03 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 8255, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:05:02+00:00",
+        "last_success": "2026-09-07T04:05:03+00:00",
+        "outcome": "success",
+        "season": 2013,
+        "source_timestamp": "Wed, 06 Sep 2023 17:47:41 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 267, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:04:59+00:00",
+        "last_success": "2026-09-07T04:04:59+00:00",
+        "outcome": "success",
+        "season": 2013,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 256, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], \"complete_games\": 256, \"scheduled_games\": 256}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:05:03+00:00",
+        "last_success": "2026-09-07T04:05:05+00:00",
+        "outcome": "success",
+        "season": 2013,
+        "source_timestamp": "Sun, 25 Aug 2024 12:30:13 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 471, \"as_of\": \"2014-W17\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:05:06+00:00",
+        "last_success": "2026-09-07T04:05:06+00:00",
+        "outcome": "success",
+        "season": 2014,
+        "source_timestamp": "Sun, 04 Aug 2024 21:36:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1503, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:05:06+00:00",
+        "last_success": "2026-09-07T04:05:06+00:00",
+        "outcome": "success",
+        "season": 2014,
+        "source_timestamp": "Tue, 26 Jul 2022 05:22:51 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 5412, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:05:05+00:00",
+        "last_success": "2026-09-07T04:05:06+00:00",
+        "outcome": "success",
+        "season": 2014,
+        "source_timestamp": "Thu, 13 Aug 2026 12:52:32 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 8188, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:05:06+00:00",
+        "last_success": "2026-09-07T04:05:06+00:00",
+        "outcome": "success",
+        "season": 2014,
+        "source_timestamp": "Wed, 06 Sep 2023 17:51:06 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 267, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:05:05+00:00",
+        "last_success": "2026-09-07T04:05:05+00:00",
+        "outcome": "success",
+        "season": 2014,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 256, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], \"complete_games\": 256, \"scheduled_games\": 256}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:05:06+00:00",
+        "last_success": "2026-09-07T04:05:09+00:00",
+        "outcome": "success",
+        "season": 2014,
+        "source_timestamp": "Sun, 25 Aug 2024 12:30:15 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 469, \"as_of\": \"2015-W17\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:05:09+00:00",
+        "last_success": "2026-09-07T04:05:09+00:00",
+        "outcome": "success",
+        "season": 2015,
+        "source_timestamp": "Sun, 04 Aug 2024 21:37:49 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1590, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:05:09+00:00",
+        "last_success": "2026-09-07T04:05:09+00:00",
+        "outcome": "success",
+        "season": 2015,
+        "source_timestamp": "Tue, 26 Jul 2022 05:22:57 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 5423, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:05:09+00:00",
+        "last_success": "2026-09-07T04:05:09+00:00",
+        "outcome": "success",
+        "season": 2015,
+        "source_timestamp": "Thu, 13 Aug 2026 12:51:40 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 8214, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:05:09+00:00",
+        "last_success": "2026-09-07T04:05:09+00:00",
+        "outcome": "success",
+        "season": 2015,
+        "source_timestamp": "Wed, 06 Sep 2023 17:54:39 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 267, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:05:05+00:00",
+        "last_success": "2026-09-07T04:05:05+00:00",
+        "outcome": "success",
+        "season": 2015,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 256, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], \"complete_games\": 256, \"scheduled_games\": 256}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:05:09+00:00",
+        "last_success": "2026-09-07T04:05:12+00:00",
+        "outcome": "success",
+        "season": 2015,
+        "source_timestamp": "Wed, 30 Apr 2025 06:33:27 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 478, \"as_of\": \"2016-W17\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:05:13+00:00",
+        "last_success": "2026-09-07T04:05:13+00:00",
+        "outcome": "success",
+        "season": 2016,
+        "source_timestamp": "Sun, 04 Aug 2024 21:39:10 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1570, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:05:12+00:00",
+        "last_success": "2026-09-07T04:05:12+00:00",
+        "outcome": "success",
+        "season": 2016,
+        "source_timestamp": "Tue, 26 Jul 2022 05:23:04 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 5413, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:05:12+00:00",
+        "last_success": "2026-09-07T04:05:12+00:00",
+        "outcome": "success",
+        "season": 2016,
+        "source_timestamp": "Thu, 13 Aug 2026 12:52:44 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 10060, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:05:12+00:00",
+        "last_success": "2026-09-07T04:05:12+00:00",
+        "outcome": "success",
+        "season": 2016,
+        "source_timestamp": "Wed, 13 Sep 2023 00:43:18 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 267, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:05:12+00:00",
+        "last_success": "2026-09-07T04:05:12+00:00",
+        "outcome": "success",
+        "season": 2016,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 256, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], \"complete_games\": 256, \"scheduled_games\": 256}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:05:13+00:00",
+        "last_success": "2026-09-07T04:05:15+00:00",
+        "outcome": "success",
+        "season": 2016,
+        "source_timestamp": "Wed, 30 Apr 2025 06:34:28 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 486, \"as_of\": \"2017-W17\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:05:16+00:00",
+        "last_success": "2026-09-07T04:05:16+00:00",
+        "outcome": "success",
+        "season": 2017,
+        "source_timestamp": "Sun, 04 Aug 2024 21:40:26 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1459, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:05:16+00:00",
+        "last_success": "2026-09-07T04:05:16+00:00",
+        "outcome": "success",
+        "season": 2017,
+        "source_timestamp": "Tue, 26 Jul 2022 05:23:11 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 5448, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:05:15+00:00",
+        "last_success": "2026-09-07T04:05:15+00:00",
+        "outcome": "success",
+        "season": 2017,
+        "source_timestamp": "Thu, 13 Aug 2026 16:44:53 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 15893, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:05:15+00:00",
+        "last_success": "2026-09-07T04:05:15+00:00",
+        "outcome": "success",
+        "season": 2017,
+        "source_timestamp": "Wed, 13 Sep 2023 00:48:42 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 267, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:05:12+00:00",
+        "last_success": "2026-09-07T04:05:12+00:00",
+        "outcome": "success",
+        "season": 2017,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 256, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], \"complete_games\": 256, \"scheduled_games\": 256}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:05:16+00:00",
+        "last_success": "2026-09-07T04:05:18+00:00",
+        "outcome": "success",
+        "season": 2017,
+        "source_timestamp": "Wed, 30 Apr 2025 06:41:25 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 473, \"as_of\": \"2018-W17\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:05:19+00:00",
+        "last_success": "2026-09-07T04:05:19+00:00",
+        "outcome": "success",
+        "season": 2018,
+        "source_timestamp": "Sun, 04 Aug 2024 21:41:41 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1547, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:05:19+00:00",
+        "last_success": "2026-09-07T04:05:19+00:00",
+        "outcome": "success",
+        "season": 2018,
+        "source_timestamp": "Tue, 26 Jul 2022 05:23:17 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 5363, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:05:18+00:00",
+        "last_success": "2026-09-07T04:05:18+00:00",
+        "outcome": "success",
+        "season": 2018,
+        "source_timestamp": "Thu, 13 Aug 2026 16:44:57 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 16104, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:05:18+00:00",
+        "last_success": "2026-09-07T04:05:19+00:00",
+        "outcome": "success",
+        "season": 2018,
+        "source_timestamp": "Wed, 13 Sep 2023 00:53:56 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 267, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:05:18+00:00",
+        "last_success": "2026-09-07T04:05:18+00:00",
+        "outcome": "success",
+        "season": 2018,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 256, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], \"complete_games\": 256, \"scheduled_games\": 256}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:05:19+00:00",
+        "last_success": "2026-09-07T04:05:21+00:00",
+        "outcome": "success",
+        "season": 2018,
+        "source_timestamp": "Wed, 30 Apr 2025 06:39:20 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 478, \"as_of\": \"2019-W17\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:05:22+00:00",
+        "last_success": "2026-09-07T04:05:22+00:00",
+        "outcome": "success",
+        "season": 2019,
+        "source_timestamp": "Sun, 04 Aug 2024 21:42:56 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1617, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:05:22+00:00",
+        "last_success": "2026-09-07T04:05:22+00:00",
+        "outcome": "success",
+        "season": 2019,
+        "source_timestamp": "Tue, 26 Jul 2022 05:23:23 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 5411, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:05:21+00:00",
+        "last_success": "2026-09-07T04:05:21+00:00",
+        "outcome": "success",
+        "season": 2019,
+        "source_timestamp": "Thu, 13 Aug 2026 16:45:38 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 15695, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:05:22+00:00",
+        "last_success": "2026-09-07T04:05:22+00:00",
+        "outcome": "success",
+        "season": 2019,
+        "source_timestamp": "Wed, 13 Sep 2023 00:59:18 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 267, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:05:18+00:00",
+        "last_success": "2026-09-07T04:05:18+00:00",
+        "outcome": "success",
+        "season": 2019,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 256, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], \"complete_games\": 256, \"scheduled_games\": 256}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:05:22+00:00",
+        "last_success": "2026-09-07T04:05:24+00:00",
+        "outcome": "success",
+        "season": 2019,
+        "source_timestamp": "Thu, 31 Jul 2025 18:17:18 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 478, \"as_of\": \"2020-W17\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:05:25+00:00",
+        "last_success": "2026-09-07T04:05:25+00:00",
+        "outcome": "success",
+        "season": 2020,
+        "source_timestamp": "Sun, 04 Aug 2024 21:44:12 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1732, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:05:25+00:00",
+        "last_success": "2026-09-07T04:05:25+00:00",
+        "outcome": "success",
+        "season": 2020,
+        "source_timestamp": "Tue, 26 Jul 2022 05:23:29 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 5543, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:05:24+00:00",
+        "last_success": "2026-09-07T04:05:25+00:00",
+        "outcome": "success",
+        "season": 2020,
+        "source_timestamp": "Wed, 26 Aug 2026 07:35:24 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 13213, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:05:25+00:00",
+        "last_success": "2026-09-07T04:05:25+00:00",
+        "outcome": "success",
+        "season": 2020,
+        "source_timestamp": "Wed, 13 Sep 2023 01:04:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 269, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:05:24+00:00",
+        "last_success": "2026-09-07T04:05:24+00:00",
+        "outcome": "success",
+        "season": 2020,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 256, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17], \"complete_games\": 256, \"scheduled_games\": 256}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:05:25+00:00",
+        "last_success": "2026-09-07T04:05:28+00:00",
+        "outcome": "success",
+        "season": 2020,
+        "source_timestamp": "Wed, 26 Aug 2026 07:33:10 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 439, \"as_of\": \"2021-W18\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:05:28+00:00",
+        "last_success": "2026-09-07T04:05:28+00:00",
+        "outcome": "success",
+        "season": 2021,
+        "source_timestamp": "Sun, 04 Aug 2024 21:45:30 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1696, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:05:28+00:00",
+        "last_success": "2026-09-07T04:05:28+00:00",
+        "outcome": "success",
+        "season": 2021,
+        "source_timestamp": "Wed, 31 Aug 2022 07:37:32 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 5866, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:05:28+00:00",
+        "last_success": "2026-09-07T04:05:28+00:00",
+        "outcome": "success",
+        "season": 2021,
+        "source_timestamp": "Thu, 13 Aug 2026 16:48:00 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 13907, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:05:28+00:00",
+        "last_success": "2026-09-07T04:05:28+00:00",
+        "outcome": "success",
+        "season": 2021,
+        "source_timestamp": "Wed, 13 Sep 2023 01:10:12 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 285, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:05:24+00:00",
+        "last_success": "2026-09-07T04:05:24+00:00",
+        "outcome": "success",
+        "season": 2021,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 272, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18], \"complete_games\": 272, \"scheduled_games\": 272}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:05:28+00:00",
+        "last_success": "2026-09-07T04:05:31+00:00",
+        "outcome": "success",
+        "season": 2021,
+        "source_timestamp": "Thu, 08 Jan 2026 13:13:13 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 467, \"as_of\": \"2022-W18\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:05:32+00:00",
+        "last_success": "2026-09-07T04:05:32+00:00",
+        "outcome": "success",
+        "season": 2022,
+        "source_timestamp": "Sun, 04 Aug 2024 21:46:50 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1630, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:05:32+00:00",
+        "last_success": "2026-09-07T04:05:32+00:00",
+        "outcome": "success",
+        "season": 2022,
+        "source_timestamp": "Thu, 31 Aug 2023 07:14:31 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 5808, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:05:31+00:00",
+        "last_success": "2026-09-07T04:05:31+00:00",
+        "outcome": "success",
+        "season": 2022,
+        "source_timestamp": "Thu, 13 Aug 2026 16:48:13 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 13583, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:05:31+00:00",
+        "last_success": "2026-09-07T04:05:31+00:00",
+        "outcome": "success",
+        "season": 2022,
+        "source_timestamp": "Wed, 13 Sep 2023 01:15:47 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 284, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:05:31+00:00",
+        "last_success": "2026-09-07T04:05:31+00:00",
+        "outcome": "success",
+        "season": 2022,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 271, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18], \"complete_games\": 271, \"scheduled_games\": 271}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:05:32+00:00",
+        "last_success": "2026-09-07T04:05:34+00:00",
+        "outcome": "success",
+        "season": 2022,
+        "source_timestamp": "Thu, 12 Feb 2026 10:25:24 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 462, \"as_of\": \"2023-W18\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:05:35+00:00",
+        "last_success": "2026-09-07T04:05:35+00:00",
+        "outcome": "success",
+        "season": 2023,
+        "source_timestamp": "Sun, 04 Aug 2024 21:48:08 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1687, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:05:35+00:00",
+        "last_success": "2026-09-07T04:05:35+00:00",
+        "outcome": "success",
+        "season": 2023,
+        "source_timestamp": "Wed, 04 Sep 2024 07:15:42 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 5801, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:05:34+00:00",
+        "last_success": "2026-09-07T04:05:34+00:00",
+        "outcome": "success",
+        "season": 2023,
+        "source_timestamp": "Thu, 13 Aug 2026 16:48:36 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 13404, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:05:35+00:00",
+        "last_success": "2026-09-07T04:05:35+00:00",
+        "outcome": "success",
+        "season": 2023,
+        "source_timestamp": "Thu, 14 Mar 2024 07:17:51 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 285, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:05:31+00:00",
+        "last_success": "2026-09-07T04:05:31+00:00",
+        "outcome": "success",
+        "season": 2023,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 272, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18], \"complete_games\": 272, \"scheduled_games\": 272}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:05:35+00:00",
+        "last_success": "2026-09-07T04:05:38+00:00",
+        "outcome": "success",
+        "season": 2023,
+        "source_timestamp": "Thu, 12 Feb 2026 10:24:52 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 440, \"as_of\": \"2024-W18\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:05:39+00:00",
+        "last_success": "2026-09-07T04:05:39+00:00",
+        "outcome": "success",
+        "season": 2024,
+        "source_timestamp": "Thu, 13 Feb 2025 07:32:56 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1713, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:05:39+00:00",
+        "last_success": "2026-09-07T04:05:39+00:00",
+        "outcome": "success",
+        "season": 2024,
+        "source_timestamp": "Thu, 13 Feb 2025 07:16:35 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 5864, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:05:38+00:00",
+        "last_success": "2026-09-07T04:05:38+00:00",
+        "outcome": "success",
+        "season": 2024,
+        "source_timestamp": "Thu, 13 Aug 2026 16:49:10 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 13466, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:05:38+00:00",
+        "last_success": "2026-09-07T04:05:39+00:00",
+        "outcome": "success",
+        "season": 2024,
+        "source_timestamp": "Fri, 14 Mar 2025 07:16:06 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 285, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:05:38+00:00",
+        "last_success": "2026-09-07T04:05:38+00:00",
+        "outcome": "success",
+        "season": 2024,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 272, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18], \"complete_games\": 272, \"scheduled_games\": 272}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:05:39+00:00",
+        "last_success": "2026-09-07T04:05:41+00:00",
+        "outcome": "success",
+        "season": 2024,
+        "source_timestamp": "Thu, 13 Aug 2026 12:26:27 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 627, \"as_of\": \"2026-03-14T07:32:09Z\"}",
+        "failure": null,
+        "feed": "depth_charts",
+        "last_attempt": "2026-09-07T04:05:42+00:00",
+        "last_success": "2026-09-07T04:05:43+00:00",
+        "outcome": "success",
+        "season": 2025,
+        "source_timestamp": "Sat, 14 Mar 2026 07:32:28 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 1750, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "injuries",
+        "last_attempt": "2026-09-07T04:05:42+00:00",
+        "last_success": "2026-09-07T04:05:42+00:00",
+        "outcome": "success",
+        "season": 2025,
+        "source_timestamp": "Wed, 18 Mar 2026 12:45:31 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 6037, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "player_stats",
+        "last_attempt": "2026-09-07T04:05:41+00:00",
+        "last_success": "2026-09-07T04:05:42+00:00",
+        "outcome": "success",
+        "season": 2025,
+        "source_timestamp": "Thu, 13 Aug 2026 16:51:21 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 13680, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "rosters",
+        "last_attempt": "2026-09-07T04:05:42+00:00",
+        "last_success": "2026-09-07T04:05:42+00:00",
+        "outcome": "success",
+        "season": 2025,
+        "source_timestamp": "Sat, 14 Mar 2026 07:33:05 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 285, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]}",
+        "failure": null,
+        "feed": "schedule",
+        "last_attempt": "2026-09-07T04:05:38+00:00",
+        "last_success": "2026-09-07T04:05:38+00:00",
+        "outcome": "success",
+        "season": 2025,
+        "source_timestamp": "Mon, 07 Sep 2026 03:46:33 GMT"
+      },
+      {
+        "coverage": "{\"rows\": 272, \"weeks\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18], \"complete_games\": 272, \"scheduled_games\": 272}",
+        "failure": null,
+        "feed": "touchdowns",
+        "last_attempt": "2026-09-07T04:05:43+00:00",
+        "last_success": "2026-09-07T04:05:45+00:00",
+        "outcome": "success",
+        "season": 2025,
+        "source_timestamp": "Thu, 13 Aug 2026 12:26:09 GMT"
+      }
+    ],
+    "observation_count": 97,
+    "table_hashes": {
+      "depth_charts": "186dfec48bc96e2ad9665e37a5092334863732d8af6493dab6cffde0c19cde26",
+      "game_results": "d6e02c5ff3eb1439776e5cb66433e55249a6435870e7a1ec0a9c147cc2ad2d46",
+      "games": "5e7110f934952b7d9a9283e42c0e66ae930d6a5f143f1d03b893e20fb2cb0153",
+      "injuries": "09a6c0430afa65d417353535d9702a71dfc3b24816403cbfe2d6372c751e381a",
+      "player_weeks": "070dda0765153dd4734225d1a891ed7986c9d86c2b9fd05a59eb52ffd12f008a",
+      "rosters": "2c4ec10d3a96016da8a7aeec53366bf188d436a15fa232e9f0d38258f9f8a926",
+      "touchdown_credits": "31ee281782323fb52f6a0e97563761a8951ca155772a06e4b928d823d02d92ee"
+    }
+  },
+  "schema_version": 1,
+  "scoring_version": 2
+}

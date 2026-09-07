@@ -13,6 +13,7 @@ appetite change with your position on the leaderboard?
 - [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — phased build plan and status
 - [`docs/EVALUATION.md`](docs/EVALUATION.md) - generated season scores, forecast diagnostics, methods and provenance
 - [`docs/ANALYSIS.md`](docs/ANALYSIS.md) - dated, authored interpretation and research limits; not refreshed by reruns
+- [`docs/PHASE3B_OUTCOME.md`](docs/PHASE3B_OUTCOME.md) - completed calibration experiment: no candidate promoted, rationale and next step
 - [`docs/REVIEW.md`](docs/REVIEW.md) — September 2026 review: open defects, validation limitations, and recommended priorities
 
 ## Status
@@ -20,12 +21,13 @@ appetite change with your position on the leaderboard?
 The weekly workflow and Phase 2 validation repairs are implemented: explicit deadline
 eligibility, complete touchdown accounting, timestamped input archives, shared baseline
 comparisons, and reproducible season experiments. Production model constants remain fixed.
-The saved study supports further diagnosis, not a production calibration change. The
-[Phase 3B](docs/IMPLEMENTATION_PLAN.md) chronological calibration experiment is implemented and
-specified in [phase3-calibration.toml](experiments/phase3-calibration.toml): it fits past-only
-rate maps on an expanding walk-forward schedule and measures them, but changes no production
-constant and deploys no calibrated model. Live-policy validation in shadow (Phase 3C) is still
-planned; leaderboard strategy comes later.
+The [Phase 3B report](experiments/results/phase3-calibration/CALIBRATION.md) covers the completed
+2016-2025 walk-forward calibration experiment. Position-specific log-affine maps improved
+forecast accuracy, but no candidate passed all signed forecast and policy gates. The
+[authored outcome](docs/PHASE3B_OUTCOME.md) is no promotion; production remains unchanged.
+The recommended next step is an identity-only prospective baseline protocol and capture for
+Phase 3C live/snapshot validation, not a calibrated deployment or another tuning sweep.
+Leaderboard strategy comes later.
 
 The [evaluation report](docs/EVALUATION.md) combines actual season scores from each model's
 greedy and optimizer pick history with ranking and calibration diagnostics. Its
