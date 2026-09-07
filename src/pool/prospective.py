@@ -498,8 +498,14 @@ def parity(
         identity_payload = capture.recorded_identity(conn, decision_id)
     except ValueError as exc:
         return dict(unchecked, reason=str(exc))
-    code_hash, _, _ = capture._code_identity()
-    code_ok = allow_code_drift or identity_payload.get("code_hash") == code_hash
+    # The decision-scoped fingerprint, not the whole tree: parity rebuilds the surface
+    # from `projections` and `snapshots`, and a module outside that closure cannot have
+    # moved it. Captures made before the narrowing keep their whole-tree contract.
+    code_hash, decision_hash, _, _ = capture._code_identity()
+    scoped = "decision_hash" in identity_payload
+    code_ok = allow_code_drift or identity_payload.get(
+        "decision_hash" if scoped else "code_hash"
+    ) == (decision_hash if scoped else code_hash)
     advice_reason = (
         None if code_ok else "source tree differs from the one the decision was captured under"
     )

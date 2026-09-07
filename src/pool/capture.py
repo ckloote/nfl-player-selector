@@ -52,19 +52,24 @@ def _json(value: Any) -> str:
 
 
 @cache
-def _code_identity() -> tuple[str, str | None, bool | None]:
-    """Fingerprint the source tree once per process.
+def _code_identity() -> tuple[str, str, str | None, bool | None]:
+    """Fingerprint the source tree once per process, whole and decision-scoped.
 
     Hashing it shells out to git three times, and a command that records three picks
     should not do that nine. Source cannot change under a running process in any way
     this tool would survive. Constants *can* -- `config.override` exists and the sweep
     uses it -- so they are deliberately outside this cache and read on every call.
     Caching them here once recorded one premium for decisions made under two.
+
+    Both hashes are recorded and only the decision-scoped one is enforced. A decision is
+    a function of the modules its advice and its surface are derived from; a leaderboard
+    or an ingestion command is not among them, and refusing to reconstruct because one
+    was added would fail a capture that nothing had touched.
     """
     from . import benchmark  # imports the feed layer; not needed to read a capture
 
     code = benchmark.code_identity()
-    return code["code_hash"], code.get("revision"), code.get("dirty")
+    return code["code_hash"], code["decision_hash"], code.get("revision"), code.get("dirty")
 
 
 def current_constants() -> dict:
@@ -74,13 +79,14 @@ def current_constants() -> dict:
 
 
 def _identity_payload(model: str, calibrator: str, artifact_hash: str | None) -> tuple[str, str]:
-    code_hash, revision, dirty = _code_identity()
+    code_hash, decision_hash, revision, dirty = _code_identity()
     raw = _json(
         {
             "model": model,
             "calibrator": calibrator,
             "calibrator_artifact_hash": artifact_hash,
             "code_hash": code_hash,
+            "decision_hash": decision_hash,
             "revision": revision,
             "dirty": dirty,
             "constants": current_constants(),
@@ -550,12 +556,19 @@ def reconstruct(conn: sqlite3.Connection, decision_id: str, *, allow_code_drift:
     if not rows:
         raise ValueError(f"No captured decision {decision_id}")
     identity_payload = recorded_identity(conn, decision_id)
-    current_hash, _, _ = _code_identity()
+    code_hash, decision_hash, _, _ = _code_identity()
     recorded_constants = identity_payload.get("constants", {})
+    # Captures written before the fingerprint was narrowed carry only the whole-tree hash;
+    # they keep the contract they were made under rather than being read against one that
+    # did not exist yet.
+    scoped = "decision_hash" in identity_payload
+    recorded_fingerprint = identity_payload.get("decision_hash" if scoped else "code_hash")
+    current_hash = decision_hash if scoped else code_hash
     drift = {
-        "code_hash_changed": identity_payload.get("code_hash") != current_hash,
-        "recorded_code_hash": identity_payload.get("code_hash"),
+        "code_hash_changed": recorded_fingerprint != current_hash,
+        "recorded_code_hash": recorded_fingerprint,
         "current_code_hash": current_hash,
+        "whole_tree_changed": identity_payload.get("code_hash") != code_hash,
         "constants_changed": constants_drift(recorded_constants),
     }
     if drift["code_hash_changed"] and not allow_code_drift:

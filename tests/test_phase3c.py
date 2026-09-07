@@ -367,7 +367,7 @@ def test_reconstruction_refuses_a_source_tree_it_was_not_captured_under(tmp_path
     decision_id, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
     assert prospective.reconstruction(conn, decision_id)["ok"]
     capture._code_identity.cache_clear()
-    monkeypatch.setattr(capture, "_code_identity", lambda: ("different", "rev", False))
+    monkeypatch.setattr(capture, "_code_identity", lambda: ("different", "different", "rev", False))
     result = prospective.reconstruction(conn, decision_id)
     assert not result["ok"] and "fingerprint" in result["reason"]
 

@@ -212,12 +212,12 @@ can exclude zero on a step the procedure never reached.
 
 ### Phase 3C: Shadow-Live Validation
 
-**Protocol dated 2026-09-07 (UTC), signed off and then amended the same day before any
-capture; collection and review pending.** The project owner approved the window, the
-populations, the parity criteria and the floors before the first captured decision, for
-collection and description only. The amendment classifies a decision by the kickoff wave
-it beat rather than by the first declared event it precedes, because every week of the
-window has three kickoff waves and week 1 has four; it awaits a fresh sign-off. No calibrated
+**Closed 2026-09-07 (UTC) without collection.** The protocol was written, signed and
+amended, and then the window was not opened: no decision was ever captured under it and no
+floor was measured. The [outcome](PHASE3C_OUTCOME.md) records the decision, what it gives
+up — chiefly that the live/archive replay assumption stays unverified against a real
+capture until someone spends an afternoon on it — and the fingerprint narrowing that
+replaced the source freeze it required. The protocol below stands as written and unrun. No calibrated
 candidate qualified in 3B, so this window is identity only; starting baseline collection is
 not an exception to that promotion rule. The machine-readable protocol is
 [`experiments/phase3c-baseline.toml`](../experiments/phase3c-baseline.toml) and its

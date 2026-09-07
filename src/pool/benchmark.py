@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.metadata
 import json
@@ -70,9 +71,93 @@ def write_json(path, value):
     tmp.replace(path)
 
 
+# What a captured decision is a function of: the advice `capture.reconstruct` re-derives
+# from a stored surface, and the surface `prospective.parity` rebuilds from the archive.
+# Everything reachable from these by import is part of that function; nothing else is.
+DECISION_ROOTS = ("recommend", "projections", "snapshots")
+
+
+def _package_modules() -> dict[str, Path]:
+    """Every module of `pool`, keyed by its dotted name below the package root."""
+    base = ROOT / "src" / "pool"
+    out = {}
+    for path in sorted(base.rglob("*.py")):
+        parts = path.relative_to(base).with_suffix("").parts
+        name = ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+        out[name] = path
+    return out
+
+
+def _imported(path: Path, name: str, modules: dict[str, Path]) -> set[str]:
+    """Sibling modules this one imports, however it spells the import.
+
+    Read from the source rather than by importing it: resolving the closure must not
+    depend on which modules a process happens to have loaded, and a function-local
+    `from . import x` counts exactly as much as a top-level one.
+    """
+    package = name.rsplit(".", 1)[0] if "." in name else ""
+    parts = package.split(".") if package else []
+    found: set[str] = set()
+
+    def add(target: str, children):
+        if target in modules:
+            found.add(target)
+        for child in children:
+            candidate = f"{target}.{child}".strip(".")
+            if candidate in modules:
+                found.add(candidate)
+
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.ImportFrom):
+            if node.level:  # from . import x  /  from .x import y  /  from ..x import y
+                kept = parts[: len(parts) - (node.level - 1)]
+                base = ".".join([*kept, node.module] if node.module else kept)
+            elif node.module and node.module.split(".")[0] == "pool":
+                base = node.module.split(".", 1)[1] if "." in node.module else ""
+            else:
+                continue
+            add(base, [a.name for a in node.names])
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] == "pool":
+                    add(alias.name.split(".", 1)[1] if "." in alias.name else "", [])
+    return found
+
+
+def decision_modules() -> list[str]:
+    """Source paths of the decision path's import closure, relative to the repo root.
+
+    Computed rather than listed. A hand-maintained list that quietly loses a module is
+    worse than hashing the whole tree: the fingerprint would go on matching while the
+    function it certifies had moved underneath it. `tests/test_phase3a.py` pins the
+    result, so widening the closure is a review decision rather than a silent one.
+
+    The package root is always in it -- every import of a submodule runs `__init__` --
+    and `uv.lock` with it, because the arithmetic a decision performs belongs to the
+    resolved dependency versions as much as to this source.
+    """
+    modules = _package_modules()
+    seen: set[str] = set()
+    stack = ["", *DECISION_ROOTS]
+    while stack:
+        name = stack.pop()
+        if name in seen or name not in modules:
+            continue
+        seen.add(name)
+        stack += sorted(_imported(modules[name], name, modules) - seen)
+    paths = [str(modules[name].relative_to(ROOT)) for name in seen]
+    return sorted([*paths, "uv.lock"])
+
+
 def code_identity():
     paths = sorted((ROOT / "src").rglob("*.py")) + [ROOT / "pyproject.toml", ROOT / "uv.lock"]
     hashes = {str(p.relative_to(ROOT)): digest(p) for p in paths}
+    # Two fingerprints, because they answer different questions. `code_hash` records the
+    # whole tree, so any drift stays visible in a decision's provenance. `decision_hash`
+    # is the one the fidelity checks enforce: it covers only what a decision is actually
+    # a function of, so adding a leaderboard or an ingestion command cannot invalidate
+    # captures it could not possibly have changed.
+    decision = {p: hashes[p] for p in decision_modules() if p in hashes}
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     diff = subprocess.check_output(
         ["git", "diff", "HEAD", "--", "src", "pyproject.toml", "uv.lock"], cwd=ROOT
@@ -82,6 +167,8 @@ def code_identity():
         revision=revision,
         source_hashes=hashes,
         code_hash=hashlib.sha256(json_text(hashes).encode()).hexdigest(),
+        decision_sources=sorted(decision),
+        decision_hash=hashlib.sha256(json_text(decision).encode()).hexdigest(),
         dirty=bool(status.strip()),
         dirty_diff_hash=hashlib.sha256(diff).hexdigest(),
         working_tree_status=status,
