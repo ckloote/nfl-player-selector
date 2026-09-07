@@ -990,9 +990,10 @@ def render_calibration_report(data, spec, manifest, output, config_path=None):
         )
         + "\n\n## Decision Changes\n\n"
         "How often a candidate's replay chose a different player than identity's did. A shared "
-        "strictly increasing map preserves order within a slot; separate WR and TE maps need "
-        "not, because they compete in FLEX, and a nonlinear map can reorder cells at different "
-        "horizons once the discount is applied.\n\n"
+        "strictly increasing map preserves greedy's order within a slot; separate WR and TE maps "
+        "need not, because they compete in FLEX. The optimizer has no such guarantee even under a "
+        "shared map: it maximises an assignment sum, and a nonlinear map can reorder assignments "
+        "and reorder cells at different horizons once the discount is applied.\n\n"
         + markdown_table(
             data["decision_changes"]
             .groupby(["model", "strategy"], as_index=False)

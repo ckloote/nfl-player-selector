@@ -164,10 +164,12 @@ scored, not merely an early forecast timestamp, and the artifact records a diges
 *values* that entered the fit — keys, rates, positions and outcomes — so that "this artifact was
 fitted on these rows" is checkable afterwards rather than asserted; the keys alone would let one
 run's fold sit in another's directory unnoticed. The artifact also names the checkpoint digest of
-each training season it read. Eligible zero rates cannot enter a fit on `log(lambda)`: they are
-excluded and counted, in `training-accounting.csv`, as in the 3A export. A group below the
-declared row or cluster minimum, or whose fit is unsupported, takes the declared fallback and
-records which one it took.
+each training season it read, and a resumed fold is checked against both before it is accepted:
+a restored directory carries its own checkpoint, so verifying a checkpoint against the files
+beside it says nothing about which run produced them. Eligible zero rates cannot enter a fit on
+`log(lambda)`: they are excluded and counted, in `training-accounting.csv`, as in the 3A export.
+A group below the declared row or cluster minimum, or whose fit is unsupported, takes the
+declared fallback and records which one it took.
 
 An outcome is settled from the finalized scoring ledger at export time and travels on the
 surface, absence counting as zero only where the week is completely scored. Reading it instead

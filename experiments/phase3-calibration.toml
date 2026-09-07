@@ -78,8 +78,11 @@ uncertainty = "paired_season_t"
 multiplicity = "holm"
 # A policy difference that never varies between seasons is exactly determined and has no
 # sampling distribution. It reports an interval of width zero at that difference rather
-# than no interval at all: a shared increasing map reproduces identity's whole pick
-# history, so this is the expected case here and its treatment is frozen, not discovered.
+# than no interval at all. A shared increasing map preserves greedy's within-slot ranking,
+# so an unchanged policy is guaranteed there; the optimizer maximises an assignment sum,
+# which a nonlinear map can reorder even when every candidate shares it, so the same
+# outcome is expected of it but not guaranteed. Either way the treatment is frozen here
+# rather than chosen once the difference is on screen.
 zero_variance_policy = "degenerate_interval"
 advice_sensitivity = true
 
@@ -93,7 +96,12 @@ min_deviance_improvement = 0.005
 # Non-inferiority bound in touchdowns per season, against identity's replay of the same
 # strategy. Shipped greedy scores 53.73 per season in the saved study.
 max_policy_loss_td_per_season = 0.5
-# Phase 3A coverage is 1.000 at horizon 0 and about 0.989 at horizon 1.
+# Phase 3A coverage, under its own resolution of an outcome through the target week's
+# candidate pool, is 1.000 at horizon 0 and 0.9416 at horizon 1 over all fifteen seasons.
+# (0.989 is 2011 alone; an earlier revision of this file cited it as the all-season
+# figure.) This experiment settles an outcome from the finalized ledger instead -- absence
+# is zero wherever the target week is completely scored -- and these floors are declared
+# against that definition, which is the weaker of the two claims to have to meet.
 min_outcome_coverage_current = 0.98
 min_outcome_coverage_future = 0.95
 

@@ -586,31 +586,46 @@ def test_inverting_the_labels_cannot_move_a_pick(experiment):
     selection is a function of the rates and of who is already spent. So a season's labels
     cannot reach its own decisions, and the cheapest way to know that is to invert every
     one of them and walk the season again.
+
+    Every model and both strategies, because that is what the claim says. Greedy ranks
+    within a slot and the optimizer maximises an assignment sum; they consume the rates
+    differently, and only one of them was ever walked here.
     """
     run, spec = experiment
     season = APPLY[0]
-    picks = pd.read_csv(run / "apply" / str(season) / "picks.csv")
-    picks = picks[picks.model.eq(spec["baseline"]) & picks.strategy.eq("greedy")]
-    surface = pd.read_parquet(run / "apply" / str(season) / "surface-shipped--1.parquet")
-    # The saved surface carries rates and masks, not the labels a pick is reported with.
-    surface = surface.assign(player_name=surface.player_id, team=surface.player_id.str[:3])
-    frames = {
-        int(week): group.drop(columns=["decision_week"]).reset_index(drop=True)
-        for week, group in surface.groupby("decision_week")
-    }
-    actuals = {
-        (int(r.week), r.player_id): float(r.actual_tds)
-        for r in surface[surface.decision_week.eq(surface.week)].itertuples()
-    }
-    inverted = {k: (0.0 if v > 0 else 1.0) for k, v in actuals.items()}
-    chosen = [
-        {(p.week, p.slot): p.player_id for p in backtest.replay(frames, a, season, "greedy").picks}
-        for a in (actuals, inverted)
-    ]
-    assert chosen[0] == chosen[1]
-    # And the walk is the run's own, so a difference here would mean the surface does not
-    # describe the decisions that were made from it.
-    assert chosen[0] == {(r.week, r.slot): r.player_id for r in picks.itertuples()}
+    saved = pd.read_csv(run / "apply" / str(season) / "picks.csv")
+    walked = [spec["baseline"], *(name for _f, _g, name in cal.candidates(spec))]
+    assert len(walked) == 5 and spec["strategies"] == ["greedy", "optimizer"]
+    for model in walked:
+        surface = pd.read_parquet(run / "apply" / str(season) / f"surface-{model}--1.parquet")
+        # The saved surface carries rates and masks, not the labels a pick is reported with.
+        surface = surface.assign(player_name=surface.player_id, team=surface.player_id.str[:3])
+        frames = {
+            int(week): group.drop(columns=["decision_week"]).reset_index(drop=True)
+            for week, group in surface.groupby("decision_week")
+        }
+        actuals = {
+            (int(r.week), r.player_id): float(r.actual_tds)
+            for r in surface[surface.decision_week.eq(surface.week)].itertuples()
+        }
+        inverted = {k: (0.0 if v > 0 else 1.0) for k, v in actuals.items()}
+        assert any(v > 0 for v in actuals.values()), "labels that never differ prove nothing"
+        for strategy in spec["strategies"]:
+            chosen = [
+                {
+                    (p.week, p.slot): p.player_id
+                    for p in backtest.replay(frames, a, season, strategy).picks
+                }
+                for a in (actuals, inverted)
+            ]
+            assert chosen[0] == chosen[1], (model, strategy)
+            # And the walk is the run's own, so a difference here would mean the surface
+            # does not describe the decisions that were made from it.
+            picks = saved[saved.model.eq(model) & saved.strategy.eq(strategy)]
+            assert chosen[0] == {(r.week, r.slot): r.player_id for r in picks.itertuples()}, (
+                model,
+                strategy,
+            )
 
 
 @pytest.mark.parametrize("directory", ["experiment", "relabelled"])
@@ -838,6 +853,9 @@ def test_a_fold_fitted_on_other_values_is_refused_even_with_matching_keys(experi
     frame = pd.read_parquet(path)
     frame["actual_tds"] = np.where(frame.actual_tds > 0, 0.0, 1.0)
     frame.to_parquet(path, index=False)
+    # Re-sealed, so this is another run rather than one run with an edited artifact and a
+    # stale checkpoint. The latter the pairs stage already refuses on its own.
+    benchmark.write_checkpoint(tmp_path / "pairs" / str(SEASONS[0]))
     cal.fit_folds(tmp_path, spec, log=lambda *_: None)
 
     foreign = cal.load_artifact(tmp_path / "folds" / str(fold) / "cal-level-pooled.json")
@@ -849,6 +867,28 @@ def test_a_fold_fitted_on_other_values_is_refused_even_with_matching_keys(experi
     # Which is what lets the verifier's recomputation reject it: the digest it recomputes
     # from this run's own pairs is the genuine one.
     assert cal.training_pairs(run / "pairs", spec, fold)[1] == genuine["training_digest"]
+
+    # And the substitution itself, which is the thing that has to be refused. Restoring the
+    # whole directory brings its checkpoint with it, so `checkpoint_complete` verified the
+    # substitute against its own record and resume continued -- logging "verified fitted
+    # fold" and fitting the entire apply stage to coefficients from another run.
+    planted = tmp_path / "planted"
+    shutil.copytree(run / "pairs", planted / "pairs")
+    shutil.copytree(tmp_path / "folds", planted / "folds")
+    assert benchmark.checkpoint_complete(planted / "folds" / str(fold), fold), (
+        "the planted directory verifies against its own checkpoint; that is the problem"
+    )
+    with pytest.raises(ValueError, match="was not fitted by this run"):
+        cal.fit_folds(planted, spec, log=lambda *_: None)
+
+
+def test_a_fold_this_run_did_fit_still_resumes(experiment):
+    """The other half of the check above: refusing everything would pass it. A completed
+    run's own folds have to survive a resume without being fitted again."""
+    run, spec = experiment
+    lines = []
+    cal.fit_folds(run, spec, log=lines.append)
+    assert lines == [f"Resume: verified fitted fold {fold}" for fold in APPLY]
 
 
 def test_an_interrupted_write_does_not_leave_the_run_unresumable(tmp_path):
@@ -1030,20 +1070,31 @@ def test_a_step_the_procedure_never_reached_cannot_supply_a_decision_bound():
 
 
 def test_an_unchanged_policy_still_supplies_a_non_inferiority_bound():
-    """A shared increasing map reproduces identity's whole pick history, so a difference of
+    """A shared increasing map preserves greedy's within-slot ranking, so a difference of
     exactly zero in every season is the expected case here, not a corner one. Treating its
     zero standard error as missing inference erased the bound from precisely the candidates
-    the rule was least worried about."""
+    the rule was least worried about.
+
+    Exactly zero, though. A negative standard error is not a variance of zero but a number
+    that cannot be one, and the degenerate branch is the strongest statement this function
+    makes -- an interval of width zero, at the difference, reported as exact.
+    """
     frame = pd.DataFrame(
-        dict(model=["same", "thin"], mean=[0.0, 1.0], se=[0.0, np.nan], seasons=[10, 10])
+        dict(
+            model=["same", "thin", "invalid"],
+            mean=[0.0, 1.0, 1.0],
+            se=[0.0, np.nan, -1.0],
+            seasons=[10, 10, 10],
+        )
     )
     out = cal.paired_t(frame, "mean", "se").set_index("model")
     assert out.loc["same", "comparison"] == cal.COMPARISON_DEGENERATE
     assert (out.loc["same", "lo"], out.loc["same", "hi"]) == (0.0, 0.0)
     assert np.isnan(out.loc["same", "p_value"]), "an exact difference has no sampling test"
     # Genuinely missing inference stays missing, and is labelled as a different thing.
-    assert out.loc["thin", "comparison"] == cal.COMPARISON_UNAVAILABLE
-    assert np.isnan(out.loc["thin", "lo"]) and np.isnan(out.loc["thin", "hi"])
+    for model in ("thin", "invalid"):
+        assert out.loc[model, "comparison"] == cal.COMPARISON_UNAVAILABLE
+        assert np.isnan(out.loc[model, "lo"]) and np.isnan(out.loc[model, "hi"])
 
 
 def test_an_unusable_comparison_does_not_halt_the_family_behind_it():

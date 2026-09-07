@@ -232,9 +232,14 @@ else:
             pd.testing.assert_series_equal(saved.original_lam, base_surface.lam, check_names=False)
             expected_lam = cal.mapped_lam(base_surface, artifact)
             np.testing.assert_array_equal(saved.lam.to_numpy(), expected_lam)
-            # And the horizon-zero slice against the forecast rows the primary score reads,
-            # which are exported separately and could disagree with the surface.
+        # And every model's horizon-zero slice against the forecast rows the primary score
+        # reads, which are exported separately and could disagree with the surface.
+        # Identity included: the primary metric is a paired difference against it, so an
+        # exporter regression that wrote the same wrong baseline rates into both stages
+        # would move every comparison and pass the stage-to-stage checks above.
+        for name in [spec["baseline"], *names]:
             rows = current[current.model.eq(name)]
+            saved = saved_surface(out / "apply" / str(season), name)
             head = saved[saved.decision_week.eq(saved.week)]
             merged = rows.merge(
                 head[["season", "week", "slot", "player_id", "lam", "actual_tds"]],
@@ -243,7 +248,9 @@ else:
                 suffixes=("", "_surface"),
                 validate="one_to_one",
             )
-            assert len(merged) == len(rows), (season, name)
+            # Both directions: one-to-one says no row matched twice, and these say neither
+            # file holds a keyed row the other does not.
+            assert len(merged) == len(rows) == len(head), (season, name)
             np.testing.assert_array_equal(merged.lam.to_numpy(), merged.lam_surface.to_numpy())
             # The outcomes too, which the two files reach by different routes: the forecast
             # export resolves the decision week's own row, the surface settles every target
@@ -260,7 +267,7 @@ else:
         "identity reproduces the pairs stage exactly",
         "candidate surfaces are their own artifact applied to identity",
         "candidate surfaces keep identity's keys, scaffold and outcomes",
-        "scored forecast rows match the surface they were exported from",
+        "every model's scored forecast rows are exactly its own horizon-zero surface",
         "fold digests cover the values that determined the coefficients",
         "training rows are accounted for before they are filtered",
     ]

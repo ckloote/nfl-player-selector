@@ -83,8 +83,8 @@ PROMOTION = {
 }
 # A comparison whose season differences never vary has an exactly determined bound and no
 # sampling distribution. Declared here rather than discovered: a shared increasing map
-# reproduces identity's whole pick history, so it is the expected case for the policy
-# comparison and its treatment must be frozen with everything else.
+# preserves greedy's within-slot ranking, so an unchanged policy is the expected case for
+# the policy comparison and its treatment must be frozen with everything else.
 ZERO_VARIANCE_POLICY = "degenerate_interval"
 ALPHA = 0.05
 
@@ -274,6 +274,37 @@ def load_artifact(path: Path) -> dict:
     return artifact
 
 
+def fold_provenance(spec: dict, fold: int, family: str, grouping: str, upstream: dict) -> dict:
+    """Everything about a fold artifact that this run's own declaration determines.
+
+    Written by `build_artifact` and read back by `check_fold`, so the two cannot drift:
+    a field added here is a field a resumed fold is checked against, without anyone
+    having to remember to check it. `training_upstream` names the pairs-stage checkpoints
+    the fit was made from, which is what binds the artifact to this run rather than to
+    any run whose configuration happens to agree.
+    """
+    cal = spec["calibration_experiment"]
+    return dict(
+        fold=int(fold),
+        candidate=candidate_name(family, grouping),
+        family=family,
+        grouping=grouping,
+        map_target=cal["map_target"],
+        fit_horizons=cal["fit_horizons"],
+        row_weight=cal["row_weight"],
+        cluster=cal["cluster"],
+        zero_rate_policy=cal["zero_rate_policy"],
+        train_seasons=list(range(cal["train_start"], fold)),
+        cutoff_season=fold - 1,
+        training_upstream=dict(upstream),
+        base_model=spec["baseline"],
+        base_seed=-1,
+        min_rows=cal["min_rows"],
+        min_clusters=cal["min_clusters"],
+        fallback=list(cal["fallback"]),
+    )
+
+
 def build_artifact(
     *,
     fold: int,
@@ -283,8 +314,8 @@ def build_artifact(
     rows: pd.DataFrame,
     training_digest: str,
     pooled_fit: dict,
-    counts: dict | None = None,
-    upstream: dict | None = None,
+    counts: dict,
+    upstream: dict,
 ) -> dict:
     cal = spec["calibration_experiment"]
     min_rows, min_clusters = cal["min_rows"], cal["min_clusters"]
@@ -310,26 +341,10 @@ def build_artifact(
         default = inherited
     payload = dict(
         schema_version=SCHEMA_VERSION,
-        fold=int(fold),
-        candidate=candidate_name(family, grouping),
-        family=family,
-        grouping=grouping,
-        map_target=cal["map_target"],
-        fit_horizons=cal["fit_horizons"],
-        row_weight=cal["row_weight"],
-        cluster=cal["cluster"],
-        zero_rate_policy=cal["zero_rate_policy"],
-        train_seasons=list(range(cal["train_start"], fold)),
-        cutoff_season=fold - 1,
+        **fold_provenance(spec, fold, family, grouping, upstream),
         training_digest=training_digest,
-        training_counts=dict(counts or {}),
-        training_upstream=dict(upstream or {}),
+        training_counts=dict(counts),
         training_rows=int(len(rows)),
-        base_model=spec["baseline"],
-        base_seed=-1,
-        min_rows=min_rows,
-        min_clusters=min_clusters,
-        fallback=list(cal["fallback"]),
         default=default,
         groups=groups,
     )
@@ -439,6 +454,57 @@ def training_pairs(pairs: Path, spec: dict, fold: int) -> tuple[pd.DataFrame, st
     return rows, digest, counts
 
 
+def upstream_digests(output: Path, spec: dict, fold: int) -> dict:
+    """The pairs-stage checkpoints this fold's training seasons were sealed with.
+
+    A fold is bound to the run it was fitted inside, not only to the rows it saw. The
+    pairs stage re-verifies each of these checkpoints against its own directory on every
+    resume, so "the upstream digests match" and "the training rows still hash the same"
+    are two bindings and not one restated.
+    """
+    from . import benchmark
+
+    return {
+        str(season): benchmark.digest(Path(output) / "pairs" / str(season) / "checkpoint.json")
+        for season in range(spec["calibration_experiment"]["train_start"], fold)
+    }
+
+
+def check_fold(directory: Path, spec: dict, fold: int, digest: str, counts: dict, upstream: dict):
+    """Refuse a checkpointed fold that this run did not fit.
+
+    `checkpoint_complete` re-hashes the files a checkpoint names against the checkpoint
+    sitting beside them -- and a restored fold directory brings its own checkpoint, so it
+    verifies against itself. Nothing on the resume path read the training digest, the
+    upstream identities or even `artifact_hash`, so another run's complete fold directory
+    was accepted, logged as verified, and the whole apply stage fitted to its coefficients.
+    The standalone verifier caught it, but only after that stage had already run.
+
+    Checking here costs one `training_pairs` load per fold -- about a fifth of a second
+    per training season -- against an apply stage measured in hours.
+    """
+    expected = {name for _f, _g, name in candidates(spec)}
+    saved = set(json.loads((directory / "checkpoint.json").read_text())["files"])
+    if saved != {f"{name}.json" for name in expected}:
+        raise ValueError(f"Fold {fold} holds artifacts this run did not declare: {sorted(saved)}")
+    for family, grouping, name in candidates(spec):
+        # `load_artifact` refuses a payload that no longer hashes as recorded, which the
+        # resume path never asked before.
+        artifact = load_artifact(directory / f"{name}.json")
+        declared = dict(
+            fold_provenance(spec, fold, family, grouping, upstream),
+            training_digest=digest,
+            training_counts=dict(counts),
+            training_rows=int(counts["fitted_rows"]),
+        )
+        differs = sorted(k for k, v in declared.items() if artifact.get(k) != v)
+        if differs:
+            raise ValueError(
+                f"Fold {fold} artifact {name} was not fitted by this run; it disagrees "
+                f"about {differs}"
+            )
+
+
 def fit_folds(output: Path, spec: dict, log=print) -> Path:
     """Stage II: one fit per fold, from seasons that had finished before it."""
     from . import benchmark
@@ -448,19 +514,14 @@ def fit_folds(output: Path, spec: dict, log=print) -> Path:
     folds.mkdir(parents=True, exist_ok=True)
     for fold in spec["calibration_experiment"]["apply_seasons"]:
         directory = folds / str(fold)
+        rows, training_digest, counts = training_pairs(output / "pairs", spec, fold)
+        upstream = upstream_digests(output, spec, fold)
         if benchmark.checkpoint_complete(directory, f"fold {fold}"):
+            check_fold(directory, spec, fold, training_digest, counts, upstream)
             log(f"Resume: verified fitted fold {fold}")
             continue
         directory.mkdir(parents=True, exist_ok=True)
-        rows, training_digest, counts = training_pairs(output / "pairs", spec, fold)
         log(f"Fitting fold {fold} on {len(rows)} pairs from {min(rows.season)}-{max(rows.season)}")
-        # The stages that produced those pairs, named by the digest their checkpoints
-        # recorded: a fold is then bound to the run it was fitted inside, not only to the
-        # rows it saw.
-        upstream = {
-            str(season): benchmark.digest(output / "pairs" / str(season) / "checkpoint.json")
-            for season in range(spec["calibration_experiment"]["train_start"], fold)
-        }
         for family in spec["calibration_experiment"]["families"]:
             pooled_fit = fit_family(family, rows, spec["calibration_experiment"]["min_clusters"])
             for grouping in spec["calibration_experiment"]["groupings"]:
@@ -796,8 +857,8 @@ def advice_changes(advice: pd.DataFrame, baseline: str = IDENTITY) -> pd.DataFra
 # season differences are all identical has no sampling variation to describe: the bound is
 # the difference itself, exactly, and that is a different statement from having no bound at
 # all. Erasing it removed the non-inferiority bound from precisely the candidates that
-# changed no decision -- a shared increasing map reproduces identity's whole pick history,
-# so this is the expected case here, not a corner one.
+# changed no decision -- a shared increasing map preserves greedy's within-slot ranking, so
+# this is the expected case here, not a corner one.
 COMPARISON_T = "t"
 COMPARISON_DEGENERATE = "degenerate_zero_variance"
 COMPARISON_UNAVAILABLE = "unavailable"
@@ -838,6 +899,11 @@ def paired_t(
     the t undefined, which is `degenerate_zero_variance`: no p-value, and an interval of
     width zero at the difference itself. `unavailable` is the genuinely uninformative
     case, a season too few or a difference that is not a number.
+
+    Exactly zero, though, and not merely non-positive. A negative standard error is not a
+    variance of zero, it is a number that cannot be one, and sending it down the degenerate
+    branch turned an invalid input into the strongest statement this function can make: an
+    interval of width zero, at the difference, reported as exact. It is `unavailable`.
     """
     out = frame.copy()
     df = out.seasons.to_numpy(dtype=float) - 1.0
@@ -846,7 +912,7 @@ def paired_t(
     with np.errstate(invalid="ignore", divide="ignore"):
         out["t"] = np.where(error > 0, delta / error, np.nan)
     out["df"] = df
-    known = np.isfinite(delta) & np.isfinite(error) & (df > 0)
+    known = np.isfinite(delta) & np.isfinite(error) & (error >= 0) & (df > 0)
     out["comparison"] = np.where(
         known & (error > 0),
         COMPARISON_T,
