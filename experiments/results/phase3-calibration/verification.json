@@ -1,0 +1,237 @@
+{
+  "checks": [
+    "all configured models and seeds",
+    "candidate/eligibility/depletion masks",
+    "hard exclusions unranked",
+    "explicit decision timestamps",
+    "consistent finalized actuals",
+    "no player reuse",
+    "pick sums equal season scores",
+    "unique-player counts",
+    "forecast pick indicators match replays",
+    "game coverage",
+    "both teams player-stat coverage",
+    "fitted artifacts hash as recorded",
+    "every candidate's artifact carries its own declared fit",
+    "no training key reaches its own apply season",
+    "identity reproduces the pairs stage exactly",
+    "candidate surfaces are their own artifact applied to identity",
+    "candidate surfaces keep identity's keys, scaffold and outcomes",
+    "every model's scored forecast rows are exactly its own horizon-zero surface",
+    "fold digests cover the values that determined the coefficients",
+    "training rows are accounted for before they are filtered"
+  ],
+  "complete_games": 4175,
+  "config_hash": "0f079f9c5a12aea4437ec1c7346f371d92a117eca59cd17a5dccbc7082358b3f",
+  "dataset_hash": "c0f564496c8011e9c1ad10144b9370eca3a399e722fff9f2ace10e9a260e2151",
+  "format": "Ruff format --check passed",
+  "implementation_commit": "bce82abeea3dfb43b8c3319a8a742d07939bcbff",
+  "lint": "Ruff check passed",
+  "player_stat_game_gaps": 0,
+  "pytest_passed": 392,
+  "scheduled_games": 4175,
+  "schema_version": 1,
+  "seasons": [
+    {
+      "empty_slots": 0,
+      "forecast_rows": 5684,
+      "model_seed_runs": 1,
+      "picks": 102,
+      "season": 2011,
+      "season_scores": 2
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 5652,
+      "model_seed_runs": 1,
+      "picks": 102,
+      "season": 2012,
+      "season_scores": 2
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 5760,
+      "model_seed_runs": 1,
+      "picks": 102,
+      "season": 2013,
+      "season_scores": 2
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 5702,
+      "model_seed_runs": 1,
+      "picks": 102,
+      "season": 2014,
+      "season_scores": 2
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 5444,
+      "model_seed_runs": 1,
+      "picks": 102,
+      "season": 2015,
+      "season_scores": 2
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 8537,
+      "model_seed_runs": 1,
+      "picks": 102,
+      "season": 2016,
+      "season_scores": 2
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 8210,
+      "model_seed_runs": 1,
+      "picks": 102,
+      "season": 2017,
+      "season_scores": 2
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 8026,
+      "model_seed_runs": 1,
+      "picks": 102,
+      "season": 2018,
+      "season_scores": 2
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 7201,
+      "model_seed_runs": 1,
+      "picks": 102,
+      "season": 2019,
+      "season_scores": 2
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 7233,
+      "model_seed_runs": 1,
+      "picks": 102,
+      "season": 2020,
+      "season_scores": 2
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 7613,
+      "model_seed_runs": 1,
+      "picks": 108,
+      "season": 2021,
+      "season_scores": 2
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 7532,
+      "model_seed_runs": 1,
+      "picks": 108,
+      "season": 2022,
+      "season_scores": 2
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 7508,
+      "model_seed_runs": 1,
+      "picks": 108,
+      "season": 2023,
+      "season_scores": 2
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 7508,
+      "model_seed_runs": 1,
+      "picks": 108,
+      "season": 2024,
+      "season_scores": 2
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 7514,
+      "model_seed_runs": 1,
+      "picks": 108,
+      "season": 2025,
+      "season_scores": 2
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 42685,
+      "model_seed_runs": 5,
+      "picks": 510,
+      "season": 2016,
+      "season_scores": 10
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 41050,
+      "model_seed_runs": 5,
+      "picks": 510,
+      "season": 2017,
+      "season_scores": 10
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 40130,
+      "model_seed_runs": 5,
+      "picks": 510,
+      "season": 2018,
+      "season_scores": 10
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 36005,
+      "model_seed_runs": 5,
+      "picks": 510,
+      "season": 2019,
+      "season_scores": 10
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 36165,
+      "model_seed_runs": 5,
+      "picks": 510,
+      "season": 2020,
+      "season_scores": 10
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 38065,
+      "model_seed_runs": 5,
+      "picks": 540,
+      "season": 2021,
+      "season_scores": 10
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 37660,
+      "model_seed_runs": 5,
+      "picks": 540,
+      "season": 2022,
+      "season_scores": 10
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 37540,
+      "model_seed_runs": 5,
+      "picks": 540,
+      "season": 2023,
+      "season_scores": 10
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 37540,
+      "model_seed_runs": 5,
+      "picks": 540,
+      "season": 2024,
+      "season_scores": 10
+    },
+    {
+      "empty_slots": 0,
+      "forecast_rows": 37570,
+      "model_seed_runs": 5,
+      "picks": 540,
+      "season": 2025,
+      "season_scores": 10
+    }
+  ],
+  "source_hash": "6934e773fbcc13699c9670b20d849ea561ac8925be2b1fccae435a8cbf9e84ea"
+}

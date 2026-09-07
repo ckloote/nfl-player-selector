@@ -887,6 +887,21 @@ def test_the_appendix_does_not_claim_coverage_it_lacks():
     assert "543 of 544 required games" in text and "All 544" not in text
 
 
+def test_the_appendix_distinguishes_stage_records_from_unique_seasons():
+    """Pairs and apply replay some of the same years, not independent extra seasons."""
+    record = _record([*range(2011, 2026), *range(2016, 2026)], 4175, 4175)
+    text = appendix.run_verification(record)
+    assert "25 stage-season records completed, covering 15 unique seasons" in text
+    assert "All 25 seasons completed" not in text
+    # Work totals include both stages even though the season count is deduplicated.
+    assert "1,200 model/seed/season runs" in text
+    assert "25,000 forecast rows" in text
+    assert "2,925 achieved season scores" in text
+    assert "149,175 individual replay picks" in text
+    assert "All 4,175 required games" in text
+    assert text.count("Bills") == 1
+
+
 def test_figures_do_not_classify_significance_or_state_conclusions():
     scores = {}
     for i, season in enumerate((2011, 2012, 2013)):

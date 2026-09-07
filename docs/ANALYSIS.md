@@ -7,6 +7,12 @@ publication. Later human/AI interpretation must be explicitly reviewed and dated
 [evaluation report](EVALUATION.md) contains season scores, forecast diagnostics,
 methods and provenance, not automated recommendations about research or production.
 
+**Follow-up, 2026-09-07 (UTC):** the completed chronological calibration experiment and
+its no-promotion disposition are recorded separately in [PHASE3B_OUTCOME.md](PHASE3B_OUTCOME.md).
+Position-specific log-affine maps improve forecasts but do not establish the required policy
+non-inferiority. Production remains unchanged. The September 5 study analysis below retains
+its original scope, provenance and conclusions; it is not the new experiment's outcome note.
+
 ## Provenance
 
 The exact study is [experiments/results/roster-snapshot-repair](../experiments/results/roster-snapshot-repair),

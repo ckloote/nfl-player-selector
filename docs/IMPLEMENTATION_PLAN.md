@@ -2,7 +2,7 @@
 
 The September 4 review's repair sequence takes precedence over the original feature phases.
 The original benchmark and backtest reports are preserved in [archive](archive) with their old
-scoring, temporal and evaluation definitions. Current results use the saved
+scoring, temporal and evaluation definitions. The Phase 2 results use the saved
 [candidate-pool repair specification](../experiments/roster-snapshot-repair.toml), which reruns
 the [Phase 2 specification](../experiments/phase2-validation.toml) on the identical frozen dataset
 after F11. The superseded Phase 2 results remain published for comparison.
@@ -13,7 +13,7 @@ after F11. The superseded Phase 2 results remain published for comparison.
 | Weekly reliability (review step 1) | Implemented: F01, F05, F09 |
 | Validation repairs (review step 2) | Implemented: F02–F04, F06, F08, F10; F07 documentation corrected |
 | Candidate-pool repair (review step 2) | Implemented: F11; benchmark rerun on the same frozen dataset |
-| Phase 3: readiness, calibration and shadow validation (review step 3) | 3A and 3B implemented: repairs, capture, the readiness note, and the frozen walk-forward calibration experiment. 3C planned below; no production calibration or tuning changes |
+| Phase 3: readiness, calibration and shadow validation (review step 3) | 3A complete; 3B completed 2026-09-07 with no candidate promoted. Next: identity-only prospective baseline protocol/capture for 3C; production unchanged |
 | Leaderboard strategy (review step 4) | Pending |
 
 ## Weekly reliability
@@ -53,8 +53,8 @@ migrations preserve picks and imported history.
   upstream duplicate-TD correction has strict preconditions and preserves original observations.
 - Checkpoints, resolved configuration, source/dataset/dependency fingerprints, feed provenance,
   coverage, forecasts, future surfaces, picks and seed/season metrics make results reviewable.
-  Resume checks recorded identities; hashing the actual decision-times CSV contents remains
-  an open Phase 3A gap. Reports are generated from saved metrics and contain facts, methods
+  Resume checks recorded identities, including the actual decision-times CSV contents as
+  repaired in Phase 3A. Reports are generated from saved metrics and contain facts, methods
   and provenance; dated human/AI interpretation is separate in [ANALYSIS.md](ANALYSIS.md).
 
 Acceptance requires full coverage and all configured seasons, models and seeds. A favorable
@@ -64,29 +64,24 @@ historical replay. Both 2011–2018 and 2019–2025 summaries are retrospective.
 
 ## Phase 3 — calibration validation
 
-**Status as of 2026-09-06:** 3A and 3B are implemented; 3C is planned, not implemented.
-The five readiness repairs, the prospective capture and the descriptive diagnostic export
-are in place, with fixtures in `tests/test_phase3a.py` and a dated readiness note. The
-chronological experiment is specified in
-[phase3-calibration.toml](../experiments/phase3-calibration.toml) and runnable through
-`pool benchmark`, with fixtures in `tests/test_phase3b.py`. No production constant changed
-and no calibrated model is deployed: running the experiment produces evidence, and applying
-its declared promotion rule is a separate, dated authoring step. The saved study remains
-ready for diagnosis, not calibrated production. Its persistent pooled miscalibration does not
-identify a universal correction; see [ANALYSIS.md](ANALYSIS.md) for evidence and limits, which
-the 3A export describes by population without resolving.
+**Status as of 2026-09-07 (UTC):** 3A and the full 3B experiment are complete; 3C validation
+remains planned. The [published calibration report](../experiments/results/phase3-calibration/CALIBRATION.md)
+and [authored outcome](PHASE3B_OUTCOME.md) apply the unchanged signed margins: no candidate
+passes every gate. Position-specific log-affine calibration passes the forecast gate but
+does not establish either policy's required non-inferiority. Production stays unchanged;
+no calibrated candidate advances into 3C. The next step is an identity-baseline prospective
+protocol and capture, not further tuning on these inspected results.
 
-Scope is to diagnose rate errors, test past-only mappings and validate their decision effects
-without changing the underlying model. Begin prospective input capture now alongside
-retrospective work using existing refresh archives; full projection/action logging is the first
-new implementation deliverable. Initial 2026 snapshots are not completed live validation, but
-there is no requirement to wait a whole prospective season before descriptive research.
+Scope remains to diagnose rate errors, test past-only mappings and validate their decision
+effects without changing the underlying model. Full projection/action logging is implemented
+in 3A; continue prospective capture using it. Initial 2026 snapshots are not completed live
+validation, and descriptive research does not require waiting for an entire prospective season.
 
 | Stage | Dependency | Exit Deliverable |
 |---|---|---|
 | 3A: Evidence, capture and readiness | Implemented 2026-09-06 | Guarded diagnostics, reproducible capture, regression tests and a dated [readiness note](../experiments/results/phase3a-readiness/READINESS.md) |
-| 3B: Chronological train/apply experiment | Implemented 2026-09-06 | Frozen [specification](../experiments/phase3-calibration.toml), fitted fold artifacts, out-of-fold surfaces, proper metrics and separate policy replays |
-| 3C: Shadow-live transfer and policy validation | 3A capture/parity; a frozen 3B candidate or identity baseline | Matched live/snapshot shadow evidence and a reviewed ship/defer/no-change decision |
+| 3B: Chronological train/apply experiment | Completed 2026-09-07; no promotion | Frozen [specification](../experiments/phase3-calibration.toml), [published metrics](../experiments/results/phase3-calibration), fitted artifacts/surfaces and [outcome note](PHASE3B_OUTCOME.md) |
+| 3C: Shadow-live transfer and policy validation | Next: identity baseline only; no 3B candidate qualified | Reviewed prospective baseline protocol, matched live/snapshot evidence, then a dated validation assessment; candidate promotion requires separate qualifying evidence |
 
 ### Phase 3A: Evidence And Readiness
 
@@ -130,7 +125,10 @@ are unchanged. Interpreting it remains a separate, dated authoring step.
 
 ### Phase 3B: Chronological Experiment
 
-**Implemented.** The runner is `pool benchmark --config experiments/phase3-calibration.toml`,
+**Completed with no promotion, 2026-09-07 (UTC).** See the
+[report](../experiments/results/phase3-calibration/CALIBRATION.md) and
+[outcome note](PHASE3B_OUTCOME.md). The runner is
+`pool benchmark --config experiments/phase3-calibration.toml`,
 which executes three stages with a barrier between each: identity forecast/outcome pairs for
 every season, then one fit per fold, then the candidates applied and replayed. Fitting lives
 in [`calibration.py`](../src/pool/calibration.py); fixtures are in `tests/test_phase3b.py`.
@@ -186,7 +184,8 @@ paired season metrics. Deliver the frozen config, fold artifacts, out-of-fold su
 metric tables and a separately authored decision note, including negative/inconclusive results.
 A favorable result is not required to complete 3B; production remains unchanged pending 3C.
 
-*Met 2026-09-06.* The map is `exp(a) * lam ** b`: `level` fixes the exponent at one,
+*Implementation completed 2026-09-06; full-run outcome recorded 2026-09-07.*
+The map is `exp(a) * lam ** b`: `level` fixes the exponent at one,
 `log_affine` estimates both, and identity is mandatory. Each is fitted pooled and by position
 with WR and TE separate, on the availability-adjusted rate the optimizer consumes, clustered on
 the shared target player-week. Candidates are registered as builders, so they share the shipped
@@ -206,13 +205,32 @@ the zero he recorded instead of an unavailable outcome; membership travels separ
 retention. The run measures the outcome coverage its floors are stated over, counts every
 training row it discards, and reports the proper score by horizon and availability. The primary
 comparison is a paired season t with a Holm step-down, and the step-down's own decision is what
-the promotion rule reads -- a per-step interval widens with its level and can exclude zero on a
-step the procedure never reached.
+the promotion rule reads -- per-step levels widen down the ranking, so a later local interval
+can exclude zero on a step the procedure never reached.
 
 ### Phase 3C: Shadow-Live Validation
 
+**Recommended next deliverable:** a dated identity-baseline prospective protocol, reviewed
+before evaluating subsequent outcomes. No calibrated candidate qualified in 3B; starting
+baseline collection is not an exception to that promotion rule.
+
+1. Fix the collection/review window, decision-event schedule, live role/input policy,
+   diagnostic populations, coverage requirements and live/snapshot parity criteria.
+2. Use the existing capture infrastructure to retain identity's full surfaces, advice,
+   input identities and submitted actions at real events. Reconstruct with the same
+   timestamp, roles and used/locked state; keep submitted picks and production settings unchanged.
+3. Review matched coverage and horizon/availability diagnostics at the declared review point.
+   Report baseline readiness separately from any claim of improved policy or waiting value.
+
+Do not immediately rerun a calibration sweep. The opposing current/future results for
+level maps motivate a bounded, separately specified horizon-weighting experiment if that
+research is pursued, not replacement of 3B's primary metric. Any such experiment needs
+fresh design review and confirmation requirements before execution; the already inspected
+seasons cannot be relabeled as an untouched holdout, and the existing margins stay fixed.
+
 Continue timestamped capture at real decision events while running identity and any frozen
-candidate in shadow, without changing submitted picks. Fix the candidate, live role policy,
+candidate that later earns separate approval in shadow, without changing submitted picks.
+Fix the candidate, live role policy,
 training cutoff and review schedule before observing shadow outcomes; amendments start a new
 evaluation window. Compare historical usage-role findings with the actual depth-role/current-line
 surface by position, availability, selection and horizon. Record forecast/proper-score changes,

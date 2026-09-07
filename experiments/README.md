@@ -138,6 +138,13 @@ benchmark. The [sign-off and rationale](../docs/PHASE3B_MARGIN_SIGNOFF.md) recor
 accepted policy downside, the limits of the inference, and the distinction between
 Phase 3C advancement and production deployment.
 
+**Full-run outcome, 2026-09-07 (UTC): no promotion.** The
+[published report](results/phase3-calibration/CALIBRATION.md) and
+[authored outcome note](../docs/PHASE3B_OUTCOME.md) record ten paired evaluation seasons.
+No candidate clears every forecast and policy gate; both coverage gates pass. Production
+remains unchanged. The next recommended work is identity-only prospective baseline
+capture/validation, not a threshold amendment or an automatically promoted candidate.
+
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 uv run pool benchmark \
   --config experiments/phase3-calibration.toml \
