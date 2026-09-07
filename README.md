@@ -212,9 +212,12 @@ fold on the seasons that had already finished, then each candidate applied to th
 before pruning and discount and replayed with its own no-reuse history. The map is
 `exp(a) * lam ** b`, fitted pooled and by position with WR and TE separate; zero rates map to
 zero and hard exclusions stay masks, so every candidate is scored on the same rows. Fold
-schedule, families, population, weighting, fallback, primary estimand and the decision margins
-are all declared in the dated configuration, and a missing margin blocks the run. See
-[experiments/README.md](experiments/README.md) for the stages and artifacts.
+schedule, families, population, weighting, fallback, primary estimand, the promotion conditions
+and the decision margins are all declared in the dated configuration, whose text is hashed into
+the run identity, and a missing margin blocks the run. The run measures the outcome coverage its
+floors are stated over and scores each candidate by forecast horizon and availability as well as
+in the pooled primary estimand. See [experiments/README.md](experiments/README.md) for the
+stages and artifacts.
 
 Decision CSVs require `season,week,decision_at`, with one timezone-aware timestamp for every
 requested week, such as `2026,1,2026-09-10T18:00:00-04:00`. Observations become available when

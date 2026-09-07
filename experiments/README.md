@@ -170,20 +170,31 @@ which one it took.
 | Artifact | Row definition |
 |---|---|
 | `folds.csv` | Every fitted group in every fold: coefficients, source, fit status and reason, training rows, digest and artifact hash |
-| `paired-deviance.csv` | The primary estimand — paired change in season-mean Poisson deviance on the fixed all-eligible current-week population — with the Holm rank and level for the pre-registered comparisons |
-| `policy.csv` | Achieved TDs per season and each candidate against identity's replay of the *same* strategy, never against identity greedy |
+| `paired-deviance.csv` | The primary estimand — paired change in season-mean Poisson deviance on the fixed all-eligible current-week population — as a paired season t with its Holm step-down adjustment and both intervals |
+| `policy.csv` | Achieved TDs per season and each candidate against identity's replay of the *same* strategy, never against identity greedy, with the paired interval the non-inferiority bound is compared against |
 | `decision-changes.csv` | How often a candidate's replay chose a different player than identity's did |
 | `advice.csv`, `advice-changes.csv` | Static `advise_slot` sensitivity: replay makes one decision per week through `plan_slot`, so a flipped hold is a mechanism, not a touchdown gained by waiting |
-| `surface-<candidate>-<seed>.parquet` | The out-of-fold surface, carrying the mapped rate as `lam` and the rate it was mapped from as `original_lam` |
+| `coverage-out-of-fold.csv`, `coverage-margins.csv` | Whether the applied surface has an outcome to score against, by season and horizon and then collapsed to the two populations the declared floors are stated over. Different from the schedule audit in `coverage.csv`: every game can be complete while a forecast for a later week has no target row |
+| `zero-accounting.csv` | Eligible zero rates and the two kinds of exclusion, in the classes that mean different things |
+| `strata-out-of-fold.csv` | The proper score by forecast horizon and availability, per candidate — the diagnostics the pooled fit declares consequences for and cannot itself show |
+| `surface-<candidate>-<seed>.parquet` | The out-of-fold surface, carrying the mapped rate as `lam`, the rate it was mapped from as `original_lam`, and the decision-time `position` the map was selected by |
 
 `experiments/phase3-calibration-smoke.toml` is a two-season mechanics check, not evidence. It
 exists so the stages, the barrier, the artifact hashes and resume can be exercised end to end.
 Point a fresh output directory at a copy of an existing `dataset.sqlite` to skip re-ingestion.
 
 The generated `CALIBRATION.md` states facts, methods and provenance. It selects no candidate:
-the promotion rule is in the frozen configuration, and applying it is a separate, dated
-authoring step, exactly as the bake-off keeps its report separate from
-[docs/ANALYSIS.md](../docs/ANALYSIS.md). Keeping the model unchanged is a valid outcome.
+the promotion rule is in the frozen configuration as `[calibration_experiment.promotion]`, and
+applying it is a separate, dated authoring step, exactly as the bake-off keeps its report
+separate from [docs/ANALYSIS.md](../docs/ANALYSIS.md). Keeping the model unchanged is a valid
+outcome.
+
+The rule is data rather than prose so that it cannot be relaxed once the estimates exist, and
+`resolve` additionally hashes the specification *text* into the resolved configuration, so an
+edit to the reasoning beside those keys starts a new experiment too. `verify.py` reads the
+saved resolved configuration rather than the current TOML, checks it against the identity the
+run recorded, and records that hash in `verification.json`; publication refuses a calibration
+record that does not carry it.
 
 ## Measurements And Interpretation
 

@@ -188,8 +188,15 @@ the shared target player-week. Candidates are registered as builders, so they sh
 scaffold and `evaluate.assert_comparable` checks the keys and masks; each replays its own
 no-reuse history through `backtest.replay`. The apply stage rebuilds identity rather than
 reusing the pairs stage, so "identity reproduces unchanged rates, picks and scores" is checked
-by comparing the two. `experiments/verify.py` additionally reconciles that every fitted
-artifact still hashes as recorded and that no training key reaches its own apply season.
+by comparing the two, over whole forecast rows, future surfaces and pick histories rather than
+season totals. The surface carries the decision-time position it was built with, so a bye-week
+forecast trains in the group it is applied by. `experiments/verify.py` works from the saved
+resolved configuration, checked against the identity the run recorded; it reconciles that every
+fitted artifact still hashes as recorded and carries its own declared fit, that no training key
+reaches its own apply season, and that each candidate surface is exactly that artifact applied
+to identity's rates. The run measures the outcome coverage its floors are stated over and the
+proper score by horizon and availability, and reports the primary comparison as a paired season
+t with a Holm step-down adjustment.
 
 ### Phase 3C: Shadow-Live Validation
 

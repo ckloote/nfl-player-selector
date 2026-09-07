@@ -582,14 +582,19 @@ def calibration(
     return {**out, **zero_counts}
 
 
-def poisson_deviance(actual: np.ndarray, lam: np.ndarray) -> float:
-    """Mean Poisson deviance. A proper scoring rule, so it cannot be improved by
-    flattening the ranking — which a naive calibration fix would happily do."""
+def poisson_deviance_terms(actual: np.ndarray, lam: np.ndarray) -> np.ndarray:
+    """Each row's contribution to the deviance, so a stratum mean is a group mean."""
     actual = np.asarray(actual, dtype=float)
     lam = np.clip(np.asarray(lam, dtype=float), 1e-9, None)
     with np.errstate(divide="ignore", invalid="ignore"):
         term = np.where(actual > 0, actual * np.log(actual / lam), 0.0)
-    return float(2.0 * np.mean(term - (actual - lam)))
+    return 2.0 * (term - (actual - lam))
+
+
+def poisson_deviance(actual: np.ndarray, lam: np.ndarray) -> float:
+    """Mean Poisson deviance. A proper scoring rule, so it cannot be improved by
+    flattening the ranking — which a naive calibration fix would happily do."""
+    return float(np.mean(poisson_deviance_terms(actual, lam)))
 
 
 # --- season and seed aggregation -------------------------------------------

@@ -54,6 +54,15 @@ if (
     != manifest["identity"]["config_hash"]
 ):
     raise SystemExit("Compact configuration differs from the benchmark identity.")
+# Verification records which configuration it checked, so publication can insist it was
+# this one: without it a record could attest to a narrower run than the one published.
+# Bake-off records saved before the field existed carry no claim to contradict, and their
+# runs cannot be re-verified under this source anyway; a calibration run must carry it.
+if "config_hash" in verification:
+    if verification["config_hash"] != manifest["identity"]["config_hash"]:
+        raise SystemExit("Verified configuration differs from the published one.")
+elif spec.get("calibration_experiment"):
+    raise SystemExit("Calibration verification must record the configuration it checked.")
 
 published = Path("experiments/results") / experiment
 published.mkdir(parents=True, exist_ok=True)

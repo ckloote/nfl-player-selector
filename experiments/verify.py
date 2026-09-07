@@ -6,11 +6,13 @@ recovered later -- that an artifact still hashes as recorded, and that the keys 
 fitted on stop before the season it was applied to.
 """
 
+import hashlib
 import json
 import sqlite3
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from pool import benchmark, models
@@ -19,10 +21,24 @@ from pool import evaluate as ev
 experiment = sys.argv[1] if len(sys.argv) > 1 else "phase2-validation"
 tests_passed = int(sys.argv[2]) if len(sys.argv) > 2 else 0
 out = Path("data/experiments") / experiment
-spec = benchmark.resolve(f"experiments/{experiment}.toml")
 manifest = json.loads((out / "manifest.json").read_text())
 assert manifest["code"]["code_hash"] == benchmark.code_identity()["code_hash"]
+# The configuration the run actually executed, authenticated against the identity it
+# recorded -- not whatever the TOML says now. Re-resolving the file let an edit made
+# after execution decide what got verified: dropping the last apply season from it
+# skipped that season's artifacts and still produced a clean verification record, while
+# publication went on to publish the whole experiment from the saved compact config.
+spec = json.loads((out / "resolved-config.json").read_text())
+config_hash = hashlib.sha256(benchmark.json_text(spec).encode()).hexdigest()
+assert config_hash == manifest["identity"]["config_hash"], "Saved configuration is not the run's"
 calibrated = spec.get("calibration_experiment")
+
+
+def saved_surface(directory, model):
+    """One saved surface, ordered so two of them can be compared row for row."""
+    keys = ["season", "decision_week", "week", "slot", "player_id"]
+    frame = pd.read_parquet(directory / f"surface-{model}--1.parquet")
+    return frame.sort_values(keys).reset_index(drop=True)
 
 
 def model_seeds(names):
@@ -33,7 +49,9 @@ def model_seeds(names):
 
 def verify_season(directory, expected, replay_rows, season):
     """Every reconciliation the bake-off makes, against one season directory."""
-    assert (directory / "checkpoint.json").exists(), season
+    # Not merely that a checkpoint exists: that every artifact it sealed still hashes as
+    # recorded. An existence check passes over a season whose forecasts were replaced.
+    assert benchmark.checkpoint_complete(directory, season), season
     df = pd.read_parquet(directory / "forecasts.parquet")
     assert set(df[["model", "seed"]].itertuples(index=False, name=None)) == expected
     assert df.schema_version.eq(1).all()
@@ -130,20 +148,31 @@ else:
         )
         print(season, "pairs verified", flush=True)
     for fold in calibrated["apply_seasons"]:
-        for name in names:
-            # `load_artifact` refuses an artifact that no longer hashes as recorded.
-            artifact = cal.load_artifact(out / "folds" / str(fold) / f"{name}.json")
-            assert artifact["fold"] == fold
-            assert artifact["train_seasons"] == list(range(calibrated["train_start"], fold))
-            assert artifact["cutoff_season"] == fold - 1
+        directory = out / "folds" / str(fold)
+        assert benchmark.checkpoint_complete(directory, f"fold {fold}"), fold
         # Recomputed from the saved pairs: the digest names the exact keys that entered
         # the fit, and none of them may be at or after the season it is applied to.
         rows, digest = cal.training_pairs(out / "pairs", spec, fold)
         assert int(rows.season.max()) < fold
-        assert (
-            digest
-            == cal.load_artifact(out / "folds" / str(fold) / f"{names[0]}.json")["training_digest"]
-        )
+        for family, grouping, name in cal.candidates(spec):
+            # `load_artifact` refuses an artifact that no longer hashes as recorded. Every
+            # field below is checked for every candidate, because checking one candidate's
+            # digest leaves a valid same-fold artifact free to sit under another
+            # candidate's filename and answer for a map it did not fit.
+            artifact = cal.load_artifact(directory / f"{name}.json")
+            assert artifact["candidate"] == name
+            assert (artifact["family"], artifact["grouping"]) == (family, grouping)
+            assert artifact["fold"] == fold
+            assert artifact["train_seasons"] == list(range(calibrated["train_start"], fold))
+            assert artifact["cutoff_season"] == fold - 1
+            assert artifact["training_digest"] == digest
+            assert artifact["base_model"] == spec["baseline"] and artifact["base_seed"] == -1
+            assert artifact["map_target"] == calibrated["map_target"]
+            assert artifact["fallback"] == list(calibrated["fallback"])
+            assert (artifact["min_rows"], artifact["min_clusters"]) == (
+                calibrated["min_rows"],
+                calibrated["min_clusters"],
+            )
         print(fold, "fold verified", flush=True)
     for season in calibrated["apply_seasons"]:
         counts.append(
@@ -155,25 +184,44 @@ else:
             )
         )
         # Identity is rebuilt in the apply stage rather than reused, so the two stages
-        # must agree exactly. A candidate's difference means nothing otherwise.
+        # must agree exactly. A candidate's difference means nothing otherwise, and equal
+        # season totals are not equal decisions: two different pick histories can score
+        # the same. Compare the whole forecast row set, the whole future surface, and the
+        # complete pick history.
         keys = ["season", "week", "slot", "player_id"]
         one = pd.read_parquet(out / "pairs" / str(season) / "forecasts.parquet")
         two = pd.read_parquet(out / "apply" / str(season) / "forecasts.parquet")
         two = two[two.model.eq(spec["baseline"])]
         one, two = (f.sort_values(keys).reset_index(drop=True) for f in (one, two))
-        pd.testing.assert_series_equal(one.lam, two.lam)
-        pd.testing.assert_series_equal(one.actual_tds, two.actual_tds)
-        first = pd.read_csv(out / "pairs" / str(season) / "replays.csv").set_index("strategy")
-        second = pd.read_csv(out / "apply" / str(season) / "replays.csv")
-        second = second[second.model.eq(spec["baseline"])].set_index("strategy")
-        pd.testing.assert_series_equal(
-            first.total.sort_index(), second.total.sort_index(), check_dtype=False
+        pd.testing.assert_frame_equal(one, two, check_like=True)
+        base_surface = saved_surface(out / "apply" / str(season), spec["baseline"])
+        pd.testing.assert_frame_equal(
+            saved_surface(out / "pairs" / str(season), spec["baseline"]),
+            base_surface,
+            check_like=True,
         )
+        pick_keys = ["model", "seed", "strategy", "week", "slot"]
+        first = pd.read_csv(out / "pairs" / str(season) / "picks.csv")
+        second = pd.read_csv(out / "apply" / str(season) / "picks.csv")
+        second = second[second.model.eq(spec["baseline"])]
+        first, second = (f.sort_values(pick_keys).reset_index(drop=True) for f in (first, second))
+        pd.testing.assert_frame_equal(first, second, check_like=True)
+        # Every candidate's saved surface must be its own fold artifact applied to those
+        # identity rates -- otherwise a surface can be replaced, or built from the wrong
+        # fold, and no later table would show it.
+        for name in names:
+            artifact = cal.load_artifact(out / "folds" / str(season) / f"{name}.json")
+            saved = saved_surface(out / "apply" / str(season), name)
+            pd.testing.assert_series_equal(saved.original_lam, base_surface.lam, check_names=False)
+            expected_lam = cal.mapped_lam(base_surface, artifact)
+            np.testing.assert_array_equal(saved.lam.to_numpy(), expected_lam)
         print(season, "apply verified", flush=True)
     checks += [
         "fitted artifacts hash as recorded",
+        "every candidate's artifact carries its own declared fit",
         "no training key reaches its own apply season",
         "identity reproduces the pairs stage exactly",
+        "candidate surfaces are their own artifact applied to identity",
     ]
 
 coverage = pd.read_csv(out / "coverage.csv")
@@ -192,6 +240,7 @@ validation = dict(
     implementation_commit=benchmark.code_identity()["revision"],
     source_hash=manifest["code"]["code_hash"],
     dataset_hash=manifest["dataset_hash"],
+    config_hash=config_hash,
     seasons=counts,
     scheduled_games=scheduled,
     complete_games=int(coverage.complete.eq(1).sum()),

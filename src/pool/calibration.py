@@ -28,6 +28,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 from . import config, diagnostics, models, recommend
 from . import evaluate as ev
@@ -49,6 +50,15 @@ FIT_HORIZONS = "pooled"
 ROW_WEIGHT = "equal"
 CLUSTER = "target_player_week"
 ZERO_RATE_POLICY = "excluded_and_counted"
+# The declared method, one supported value each. A specification that names a metric or
+# an adjustment this module does not implement is a specification the run cannot keep, so
+# it is refused before the first pair is read rather than silently executed as something
+# else.
+REFIT = "annual"
+PRIMARY_METRIC = "paired_season_mean_poisson_deviance"
+PRIMARY_POPULATION = "all_eligible_current_week"
+UNCERTAINTY = "paired_season_t"
+MULTIPLICITY = "holm"
 
 REQUIRED_MARGINS = (
     "min_deviance_improvement",
@@ -56,6 +66,19 @@ REQUIRED_MARGINS = (
     "min_outcome_coverage_current",
     "min_outcome_coverage_future",
 )
+# The promotion rule as data. In comments it was outside the parsed configuration and so
+# outside the run identity: "both strategies" could become "either strategy" without
+# moving `config_hash`. Nothing here applies the rule -- that is a separate, dated
+# authoring step -- but the conditions it will be applied under are now frozen with the
+# rest of the specification.
+PROMOTION = {
+    "max_promoted": (1,),
+    "require_deviance_margin": (True,),
+    "interval": ("holm_95",),
+    "policy_strategies": ("both",),
+    "require_coverage_floors": (True,),
+}
+ALPHA = 0.05
 
 
 # --- candidate naming -------------------------------------------------------
@@ -479,7 +502,112 @@ def run_stages(conn, frozen, output: Path, spec: dict, log=print) -> None:
     benchmark.season_sweep(conn, frozen, spec, apply_seasons, apply_dir, log, folds=folds)
 
 
-# --- metric tables ----------------------------------------------------------
+# --- out-of-fold evidence ---------------------------------------------------
+CURRENT, FUTURE = "current", "future"
+
+
+def _out_of_fold(apply_dir: Path, model: str, season: int) -> pd.DataFrame:
+    """One model's applied surface for one season, joined to its outcomes."""
+    return diagnostics.load_run(Path(apply_dir), model=model, seed=-1, seasons=[season])
+
+
+def coverage_tables(apply_dir: Path, spec: dict) -> dict[str, pd.DataFrame]:
+    """Where the applied surface has an outcome to be scored against, and where it has none.
+
+    The declared coverage floors are conditions on this join, not on the schedule. Every
+    game can be complete and scored while a player forecast for week 12 has left the pool
+    by week 12 and has no target row at all -- and the further ahead the forecast, the
+    more of that there is. A run that never measured it could satisfy its own game-count
+    audit and still miss the floor it froze.
+
+    Measured on identity alone, because a map preserves keys, masks and zeros: every
+    candidate is scored on exactly these rows.
+    """
+    cal = spec["calibration_experiment"]
+    by_horizon, zeros = [], []
+    for season in cal["apply_seasons"]:
+        rows = _out_of_fold(apply_dir, spec["baseline"], season)
+        eligible = rows[rows.hard_eligible.fillna(False).astype(bool)]
+        by_horizon.append(diagnostics.coverage(eligible))
+        zeros.append(diagnostics.zero_accounting(rows).assign(season=season))
+    coverage = pd.concat(by_horizon, ignore_index=True)
+    # Collapse to the two populations the margins are stated over. The current week is
+    # the primary metric's own population; everything beyond it is the surface the
+    # optimizer plans against.
+    coverage["population"] = np.where(coverage.horizon.eq("0"), CURRENT, FUTURE)
+    counts = ["rows", "outcomes_known", "outcomes_missing"]
+    grouped = coverage.groupby("population", as_index=False)[counts].sum()
+    grouped["coverage"] = grouped.outcomes_known / grouped["rows"]
+    floors = {
+        CURRENT: float(cal["margins"]["min_outcome_coverage_current"]),
+        FUTURE: float(cal["margins"]["min_outcome_coverage_future"]),
+    }
+    grouped["declared_floor"] = grouped.population.map(floors)
+    # A comparison of two measured numbers, not a promotion decision: whether the run met
+    # a floor it froze is arithmetic, and hiding it would leave the floor unenforceable.
+    grouped["meets_floor"] = grouped.coverage >= grouped.declared_floor
+    return {
+        "coverage_out_of_fold": coverage.drop(columns="population"),
+        "coverage_margins": grouped,
+        "zero_accounting": pd.concat(zeros, ignore_index=True),
+    }
+
+
+def stratified_scores(apply_dir: Path, spec: dict, baseline: str = IDENTITY) -> pd.DataFrame:
+    """Out-of-fold proper score by forecast horizon and availability, per candidate.
+
+    The frozen decisions pool every horizon into one fit with equal row weight, and note
+    two consequences that only a stratified score can show: late target weeks are
+    forecast, and so represented, more often than early ones, and for an exponent away
+    from one the Questionable multiplier is rescaled nonlinearly and is no longer a clean
+    multiplier on the calibrated rate. Reporting one pooled number would leave both
+    declared and unmeasured.
+
+    Season-paired against identity on the identical rows, one season at a time so the
+    ten-season surface never has to be resident at once.
+    """
+    c = spec["calibration_experiment"]
+    keys = ["decision_week", "week", "slot", "player_id"]
+    per_season = []
+    for season in c["apply_seasons"]:
+        base = _out_of_fold(apply_dir, baseline, season)
+        base = base[
+            base.hard_eligible.fillna(False).astype(bool) & base.outcome_known & base.lam.gt(0)
+        ]
+        strata = base[keys + ["horizon", "availability", "actual_tds"]]
+        for _f, _g, model in [(None, None, baseline), *candidates(spec)]:
+            rows = base if model == baseline else _out_of_fold(apply_dir, model, season)
+            frame = strata.merge(rows[keys + ["lam"]], on=keys, how="left", validate="one_to_one")
+            # The map preserves keys, so a candidate missing one of identity's rows means
+            # the two surfaces are not the same population and nothing paired below holds.
+            if frame.lam.isna().any():
+                raise ValueError(f"{model} is missing {int(frame.lam.isna().sum())} identity rows")
+            frame = frame.assign(
+                deviance=ev.poisson_deviance_terms(
+                    frame.actual_tds.to_numpy(), frame.lam.to_numpy()
+                )
+            )
+            per_season.append(
+                frame.groupby(["horizon", "availability"], as_index=False)
+                .agg(n=("deviance", "size"), deviance=("deviance", "mean"))
+                .assign(model=model, season=season)
+            )
+    per = pd.concat(per_season, ignore_index=True)
+    group = ["model", "horizon", "availability"]
+    stratum = ["horizon", "availability", "season"]
+    levels = ev.summarize_seeds(per, "deviance", group).rename(columns={"mean": "deviance"})
+    base = per[per.model == baseline].set_index(stratum).deviance.rename("identity_deviance")
+    paired = per.join(base, on=stratum)
+    paired["delta"] = paired.deviance - paired.identity_deviance
+    delta = ev.summarize_seeds(paired[paired.model != baseline], "delta", group).rename(
+        columns={"mean": "delta", "se": "paired_se"}
+    )
+    rows = per.groupby(group, as_index=False).n.sum()
+    return levels.merge(rows, on=group).merge(
+        delta[group + ["delta", "paired_se"]], on=group, how="left"
+    )
+
+
 def fold_table(folds: Path, spec: dict) -> pd.DataFrame:
     """Every fitted group in every fold, with the fit that produced it."""
     rows = []
@@ -515,6 +643,12 @@ def policy_table(replays: pd.DataFrame, baseline: str = IDENTITY) -> pd.DataFram
     Not against identity greedy. A candidate's optimizer replay and the identity greedy
     replay differ by two things at once, and attributing that difference to the map
     would be attributing the solver to it as well.
+
+    The paired interval travels with the difference because the declared margin is a
+    non-inferiority bound: the rule compares the *lower* end of this interval against
+    `-max_policy_loss_td_per_season`, and a standard error alone does not answer that.
+    No Holm adjustment here -- the pre-registered family the correction applies to is the
+    primary forecast comparison, and this is the policy check beside it.
     """
     per = replays[replays.strategy.isin(("greedy", "optimizer"))]
     keys = ["model", "strategy"]
@@ -524,10 +658,12 @@ def policy_table(replays: pd.DataFrame, baseline: str = IDENTITY) -> pd.DataFram
     )
     paired = per.join(base, on=["strategy", "season"])
     paired["delta"] = paired.total - paired.identity_total
-    delta = ev.summarize_seeds(paired[paired.model != baseline], "delta", keys).rename(
-        columns={"mean": "delta_vs_own_identity", "se": "paired_se"}
-    )
-    return levels.merge(delta[keys + ["delta_vs_own_identity", "paired_se"]], on=keys, how="left")
+    delta = ev.summarize_seeds(paired[paired.model != baseline], "delta", keys)
+    if not delta.empty:
+        delta = paired_t(delta, "mean", "se")
+    delta = delta.rename(columns={"mean": "delta_vs_own_identity", "se": "paired_se"})
+    columns = ("delta_vs_own_identity", "paired_se", "df", "t", "p_value", "lo", "hi")
+    return levels.merge(delta[keys + [c for c in columns if c in delta]], on=keys, how="left")
 
 
 def decision_changes(picks: pd.DataFrame, baseline: str = IDENTITY) -> pd.DataFrame:
@@ -558,17 +694,74 @@ def advice_changes(advice: pd.DataFrame, baseline: str = IDENTITY) -> pd.DataFra
     )
 
 
-def holm(pvalue_free: pd.DataFrame, column: str = "delta") -> pd.DataFrame:
-    """Rank the pre-registered comparisons for a Holm adjustment on |delta| / se.
+def _interval(frame: pd.DataFrame, column: str, se: str, level, prefix: str = "") -> pd.DataFrame:
+    """A two-sided t interval on the season differences, at `level`, added in place."""
+    out = frame
+    delta = out[column].to_numpy(dtype=float)
+    error = out[se].to_numpy(dtype=float)
+    df = out.df.to_numpy(dtype=float)
+    with np.errstate(invalid="ignore"):
+        half = stats.t.isf(np.asarray(level, dtype=float) / 2.0, np.where(df > 0, df, 1.0)) * error
+    half = np.where(out.p_value.notna().to_numpy(), half, np.nan)
+    out[f"{prefix}lo"], out[f"{prefix}hi"] = delta - half, delta + half
+    return out
 
-    The comparisons are declared in the frozen specification, so the family is fixed
-    before the numbers exist. Reporting the rank and the adjusted level beside each
-    comparison keeps the correction visible rather than folded into a verdict.
+
+def paired_t(
+    frame: pd.DataFrame, column: str = "delta", se: str = "se", alpha: float = ALPHA
+) -> pd.DataFrame:
+    """The paired season t, its p-value and its interval, for one comparison per row.
+
+    Equal season weight is already in the mean and the standard error that reach here;
+    what this adds is the reference distribution the specification declares. Ten seasons
+    is nine degrees of freedom, and a normal would report a narrower interval than the
+    evidence supports.
     """
-    out = pvalue_free.copy()
-    out["z"] = (out[column] / out["se"]).abs()
-    out = out.sort_values("z", ascending=False, kind="stable").reset_index(drop=True)
+    out = frame.copy()
+    df = out.seasons.to_numpy(dtype=float) - 1.0
+    error = out[se].to_numpy(dtype=float)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out["t"] = np.where(error > 0, out[column].to_numpy(dtype=float) / error, np.nan)
+    out["df"] = df
+    usable = np.isfinite(out.t.to_numpy(dtype=float)) & (df > 0)
+    safe = np.where(df > 0, df, 1.0)
+    out["p_value"] = np.where(usable, 2.0 * stats.t.sf(np.abs(out.t.to_numpy()), safe), np.nan)
+    return _interval(out, column, se, np.full(len(out), alpha))
+
+
+def paired_inference(
+    frame: pd.DataFrame, column: str = "delta", se: str = "se", alpha: float = ALPHA
+) -> pd.DataFrame:
+    """Paired season t on each comparison, then a Holm step-down over the whole family.
+
+    The specification declares `uncertainty = "paired_season_t"` and `multiplicity =
+    "holm"`, and a standard error is neither. Ten seasons is a t with nine degrees of
+    freedom, not a normal, and a rank beside an alpha is an ingredient rather than an
+    adjusted inference: reading four comparisons each against its own displayed level is
+    not the Holm procedure, because Holm stops at the first non-rejection.
+
+    So this returns the finished quantities. `p_holm` is the step-down adjusted p-value
+    with monotonicity enforced -- a later step can have a smaller raw p than an earlier
+    step, and the adjusted sequence must not go back down -- and `reject` is the
+    procedure's own decision, which is exactly "every step up to here rejected".
+
+    Two intervals travel with it. `lo`/`hi` is the ordinary 95% paired interval, which is
+    what a single comparison would report. `holm_lo`/`holm_hi` is the interval at that
+    row's Holm level, which is the boundary the frozen promotion rule names when it asks
+    for a Holm-adjusted 95% interval excluding zero; it is a decision boundary, not a
+    simultaneous confidence set, and the two coincide only for the first step.
+    """
+    out = paired_t(frame, column, se, alpha)
+    # Sort by evidence, which for an unusable comparison is none: a fit that produced no
+    # standard error must not take the first Holm step and stop the family behind it.
+    # Every array below is read back from the sorted frame, because the step a row takes
+    # and the interval it is given have to describe the same row.
+    out = out.sort_values("p_value", ascending=True, kind="stable", na_position="last")
+    out = out.reset_index(drop=True)
     total = len(out)
     out["holm_rank"] = np.arange(1, total + 1)
-    out["holm_alpha"] = 0.05 / (total - out.holm_rank + 1)
-    return out
+    out["holm_alpha"] = alpha / (total - out.holm_rank + 1)
+    scaled = out.p_value.to_numpy(dtype=float) * (total - out.holm_rank.to_numpy() + 1)
+    out["p_holm"] = np.minimum(np.maximum.accumulate(np.nan_to_num(scaled, nan=1.0)), 1.0)
+    out["reject"] = (out.p_holm <= alpha) & out.p_value.notna()
+    return _interval(out, column, se, out.holm_alpha.to_numpy(dtype=float), "holm_")

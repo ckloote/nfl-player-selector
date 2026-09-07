@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import math
 import multiprocessing
 import os
 import platform
@@ -124,12 +125,12 @@ def resolve(path):
     if not 1 <= spec["workers"] <= 4:
         raise ValueError("workers must be between 1 and 4")
     if "calibration_experiment" in spec:
-        resolve_calibration(spec)
+        resolve_calibration(spec, path)
     spec["production_constants"] = constants()
     return spec
 
 
-def resolve_calibration(spec):
+def resolve_calibration(spec, path=None):
     """Validate the Phase 3B experiment declaration, before a single pair is read.
 
     Everything checked here ends up in the specification dict, and the specification is
@@ -145,6 +146,13 @@ def resolve_calibration(spec):
         raise ValueError("A calibration experiment fits the future surface; export it")
     if spec["models"] != [spec["baseline"]]:
         raise ValueError("A calibration experiment runs one base model: its own baseline")
+    # A candidate keeps the shipped scaffold and replaces only its `lam`, so a different
+    # baseline would fit coefficients on one model's rates and apply them to another's.
+    if spec["baseline"] != cal.IDENTITY:
+        raise ValueError(
+            f"A calibration experiment maps the {cal.IDENTITY!r} scaffold; "
+            f"this run declares baseline {spec['baseline']!r}"
+        )
     unknown = sorted(set(c.get("families", [])) - set(cal.FAMILIES))
     if not c.get("families") or unknown:
         raise ValueError(
@@ -174,6 +182,14 @@ def resolve_calibration(spec):
         ("row_weight", cal.ROW_WEIGHT),
         ("cluster", cal.CLUSTER),
         ("zero_rate_policy", cal.ZERO_RATE_POLICY),
+        # Declared method. Each of these was previously accepted unread while execution
+        # was hard-coded, so a specification could name an estimand the run did not
+        # compute and nothing would say so.
+        ("refit", cal.REFIT),
+        ("primary_metric", cal.PRIMARY_METRIC),
+        ("primary_population", cal.PRIMARY_POPULATION),
+        ("uncertainty", cal.UNCERTAINTY),
+        ("multiplicity", cal.MULTIPLICITY),
     ):
         if c.get(name) != expected:
             raise ValueError(
@@ -188,10 +204,25 @@ def resolve_calibration(spec):
     if not c.get("specification_date"):
         raise ValueError("A calibration experiment must be dated before it is fitted")
     margins = c.get("margins") or {}
-    absent = [k for k in cal.REQUIRED_MARGINS if not isinstance(margins.get(k), (int, float))]
+    # `isinstance(True, int)` and `isinstance(nan, float)` are both true, and neither is a
+    # threshold. A margin has to be a finite real number to be compared against anything.
+    absent = [
+        k
+        for k in cal.REQUIRED_MARGINS
+        if isinstance(margins.get(k), bool)
+        or not isinstance(margins.get(k), (int, float))
+        or not math.isfinite(margins[k])
+    ]
     if absent:
         raise ValueError(
             f"calibration_experiment.margins is missing {absent}; a missing margin blocks the run"
+        )
+    promotion = c.get("promotion") or {}
+    wrong = [k for k, allowed in cal.PROMOTION.items() if promotion.get(k) not in allowed]
+    if wrong:
+        raise ValueError(
+            f"calibration_experiment.promotion declares unsupported {wrong}; the rule is frozen "
+            "with the specification, so it must be data rather than a comment"
         )
     # A name already registered as a calibrated candidate is this runner's own, from an
     # earlier run in the same process. Only a shipped model is a collision.
@@ -206,6 +237,12 @@ def resolve_calibration(spec):
     # bake-off scores, so the floor travels in the specification rather than defaulting.
     spec["deviance_floor"] = float(c.get("deviance_floor", 0.0))
     spec["advice_sensitivity"] = bool(c.get("advice_sensitivity", True))
+    # The parsed keys above are the ones the run executes; the file also carries the prose
+    # that says what they mean. Hashing the text puts that prose inside the run identity
+    # too, so an edit to the reasoning starts a new experiment rather than reinterpreting
+    # a finished one.
+    if path is not None:
+        c["specification_sha256"] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def decision_time_records(spec):
@@ -396,7 +433,12 @@ def save_frame(path, frame):
             "season",
             "model",
             "seed",
+            "candidate",
+            "group",
             "strategy",
+            "population",
+            "horizon",
+            "availability",
             "decision_week",
             "week",
             "slot",
@@ -431,8 +473,18 @@ CALIBRATION_COLUMNS = (
 
 
 def write_checkpoint(directory):
-    """Seal a completed stage directory by hashing everything it wrote."""
-    files = {p.name: digest(p) for p in sorted(directory.iterdir()) if p.name != "checkpoint.json"}
+    """Seal a completed stage directory by hashing everything it wrote.
+
+    Partial writes are excluded, not recorded. Every writer here renames a `.tmp` sibling
+    into place, so an interruption can leave one behind -- including `checkpoint.json.tmp`,
+    which this function's own write then renames away. Recording it produced a checkpoint
+    naming a file that could not exist, and the next resume rejected the recovered run.
+    """
+    files = {
+        p.name: digest(p)
+        for p in sorted(directory.iterdir())
+        if p.name != "checkpoint.json" and p.suffix != ".tmp"
+    }
     write_json(directory / "checkpoint.json", dict(schema_version=SCHEMA_VERSION, files=files))
 
 
@@ -565,28 +617,26 @@ def evaluate_season(conn, season, spec, directory, log, candidates=None):
 
             advice_parts.append(cal.advice_rows(frames, common, model, seed, season))
         if spec["export_future_forecasts"]:
+            columns = ["player_id", "week", "slot", "game_id", "lam", "avail_mult", "hard_eligible"]
+            if spec.get("calibration_experiment"):
+                # The role the frame was built with, at the decision week that built it.
+                # Recovering it later by joining the decision week's own forecast row
+                # loses every player who has no such row -- a bye week is exactly that --
+                # and those rows then trained pooled while being applied by position.
+                # Only in a calibration experiment, for the reason `original_lam` is: two
+                # different files must not both claim artifact schema 1.
+                columns.append("position")
             surfaces = pd.concat(
                 [
-                    f[
-                        [
-                            "player_id",
-                            "week",
-                            "slot",
-                            "game_id",
-                            "lam",
-                            "avail_mult",
-                            "hard_eligible",
-                        ]
-                    ].assign(decision_week=w, model=model, seed=seed, season=season)
+                    f[columns].assign(decision_week=w, model=model, seed=seed, season=season)
                     for w, f in frames.items()
                 ],
                 ignore_index=True,
             )
             if spec.get("calibration_experiment"):
-                # Only in a calibration experiment. The mapped rate is `lam` and the rate
-                # it was mapped from travels beside it, so a saved surface says what the
-                # map did without rejoining the identity export to find out. Adding it to
-                # every run would leave two different files both claiming artifact schema 1.
+                # The mapped rate is `lam` and the rate it was mapped from travels beside
+                # it, so a saved surface says what the map did without rejoining the
+                # identity export to find out.
                 if candidates and model in candidates:
                     if base_frames is None:
                         raise ValueError(
@@ -735,12 +785,22 @@ def calibration_reports(output, spec, manifest, config_path=None):
     if "advice" in data:
         data["advice_changes"] = cal.advice_changes(data["advice"], spec["baseline"])
         save_frame(compact / "advice-changes.csv", data["advice_changes"])
-    data["paired_deviance"] = cal.holm(
+    data["paired_deviance"] = cal.paired_inference(
         ev.paired_deviance(
             _forecast_deviance(output, spec), spec["baseline"], spec["deviance_floor"]
         )
     )
     save_frame(compact / "paired-deviance.csv", data["paired_deviance"])
+    # The declared coverage floors and the promised horizon/availability diagnostics are
+    # conditions on the applied surface, so they are measured from it rather than from
+    # the schedule audit `coverage.csv` records.
+    coverage = cal.coverage_tables(output / "apply", spec)
+    data.update(coverage)
+    save_frame(compact / "coverage-out-of-fold.csv", coverage["coverage_out_of_fold"])
+    save_frame(compact / "coverage-margins.csv", coverage["coverage_margins"])
+    save_frame(compact / "zero-accounting.csv", coverage["zero_accounting"])
+    data["strata"] = cal.stratified_scores(output / "apply", spec, spec["baseline"])
+    save_frame(compact / "strata-out-of-fold.csv", data["strata"])
     write_json(compact / "manifest.json", manifest)
     shutil.copy2(output / "resolved-config.json", compact / "resolved-config.json")
     shutil.copy2(output / "coverage.csv", compact / "coverage.csv")
@@ -826,19 +886,37 @@ def render_calibration_report(data, spec, manifest, output, config_path=None):
         + "\n\n## Forecast Score\n\n"
         f"Primary estimand: paired change in season-mean Poisson deviance on hard-eligible "
         f"current-week rows with identity lambda above {spec['deviance_floor']}, which is the "
-        "same population for every candidate because a map sends zero to zero. Uncertainty is "
-        "the standard error of the season differences. Deviance is a loss, so a negative "
-        "`delta` is a better forecast than identity's. `holm_alpha` is the declared "
-        "multiplicity level for the pre-registered comparisons; it is reported, not applied "
-        "to a verdict here.\n\n"
+        "same population for every candidate because a map sends zero to zero. Deviance is a "
+        "loss, so a negative `delta` is a better forecast than identity's. Uncertainty is the "
+        f"paired season t on {int(data['paired_deviance'].df.max()) + 1} season differences, "
+        "and `p_holm` is the Holm step-down adjustment over the pre-registered family, which "
+        "stops at the first comparison it does not reject. `holm_lo`/`holm_hi` is the interval "
+        "at that row's adjusted level -- the boundary the frozen promotion rule names, not a "
+        "simultaneous confidence set. Nothing here is a verdict: the rule is applied in a "
+        "separate, dated note.\n\n"
         + markdown_table(
             data["paired_deviance"],
-            ["model", "delta", "se", "seasons", "holm_rank", "holm_alpha"],
+            [
+                "model",
+                "delta",
+                "se",
+                "seasons",
+                "t",
+                "p_value",
+                "holm_rank",
+                "p_holm",
+                "reject",
+                "holm_lo",
+                "holm_hi",
+            ],
         )
         + "\n\n## Achieved Season Scores\n\n"
         "Each candidate replays its own no-reuse greedy and optimizer history and is compared "
         "against identity's replay of the same strategy, never against identity greedy. A "
         "better proper score and more touchdowns are different claims.\n\n"
+        f"The declared non-inferiority bound is {c['margins']['max_policy_loss_td_per_season']} "
+        "touchdowns per season, and it is compared against `lo` -- the lower end of the paired "
+        "interval -- rather than against the point estimate.\n\n"
         + markdown_table(
             data["policy"],
             [
@@ -847,6 +925,8 @@ def render_calibration_report(data, spec, manifest, output, config_path=None):
                 "tds_per_season",
                 "delta_vs_own_identity",
                 "paired_se",
+                "lo",
+                "hi",
                 "seasons",
             ],
         )
@@ -882,8 +962,40 @@ def render_calibration_report(data, spec, manifest, output, config_path=None):
                 ["model", "decisions", "pick_changed", "hold_changed"],
             )
         )
+    promotion = ", ".join(f"{k} = {v}" for k, v in sorted(c["promotion"].items()))
     report += (
-        "\n\n## Methods And Provenance\n\n"
+        "\n\n## Outcome Coverage\n\n"
+        "Whether the applied surface has an outcome to be scored against, which is what the "
+        "declared coverage floors are conditions on. Every game can be complete and scored "
+        "while a player forecast for a later week has left the pool by then and has no target "
+        "row at all, so this is a different question from the schedule audit. Over "
+        "hard-eligible rows, measured on identity: a map preserves keys, masks and zeros, so "
+        "every candidate is scored on exactly these rows. `meets_floor` is a comparison of "
+        "two measured numbers, not a promotion decision.\n\n"
+        + markdown_table(
+            data["coverage_margins"],
+            [
+                "population",
+                "rows",
+                "outcomes_known",
+                "outcomes_missing",
+                "coverage",
+                "declared_floor",
+                "meets_floor",
+            ],
+        )
+        + "\n\n## Out-Of-Fold Diagnostics\n\n"
+        "The proper score by forecast horizon and availability, which the pooled fit declares "
+        "two consequences for and cannot itself show. Late target weeks are forecast, and so "
+        f"represented, more often than early ones under {c['row_weight']} row weight; and for "
+        "an exponent away from one the Questionable multiplier is rescaled nonlinearly, so it "
+        "is no longer a clean multiplier on the calibrated rate. These are declared "
+        "diagnostics and cannot substitute for the primary estimand.\n\n"
+        + markdown_table(
+            data["strata"][data["strata"].model != spec["baseline"]],
+            ["model", "horizon", "availability", "n", "deviance", "delta", "paired_se"],
+        )
+        + "\n\n## Methods And Provenance\n\n"
         f"Source `{manifest['code']['revision']}`"
         f"{' (dirty)' if manifest['code']['dirty'] else ''}, dataset "
         f"`{manifest['dataset_hash'][:12]}`, configuration "
@@ -899,7 +1011,10 @@ def render_calibration_report(data, spec, manifest, output, config_path=None):
         f"Identity is `{spec['baseline']}` and is mandatory: fold artifacts, out-of-fold "
         "surfaces, picks and these tables are saved beside the run. Applying the promotion rule "
         "is a separate, dated authoring step, and keeping the model unchanged is a valid "
-        f"outcome. Candidates: {', '.join(n for _f, _g, n in cal.candidates(spec))}.\n"
+        f"outcome. The promotion conditions are frozen with the rest of the specification as "
+        f"`calibration_experiment.promotion` ({promotion}), "
+        f"and the specification text itself hashes to `{c['specification_sha256'][:12]}`. "
+        f"Candidates: {', '.join(n for _f, _g, n in cal.candidates(spec))}.\n"
     )
     return report
 

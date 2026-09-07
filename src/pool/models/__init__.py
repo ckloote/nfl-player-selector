@@ -131,6 +131,12 @@ def calibrated(mapper: Callable[[pd.DataFrame], object]) -> Builder:
     The scaffold is the shipped frame, so the candidate pool, hard eligibility,
     availability and bye handling are the shipped model's own — a calibration map
     that changed who is eligible would not be a calibration map.
+
+    The shipped scaffold is also the only base this is correct for, and the coupling is
+    silent here: a map fitted on some other baseline's rates would be applied to shipped
+    ones without anything in this function noticing. `benchmark.resolve_calibration`
+    refuses a calibration experiment whose baseline is not the shipped model, which is
+    where that is enforced.
     """
 
     def build(frames, from_week: int = 1, role_source: str | None = None) -> pd.DataFrame:

@@ -92,8 +92,8 @@ def study_constants(run: Path) -> dict:
 def load_run(run: Path, model: str = "shipped", seed: int = -1, seasons=None) -> pd.DataFrame:
     """Join a study's future surface to the outcomes recorded on its forecast rows.
 
-    The surface carries neither position nor outcome, and the forecast export keeps
-    only each week's own decision row, so both have to be joined back.
+    The surface carries no outcome, and the forecast export keeps only each week's own
+    decision row, so the outcome has to be joined back.
 
     Outcomes belong to the target week: whether the player scored, and whether he has a
     row at all. Everything describing the forecast belongs to the *decision* week --
@@ -104,6 +104,11 @@ def load_run(run: Path, model: str = "shipped", seed: int = -1, seasons=None) ->
     and diagnosed as a tight end. Depletion, rank and the pick indicators are likewise
     attached only at the decision week; a later decision's rank says nothing about an
     earlier decision's plan.
+
+    Position is read from the surface when it is there and joined from the decision week
+    when it is not. Joining it cannot describe a player with no forecast row that week --
+    a bye is exactly that -- and 6.5% of one season's eligible surface rows are in that
+    position, every one of them a future forecast.
     """
     run = Path(run)
     years = sorted(int(p.name) for p in run.iterdir() if p.is_dir() and p.name.isdigit())
@@ -123,19 +128,23 @@ def load_run(run: Path, model: str = "shipped", seed: int = -1, seasons=None) ->
         outcome = forecasts[
             ["season", "week", "player_id", "actual_tds", "played"]
         ].drop_duplicates(["season", "week", "player_id"])
+        columns = [
+            "season",
+            "week",
+            "player_id",
+            "baseline_spent",
+            "rank_available",
+            "picked_greedy",
+            "picked_optimizer",
+        ]
+        # A surface that carries its own position is authoritative: it was written by the
+        # frame the decision week built, so it covers the future rows of a player who has
+        # no forecast row that week at all. The join below is the fallback for a study
+        # saved before the column existed, and it labels those rows "unknown".
+        if "position" not in surface:
+            columns.append("position")
         decision = (
-            forecasts[
-                [
-                    "season",
-                    "week",
-                    "player_id",
-                    "position",
-                    "baseline_spent",
-                    "rank_available",
-                    "picked_greedy",
-                    "picked_optimizer",
-                ]
-            ]
+            forecasts[columns]
             .drop_duplicates(["season", "week", "player_id"])
             .rename(columns={"week": "decision_week"})
         )
