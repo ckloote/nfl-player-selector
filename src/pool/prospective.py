@@ -188,6 +188,7 @@ def resolve(path: str | Path) -> dict:
         "parity_uses_recorded_settings",
         "reconstruction_checks_advice",
         "submissions_reduce_corrections",
+        "events_classify_by_kickoff_wave",
     ):
         if spec.get(name) is not True:
             raise ValueError(f"{name} must be declared true; this module always checks it")
@@ -229,13 +230,22 @@ def _instant(kickoff: pd.Timestamp) -> datetime:
     return naive.replace(tzinfo=ZoneInfo(config.TIMEZONE)).astimezone(UTC)
 
 
-def week_events(conn: sqlite3.Connection, season: int, week: int) -> dict[str, datetime]:
-    """The deadlines the week's declared decision events must precede.
+def week_waves(conn: sqlite3.Connection, season: int, week: int) -> dict[str, datetime]:
+    """Every kickoff wave of the week, with the deadline each one imposes.
 
-    `thursday_deadline` is the week's first confirmed kickoff; `sunday_slate` is the main
-    slate, resolved the way `recommend.main_slate_start` resolves it. A week whose first
-    game is already in the main slate schedules one event rather than two: demanding a
-    second would count an impossible event as a miss.
+    A wave is a distinct kickoff day. The pool lets a pick be made before each of them,
+    so each is a real decision point whether or not the protocol requires a capture
+    there: a week can open on Wednesday, play again on Thursday, hold the main slate on
+    Sunday and close on Monday. Two of the waves carry the declared event names --
+    `thursday_deadline` is the week's first confirmed kickoff when something follows it,
+    and `sunday_slate` is the main slate the way `recommend.main_slate_start` resolves it
+    -- and the rest are named for the day they open. A week whose first game is already
+    in the main slate has one wave, not two: demanding a second would count an impossible
+    event as a miss.
+
+    Waves are a day apart because that is the granularity the schedule offers a pick.
+    Sunday's own early and late kickoffs are one wave, which is what `sunday_slate`
+    already meant.
     """
     games = db.read_df(
         conn,
@@ -250,23 +260,45 @@ def week_events(conn: sqlite3.Connection, season: int, week: int) -> dict[str, d
     sundays = kicks[kicks.dt.dayofweek == 6]
     slate = sundays.min() if len(sundays) else kicks.max()
     first = kicks.min()
-    out = {}
-    if first < slate:
-        out["thursday_deadline"] = _instant(first)
-    out["sunday_slate"] = _instant(slate)
-    return {name: out[name] for name in EVENTS if name in out}
+    out: dict[str, datetime] = {}
+    for opening in sorted(kicks.groupby(kicks.dt.date).min()):
+        if opening == first and first < slate:
+            name = "thursday_deadline"
+        elif opening == slate:
+            name = "sunday_slate"
+        else:
+            name = f"{opening.day_name().lower()}_wave"
+        out.setdefault(name, _instant(opening))
+    return out
 
 
-def classify_event(decision_at: str, events: dict[str, datetime]) -> str:
-    """Which declared event a decision is, by the deadline it beat.
+def week_events(conn: sqlite3.Connection, season: int, week: int) -> dict[str, datetime]:
+    """The deadlines the week's *declared* decision events must precede.
 
-    A decision after the last deadline is not one of the declared events. It is recorded
-    under its own name rather than folded into the nearest one, because a pick made after
-    the slate has started is a different thing from a pick made before it.
+    The two the protocol requires, drawn from the week's waves. Requiring a capture at
+    every wave would put roughly twenty mandatory events behind a floor of 1.0, where one
+    missed Monday would fail a window that is otherwise sound; requiring these two keeps
+    the obligation to the news change the protocol is actually about.
+    """
+    waves = week_waves(conn, season, week)
+    return {name: waves[name] for name in EVENTS if name in waves}
+
+
+def classify_event(decision_at: str, waves: dict[str, datetime]) -> str:
+    """Which kickoff wave a decision beat.
+
+    The earliest deadline still ahead of it, not the first declared event it happens to
+    precede. A Thursday decision in a week that opened on Wednesday beats the Sunday
+    deadline too, and calling it the Sunday decision would describe a cadence nobody
+    worked to; a Monday-game decision beats its own deadline and is not a late pick.
+
+    A decision that beats no deadline at all is `after_deadline`, recorded under its own
+    name rather than folded into the nearest wave, because a pick made after every
+    kickoff is a different thing from a pick made before one.
     """
     at = datetime.fromisoformat(decision_at)
-    for name in EVENTS:
-        if name in events and at <= events[name]:
+    for name, deadline in sorted(waves.items(), key=lambda kv: kv[1]):
+        if at <= deadline:
             return name
     return "after_deadline"
 
@@ -283,7 +315,9 @@ def decisions(conn: sqlite3.Connection, spec: dict) -> pd.DataFrame:
     if not len(rows):
         return rows.assign(event=pd.Series(dtype=str))
     rows = rows[rows.week.isin(weeks)].reset_index(drop=True)
-    schedule = {w: week_events(conn, season, w) for w in sorted(weeks)}
+    # Classified against every wave, not only the declared two: a decision is described
+    # by the deadline it actually beat.
+    schedule = {w: week_waves(conn, season, w) for w in sorted(weeks)}
     rows["event"] = [
         classify_event(at, schedule.get(int(w), {}))
         for at, w in zip(rows.decision_at, rows.week, strict=True)
@@ -299,11 +333,11 @@ def event_coverage(conn: sqlite3.Connection, spec: dict) -> pd.DataFrame:
     """
     season = spec["season"]
     captured = decisions(conn, spec)
+    waves = {w: week_waves(conn, season, w) for w in spec["collection_weeks"]}
     out = []
     for week in spec["collection_weeks"]:
-        scheduled = week_events(conn, season, week)
         for name in EVENTS:
-            if name not in scheduled:
+            if name not in waves[week]:
                 continue
             got = captured[captured.week.eq(week) & captured.event.eq(name)]
             out.append(
@@ -311,23 +345,27 @@ def event_coverage(conn: sqlite3.Connection, spec: dict) -> pd.DataFrame:
                     season=season,
                     week=week,
                     event=name,
-                    deadline=scheduled[name].isoformat(),
+                    deadline=waves[week][name].isoformat(),
                     scheduled=1,
                     captured=int(len(got)),
                     decision_id=got.decision_id.iloc[0] if len(got) else None,
                 )
             )
-    extra = captured[captured.event.eq("after_deadline")]
-    for row in extra.itertuples():
+    # Waves the protocol did not declare, and decisions that beat no deadline at all.
+    # Reported rather than required: a Monday-game decision is a real one, but demanding
+    # it would put a floor of 1.0 behind an event the protocol never scheduled.
+    undeclared = captured[~captured.event.isin(EVENTS)] if len(captured) else captured
+    for (week, name), rows in undeclared.groupby(["week", "event"], sort=True):
+        deadline = waves.get(int(week), {}).get(name)
         out.append(
             dict(
                 season=season,
-                week=int(row.week),
-                event="after_deadline",
-                deadline=None,
+                week=int(week),
+                event=name,
+                deadline=deadline.isoformat() if deadline is not None else None,
                 scheduled=0,
-                captured=1,
-                decision_id=row.decision_id,
+                captured=int(len(rows)),
+                decision_id=rows.decision_id.iloc[0],
             )
         )
     return pd.DataFrame(out)

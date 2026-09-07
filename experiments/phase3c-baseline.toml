@@ -22,13 +22,24 @@ season = 2026
 collection_weeks = [1, 2, 3, 4, 5, 6]
 review_after_week = 6
 
-# Two decision events per week. `thursday_deadline` is the decision immediately before
-# the week's first confirmed kickoff deadline; `sunday_slate` is the decision immediately
-# before the main Sunday slate begins (`recommend.main_slate_start`). Recording both is
-# what preserves the Thursday-to-Sunday news change. It does not measure the value of
-# waiting: that needs a multi-event replay which does not exist, and which is a separate
-# prerequisite for any such claim.
+# Two *required* decision events per week. `thursday_deadline` is the decision
+# immediately before the week's first confirmed kickoff deadline; `sunday_slate` is the
+# decision immediately before the main Sunday slate begins (`recommend.main_slate_start`).
+# Recording both is what preserves the Thursday-to-Sunday news change. It does not measure
+# the value of waiting: that needs a multi-event replay which does not exist, and which is
+# a separate prerequisite for any such claim.
 decision_events = ["thursday_deadline", "sunday_slate"]
+
+# A week has as many decision points as it has kickoff waves, and every week of this
+# window has three or four: a Monday game throughout, and week 1 opens on Wednesday and
+# plays again on Thursday. Decisions are therefore classified by the wave whose deadline
+# they beat, not by the first declared event they happen to precede -- otherwise a
+# Thursday decision is filed as the Sunday one and a Monday-game decision, made before
+# its own kickoff, is filed as late. Waves the protocol does not require are reported
+# with `scheduled = 0`: describing them correctly is not the same as demanding them, and
+# putting ~20 mandatory events behind a floor of 1.0 would let one missed Monday fail a
+# window that was otherwise sound.
+events_classify_by_kickoff_wave = true
 
 # The live path, unchanged. 3C observes production; it does not alter it.
 model = "shipped"
