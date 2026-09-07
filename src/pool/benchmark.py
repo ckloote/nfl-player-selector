@@ -77,9 +77,9 @@ def write_json(path, value):
 DECISION_ROOTS = ("recommend", "projections", "snapshots")
 
 
-def _package_modules() -> dict[str, Path]:
+def _package_modules(root: Path = ROOT) -> dict[str, Path]:
     """Every module of `pool`, keyed by its dotted name below the package root."""
-    base = ROOT / "src" / "pool"
+    base = root / "src" / "pool"
     out = {}
     for path in sorted(base.rglob("*.py")):
         parts = path.relative_to(base).with_suffix("").parts
@@ -88,24 +88,38 @@ def _package_modules() -> dict[str, Path]:
     return out
 
 
+def _with_parents(name: str, modules: dict[str, Path]) -> set[str]:
+    """A module and every package above it that exists.
+
+    Importing `pool.strategy.model` runs `pool/strategy/__init__.py` on the way, so an
+    initializer is executable code the decision depends on even when nothing imports it
+    by name. Recording the leaf alone would leave that file able to change the decision
+    without changing its fingerprint.
+    """
+    parts = name.split(".") if name else []
+    return {p for i in range(len(parts) + 1) if (p := ".".join(parts[:i])) in modules}
+
+
 def _imported(path: Path, name: str, modules: dict[str, Path]) -> set[str]:
     """Sibling modules this one imports, however it spells the import.
 
     Read from the source rather than by importing it: resolving the closure must not
     depend on which modules a process happens to have loaded, and a function-local
     `from . import x` counts exactly as much as a top-level one.
+
+    A package initializer's own package is itself, not its parent. `from . import weights`
+    inside `strategy/__init__.py` means `strategy.weights`; resolving it the way a plain
+    module's relative import resolves would point at the package root and quietly find
+    nothing.
     """
-    package = name.rsplit(".", 1)[0] if "." in name else ""
+    package = name if path.name == "__init__.py" else name.rpartition(".")[0]
     parts = package.split(".") if package else []
     found: set[str] = set()
 
     def add(target: str, children):
-        if target in modules:
-            found.add(target)
+        found.update(_with_parents(target, modules))
         for child in children:
-            candidate = f"{target}.{child}".strip(".")
-            if candidate in modules:
-                found.add(candidate)
+            found.update(_with_parents(f"{target}.{child}".strip("."), modules))
 
     for node in ast.walk(ast.parse(path.read_text())):
         if isinstance(node, ast.ImportFrom):
@@ -124,7 +138,7 @@ def _imported(path: Path, name: str, modules: dict[str, Path]) -> set[str]:
     return found
 
 
-def decision_modules() -> list[str]:
+def decision_modules(root: Path = ROOT) -> list[str]:
     """Source paths of the decision path's import closure, relative to the repo root.
 
     Computed rather than listed. A hand-maintained list that quietly loses a module is
@@ -136,7 +150,7 @@ def decision_modules() -> list[str]:
     and `uv.lock` with it, because the arithmetic a decision performs belongs to the
     resolved dependency versions as much as to this source.
     """
-    modules = _package_modules()
+    modules = _package_modules(root)
     seen: set[str] = set()
     stack = ["", *DECISION_ROOTS]
     while stack:
@@ -145,7 +159,7 @@ def decision_modules() -> list[str]:
             continue
         seen.add(name)
         stack += sorted(_imported(modules[name], name, modules) - seen)
-    paths = [str(modules[name].relative_to(ROOT)) for name in seen]
+    paths = [str(modules[name].relative_to(root)) for name in seen]
     return sorted([*paths, "uv.lock"])
 
 

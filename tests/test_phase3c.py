@@ -372,6 +372,47 @@ def test_reconstruction_refuses_a_source_tree_it_was_not_captured_under(tmp_path
     assert not result["ok"] and "fingerprint" in result["reason"]
 
 
+def test_drift_outside_the_decision_path_is_reported_and_still_verifies(tmp_path, monkeypatch):
+    """Tolerating that drift is the point of narrowing the fingerprint; saying nothing
+    about it is not. A verified row indistinguishable from a clean one hides the tolerance
+    -- and hides it in the CLI and the exports, which are themselves outside the closure,
+    so their silence is not evidence of anything."""
+    conn, unplayed = _archived(tmp_path)
+    _decide(conn, 3, datetime.fromisoformat(DECISION))
+    _publish(conn, unplayed, "rest")
+    spec = prospective.resolve(_protocol(tmp_path))
+
+    _code, decision_hash, revision, dirty = capture._code_identity()
+    capture._code_identity.cache_clear()
+    moved = ("a module outside the closure moved", decision_hash, revision, dirty)
+    monkeypatch.setattr(capture, "_code_identity", lambda: moved)
+
+    checks, _events, rates = prospective.fidelity(conn, spec)
+    row = checks.iloc[0]
+    assert row.reconstructs and row.parity  # the decision is a function of what did not move
+    assert row.whole_tree_changed and row.fingerprint_scope == "decision path"
+    assert row.recorded_fingerprint == row.current_fingerprint == decision_hash
+    assert rates[rates.measure.eq("reconstruction")].iloc[0].rate == 1.0
+
+    out = prospective.export(conn, spec, tmp_path / "drift", log=lambda _x: None)
+    assert "moved outside the decision path" in (out / "BASELINE.md").read_text()
+    exported = pd.read_csv(out / "decisions.csv").iloc[0]
+    assert bool(exported.whole_tree_changed) and exported.fingerprint_scope == "decision path"
+    identity = json.loads((out / "identities.json").read_text())
+    identity = identity["collection_provenance"]["decision_identities"][0]
+    assert identity["decision_hash"] == decision_hash
+    assert identity["enforced_fingerprint"] == "decision path"
+    assert identity["code_hash"] != moved[0]  # what was recorded, not what is running now
+
+    conn.commit()
+    conn.close()
+    result = CliRunner().invoke(
+        app, ["verify-capture", "--season", str(SEASON), "--db", str(tmp_path / "parity.db")]
+    )
+    assert result.exit_code == 0, result.output
+    assert "outside the decision path" in result.output
+
+
 # --- submissions attach to the decision they came from ---------------------
 def test_a_submission_links_to_the_decision_it_names_not_the_latest(tmp_path):
     """With a Thursday and a Sunday decision in one week, "the most recent advice for

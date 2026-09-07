@@ -534,6 +534,33 @@ def recorded_settings(constants: dict):
         ) from exc
 
 
+def fingerprint_drift(identity_payload: dict) -> dict:
+    """What moved between the source that made a decision and the source reading it.
+
+    One definition for three readers: the reconstruction that refuses on it, the parity
+    check that reports it, and the export that has to say what was compared. Each decision
+    records two fingerprints and only the narrow one is enforced, so "changed" has to mean
+    the enforced one or the checks and the audit end up describing different facts.
+
+    A capture written before the fingerprint was narrowed carries only the whole-tree
+    hash; it keeps the contract it was made under rather than being read against one that
+    did not exist yet.
+    """
+    code_hash, decision_hash, _, _ = _code_identity()
+    scoped = "decision_hash" in identity_payload
+    recorded = identity_payload.get("decision_hash" if scoped else "code_hash")
+    current = decision_hash if scoped else code_hash
+    return {
+        "fingerprint_scope": "decision path" if scoped else "whole tree",
+        "recorded_code_hash": recorded,
+        "current_code_hash": current,
+        "code_hash_changed": recorded != current,
+        # Recorded, never enforced. A module outside the closure cannot have changed the
+        # decision, and an operator still has to be able to see that the tree moved.
+        "whole_tree_changed": identity_payload.get("code_hash") != code_hash,
+    }
+
+
 def reconstruct(conn: sqlite3.Connection, decision_id: str, *, allow_code_drift: bool = False):
     """Rebuild a decision's surface and re-derive its advice from that surface alone.
 
@@ -556,27 +583,18 @@ def reconstruct(conn: sqlite3.Connection, decision_id: str, *, allow_code_drift:
     if not rows:
         raise ValueError(f"No captured decision {decision_id}")
     identity_payload = recorded_identity(conn, decision_id)
-    code_hash, decision_hash, _, _ = _code_identity()
     recorded_constants = identity_payload.get("constants", {})
-    # Captures written before the fingerprint was narrowed carry only the whole-tree hash;
-    # they keep the contract they were made under rather than being read against one that
-    # did not exist yet.
-    scoped = "decision_hash" in identity_payload
-    recorded_fingerprint = identity_payload.get("decision_hash" if scoped else "code_hash")
-    current_hash = decision_hash if scoped else code_hash
-    drift = {
-        "code_hash_changed": recorded_fingerprint != current_hash,
-        "recorded_code_hash": recorded_fingerprint,
-        "current_code_hash": current_hash,
-        "whole_tree_changed": identity_payload.get("code_hash") != code_hash,
-        "constants_changed": constants_drift(recorded_constants),
-    }
+    drift = dict(
+        fingerprint_drift(identity_payload),
+        constants_changed=constants_drift(recorded_constants),
+    )
     if drift["code_hash_changed"] and not allow_code_drift:
         raise ValueError(
             f"Decision {decision_id} was captured under source fingerprint "
-            f"{drift['recorded_code_hash']}, running {current_hash}. The recommender's "
-            "behaviour is not carried by the recorded constants alone; pass "
-            "allow_code_drift=True to reconstruct anyway."
+            f"{drift['recorded_code_hash']}, running {drift['current_code_hash']} "
+            f"({drift['fingerprint_scope']}). The recommender's behaviour is not carried "
+            "by the recorded constants alone; pass allow_code_drift=True to reconstruct "
+            "anyway."
         )
 
     head = next(r for r in rows if r["kind"] == "surface")

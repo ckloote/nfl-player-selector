@@ -1198,6 +1198,7 @@ def verify_capture(
         raise typer.Exit(1)
     t = Table("Decision", "Week", "Event", "Reconstructs", "Parity", "Detail")
     failed = 0
+    tolerated = 0
     for row in found.itertuples():
         rebuilt = prospective.reconstruction(
             conn, row.decision_id, allow_code_drift=allow_code_drift
@@ -1206,6 +1207,13 @@ def verify_capture(
         ok = rebuilt["ok"] and matched["ok"]
         failed += not ok
         notes = [n for n in (rebuilt.get("reason"), matched.get("reason")) if n]
+        # Drift outside the enforced fingerprint is accepted by design, and saying nothing
+        # about it would leave a verified row indistinguishable from one where the tree had
+        # moved -- reported by the very code the fingerprint does not cover.
+        drift = rebuilt.get("drift") or {}
+        if ok and drift.get("whole_tree_changed"):
+            tolerated += 1
+            notes.append("[yellow]source outside the decision path moved (accepted)[/yellow]")
         t.add_row(
             row.decision_id[:12],
             str(row.week),
@@ -1221,6 +1229,12 @@ def verify_capture(
     console.print(
         f"[green]All {len(found)} captured decisions reconstruct and match replay.[/green]"
     )
+    if tolerated:
+        console.print(
+            f"[yellow]{tolerated} verified against a source tree that moved outside the "
+            "decision path. The fingerprint covers what a decision is a function of; the "
+            "whole-tree hash is recorded beside it.[/yellow]"
+        )
 
 
 @app.command()

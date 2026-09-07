@@ -1040,6 +1040,66 @@ def test_the_enforced_fingerprint_covers_the_decision_path_and_only_that():
     assert set(identity["source_hashes"]) > set(DECISION_SOURCES) - {"uv.lock"}
 
 
+def _nested_tree(tmp_path, recommend_import, strategy_init):
+    """A synthetic package whose decision path reaches into a subpackage.
+
+    `src/pool` is flat today, so the real tree cannot exercise nested resolution at all --
+    and the day someone moves decision logic into a subpackage is the day a closure that
+    resolves it wrongly starts fingerprinting less than it claims to.
+    """
+    pool = tmp_path / "src" / "pool"
+    (pool / "strategy").mkdir(parents=True)
+    for name, body in (
+        ("__init__.py", ""),
+        ("recommend.py", recommend_import),
+        ("projections.py", "from . import config\n"),
+        ("snapshots.py", "from . import db\n"),
+        ("config.py", ""),
+        ("db.py", ""),
+    ):
+        (pool / name).write_text(body)
+    (pool / "strategy" / "__init__.py").write_text(strategy_init)
+    (pool / "strategy" / "model.py").write_text("def blend():\n    return 1\n")
+    (pool / "strategy" / "weights.py").write_text("DEPTH = 0.15\n")
+    return benchmark.decision_modules(root=tmp_path)
+
+
+def test_a_subpackage_initializer_is_part_of_the_decision(tmp_path):
+    """`from .strategy.model import blend` runs `strategy/__init__.py` on the way in.
+    Fingerprinting the leaf alone leaves that file able to change the decision without
+    changing the hash that is supposed to certify it."""
+    found = _nested_tree(
+        tmp_path,
+        recommend_import="from .strategy.model import blend\n",
+        strategy_init="",
+    )
+    assert "src/pool/strategy/model.py" in found
+    assert "src/pool/strategy/__init__.py" in found
+
+
+def test_an_initializer_resolves_its_own_relative_imports(tmp_path):
+    """Inside `strategy/__init__.py`, `from . import weights` means `strategy.weights`.
+    Resolving it the way a plain module's relative import resolves points at the package
+    root, finds nothing, and silently drops executable code from the closure."""
+    found = _nested_tree(
+        tmp_path,
+        recommend_import="from . import strategy\n",
+        strategy_init="from . import weights\n",
+    )
+    assert "src/pool/strategy/__init__.py" in found
+    assert "src/pool/strategy/weights.py" in found
+
+
+def test_a_subpackage_the_decision_path_never_reaches_stays_out(tmp_path):
+    """The closure is only worth narrowing if it still excludes what it should."""
+    found = _nested_tree(
+        tmp_path,
+        recommend_import="from . import config\n",
+        strategy_init="from . import weights\n",
+    )
+    assert not [p for p in found if "strategy" in p]
+
+
 def test_a_module_the_decision_does_not_depend_on_does_not_refuse_it(tmp_path):
     """The fingerprint the checks enforce covers what a decision is a function of. A
     leaderboard or an ingestion command changes the tree and changes nothing the
