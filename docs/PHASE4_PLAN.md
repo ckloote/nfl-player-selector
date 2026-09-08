@@ -20,18 +20,28 @@ most of this document is about why that one cannot be judged the way the first t
 
 You cannot fit or test an opponent model without opponent data, and you cannot compute a
 win probability without an opponent model. Stage 3 is therefore gated on stage 1 by
-substance, not by scheduling. Worse, the data only accumulates forward: whatever the pool
-publishes this week is the only record of this week. **If historical picks are not
-retrievable, every week without ingestion is a week of evidence that cannot be recreated**
-— the one deadline in this plan, and the reason stage 1 comes first even though stage 3 is
-the interesting part.
+substance, not by scheduling.
+
+The pool reports every entrant's picks once a week has resolved, so history is delivered
+rather than queried. Two things follow. **Keep every weekly report from the first one**,
+whether or not ingestion is built yet: a report that arrives and is discarded is a week of
+evidence gone, and that is the only deadline in this plan. And the first report cannot land
+until week 1 has been played, which is the runway — stage 1 has a week to be built
+properly rather than a Wednesday.
+
+The delivery also fixes what stage 3 is allowed to know. Picks arrive *after* the week
+resolves, so at a decision you have every entrant's standings and remaining pool through
+week N-1 and nobody's pick for week N. Everything needed to know where you stand is
+therefore reliably in hand, and the current week's opposition is never observable — it can
+only be predicted.
 
 ## Stage 1 — Opponent Ingestion
 
-**Open question, and the first thing to settle: what does the pool actually publish?**
-Everything below assumes picks are retrievable per entrant per week. Whether history is
-available or only the current week changes the urgency, not the design. Nobody should
-write code before this is answered.
+**What the pool provides:** every entrant's picks for a week, reported once that week has
+resolved. Per entrant, per week, complete — which is what the design below assumed, so the
+shape stands. The remaining unknown is only the delivery format, and that decides the
+`fetch_` and `transform_` pair, not the schema or the staging; the schema can be built
+before the first report arrives.
 
 **Storage.** New tables `pool_entrants` and `pool_picks`, additive, mirroring `my_picks`
 in shape so the scoring seam is shared. Raw observations go into the **existing**
@@ -39,7 +49,7 @@ in shape so the scoring seam is shared. Raw observations go into the **existing*
 addressed, provenance for free.
 
 Deliberately **not** registered in `snapshots.TABLES` or `freshness.FEEDS`.
-`capture.observed_inputs` iterates `TABLES` explicitly (`capture.py:120`) and
+`capture.observed_inputs` iterates `TABLES` explicitly (`capture.py:121`) and
 `snapshots.restore` does the same, so an unregistered feed is invisible to the decision
 record and to replay — which is right, because opponent picks are not a projection input
 and have no business being restored into a projection rebuild. It also keeps
@@ -72,6 +82,10 @@ not lose:
 - **Each entrant has their own used pool.** One player per entrant per season. This is not
   presentation — stage 3 needs to know what each opponent can still pick, and it is the
   only place that state will exist.
+- **Everyone is compared as of the same week.** Entrant picks arrive only for resolved
+  weeks, while `my_picks` may already hold the current one. Ranking my in-progress week
+  against their settled totals would invent a lead or a deficit; the standings are stated
+  as of the last resolved week, and anything of mine beyond it is shown separately.
 - **Ties are real.** The pool has a tie rule; the leaderboard must implement whatever it
   is rather than sorting and hoping.
 
@@ -100,10 +114,17 @@ repo already states: one sampled outcome per player-week is shared by every entr
 picked that player, and within-game correlation is represented rather than assumed away.
 Independently useful — it turns every projection into a distribution instead of a point.
 
-**An opponent model.** What will each rival pick in weeks not yet played? The defensible
+**An opponent model.** What will each rival pick in weeks not yet played? This is
+required, not a convenience: the pool reports picks only after a week resolves, so the
+current week's opposition is never observable at the moment you choose. The defensible
 baseline is greedy-from-remaining-pool on projected touchdowns, which is also what this
-tool's own `greedy` policy does. Stage 1's data is what makes it checkable: does the model
-predict the picks that were actually made?
+tool's own `greedy` policy does, run against the remaining pool stage 2 already tracks.
+
+The reporting cadence also hands it a clean validation loop, which is the one place this
+stage gets to be empirical: predict every entrant's week-N pick before the week, read the
+report after it resolves, and score the prediction. That accrues an observation per
+entrant per week rather than one per season, and it is checkable from the first report
+onward, long before any policy is built on top of it.
 
 **A policy.** The search space is far too large to enumerate, so the tractable form is a
 one-step lookahead: hold the expected-TD plan for the rest of the season, vary only this

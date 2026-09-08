@@ -304,8 +304,11 @@ beside the expected-TD advice rather than replacing it. Simulations must share o
 player-week outcome across every entrant selecting that player, with relevant player
 correlations, ties, uncertainty about opponent choices and future policy updates.
 
-The one deadline is that opponent data accumulates forward only: if the pool does not
-publish history, every un-ingested week is unrecoverable.
+The pool reports every entrant's picks once a week has resolved, so standings and every
+rival's remaining pool are reliably in hand before the next picks are due, and the current
+week's opposition is never observable — it can only be predicted. The one deadline is to
+keep every weekly report from the first one, ingested or not: a report discarded is a week
+of evidence gone.
 
 A local dashboard, deadline reminders and additional input providers remain optional. The
 projection-frame interface and assignment solver continue to support expected-TD planning;
