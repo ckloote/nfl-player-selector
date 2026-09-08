@@ -289,14 +289,29 @@ ablations, exhausted input information from this model set, or validated tails/i
 from pooled Poisson fits. Those questions remain open. Leaderboard tails, joint outcomes,
 opponent modeling and win-probability optimization belong to later work, not Phase 3.
 
-## Later — leaderboard strategy and optional interface work
+## Phase 4 — Opponents, standings and winning
 
-Start with official opponent-report ingestion, opponent picks and standings. Simulations must
-share one sampled player-week outcome across every entrant selecting that player, with relevant
-player correlations, ties, uncertainty about opponent choices and future policy updates.
-Validate conditional tails and simulation behavior before treating a simulated win-probability
-gain as an established advantage. Repeated decisions within a week are beyond Phase 2 replay.
+**Planned 2026-09-07; nothing built.** The full plan is in
+[PHASE4_PLAN.md](PHASE4_PLAN.md). Three stages in the order their dependencies force:
+opponent-pick ingestion, then standings, then deciding by the chance of finishing first
+rather than by expected touchdowns.
+
+The first two are ordinary feature work. The third changes what the tool optimises and
+cannot be validated the way the first two can: a season is one Bernoulli trial, and
+seasons before ingestion have no opponent picks to replay against. It is therefore judged
+on simulator calibration, opponent-model fit and a *simulated* advantage, and it ships
+beside the expected-TD advice rather than replacing it. Simulations must share one sampled
+player-week outcome across every entrant selecting that player, with relevant player
+correlations, ties, uncertainty about opponent choices and future policy updates.
+
+The pool reports every entrant's picks once a week has resolved, so standings and every
+rival's remaining pool are reliably in hand before the next picks are due, and the current
+week's opposition is never observable — it can only be predicted. The one deadline is to
+keep every weekly report from the first one, ingested or not: a report discarded is a week
+of evidence gone.
 
 A local dashboard, deadline reminders and additional input providers remain optional. The
 projection-frame interface and assignment solver continue to support expected-TD planning;
-fixed-matrix optimality does not establish a rolling-policy advantage over greedy.
+fixed-matrix optimality does not establish a rolling-policy advantage over greedy, and the
+assignment solver cannot express a win-probability objective at all — it maximises a
+separable sum.
