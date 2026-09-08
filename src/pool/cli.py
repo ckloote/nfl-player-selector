@@ -1198,6 +1198,8 @@ def verify_capture(
         raise typer.Exit(1)
     t = Table("Decision", "Week", "Event", "Reconstructs", "Parity", "Detail")
     failed = 0
+    overridden = 0
+    tolerated = 0
     for row in found.itertuples():
         rebuilt = prospective.reconstruction(
             conn, row.decision_id, allow_code_drift=allow_code_drift
@@ -1206,6 +1208,23 @@ def verify_capture(
         ok = rebuilt["ok"] and matched["ok"]
         failed += not ok
         notes = [n for n in (rebuilt.get("reason"), matched.get("reason")) if n]
+        # Drift outside the enforced fingerprint is accepted by design, and saying nothing
+        # about it would leave a verified row indistinguishable from one where the tree had
+        # moved -- reported by the very code the fingerprint does not cover.
+        #
+        # The override is checked first because it is the case the notice must never be
+        # confused with: under `--allow-code-drift` the enforced fingerprint itself can have
+        # moved, and calling that "outside the decision path" would assert the opposite of
+        # what happened. Testing it first also settles a legacy whole-tree capture, whose
+        # two flags always move together and for which "outside" means nothing.
+        drift = rebuilt.get("drift") or {}
+        if ok and drift.get("code_hash_changed"):
+            overridden += 1
+            scope = drift.get("fingerprint_scope") or "enforced"
+            notes.append(f"[red]{scope} fingerprint moved; accepted by override[/red]")
+        elif ok and drift.get("whole_tree_changed"):
+            tolerated += 1
+            notes.append("[yellow]source outside the decision path moved (accepted)[/yellow]")
         t.add_row(
             row.decision_id[:12],
             str(row.week),
@@ -1215,6 +1234,20 @@ def verify_capture(
             "; ".join(notes) or "-",
         )
     console.print(t)
+    # Before the verdict, not after it: an override is worth reporting on a run that ends
+    # in failure too, and neither notice changes the exit code.
+    if overridden:
+        console.print(
+            f"[red]{overridden} passed only because the fingerprint check was overridden. "
+            "The source these checks enforce had moved and they were accepted anyway.[/red]"
+        )
+    if tolerated:
+        console.print(
+            f"[yellow]{tolerated} verified against a source tree that moved outside the "
+            "decision path, with the enforced fingerprint unchanged. That fingerprint covers "
+            "what a decision is a function of; the whole-tree hash is recorded beside it."
+            "[/yellow]"
+        )
     if failed:
         console.print(f"[red]{failed} of {len(found)} captured decisions did not verify.[/red]")
         raise typer.Exit(1)

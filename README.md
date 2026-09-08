@@ -14,7 +14,8 @@ appetite change with your position on the leaderboard?
 - [`docs/EVALUATION.md`](docs/EVALUATION.md) - generated season scores, forecast diagnostics, methods and provenance
 - [`docs/ANALYSIS.md`](docs/ANALYSIS.md) - dated, authored interpretation and research limits; not refreshed by reruns
 - [`docs/PHASE3B_OUTCOME.md`](docs/PHASE3B_OUTCOME.md) - completed calibration experiment: no candidate promoted, rationale and next step
-- [`docs/PHASE3C_PROTOCOL.md`](docs/PHASE3C_PROTOCOL.md) - dated prospective baseline protocol: window, decision events, parity criteria and floors, fixed before collection
+- [`docs/PHASE3C_PROTOCOL.md`](docs/PHASE3C_PROTOCOL.md) - dated prospective baseline protocol: window, decision events, parity criteria and floors, written but never run
+- [`docs/PHASE3C_OUTCOME.md`](docs/PHASE3C_OUTCOME.md) - the decision to close that window without collecting, and what it gives up
 - [`docs/REVIEW.md`](docs/REVIEW.md) — September 2026 review: open defects, validation limitations, and recommended priorities
 
 ## Status
@@ -26,11 +27,13 @@ The [Phase 3B report](experiments/results/phase3-calibration/CALIBRATION.md) cov
 2016-2025 walk-forward calibration experiment. Position-specific log-affine maps improved
 forecast accuracy, but no candidate passed all signed forecast and policy gates. The
 [authored outcome](docs/PHASE3B_OUTCOME.md) is no promotion; production remains unchanged.
-Phase 3C follows as identity-only prospective collection, not a calibrated deployment or
-another tuning sweep. Its [protocol](docs/PHASE3C_PROTOCOL.md) is dated 2026-09-07 and
-frozen before the first captured decision; collection covers 2026 weeks 1-6 with two
-decision events a week, and the review is baseline readiness only.
-Leaderboard strategy comes later.
+Phase 3C was declared as identity-only prospective collection and then
+[closed without collecting](docs/PHASE3C_OUTCOME.md): its [protocol](docs/PHASE3C_PROTOCOL.md)
+stands as written and unrun, no decision was ever captured under it, and no floor was
+measured. The window required a source freeze for its duration, which the season's own
+work — opponent ingestion, standings, a win-probability objective — could not accommodate.
+The replay assumption it would have checked is still open, and a single captured decision
+verified the same day settles it whenever that is worth doing.
 
 The [evaluation report](docs/EVALUATION.md) combines actual season scores from each model's
 greedy and optimizer pick history with ranking and calibration diagnostics. Its
@@ -167,12 +170,11 @@ uv run pool record --decision <id> --qb "Herbert"    # only the slots you are co
   keeps the history — the earlier entry is reported as withdrawn or superseded and the
   population counts only the pick that still stands.
 
-Two of a week's waves are the events the [3C protocol](docs/PHASE3C_PROTOCOL.md) requires:
-`thursday_deadline`, before the week's first kickoff, and `sunday_slate`, before the main
-slate. Missing either fails `min_event_capture_rate`, and a missed event cannot be
-recreated. Decisions at the other waves are welcome and are classified by the deadline they
-beat rather than as late picks, but they are reported with `scheduled = 0` — described, not
-demanded.
+No protocol governs this cadence any more — [3C is closed](docs/PHASE3C_OUTCOME.md) and
+no capture is required at any wave. Capturing anyway costs nothing and keeps the option:
+`pool captures` lists what you have and `pool verify-capture` checks it, and because the
+enforced source fingerprint now covers only the decision path, an unrelated feature no
+longer makes yesterday's captures unverifiable.
 
 ```bash
 uv run pool captures --season 2026 --week 1          # captured decisions, or one in full
@@ -187,10 +189,14 @@ rebuild runs under the constants the decision recorded, so a setting that has mo
 is not reported as a live/archive divergence. The archive is written by `refresh`, so a
 decision made without one cannot be verified and is reported as unverified rather than
 skipped; a window with no captures at all exits nonzero, because nothing verified is not
-verification. `baseline` describes the captures under the
-dated [3C protocol](experiments/phase3c-baseline.toml), which declares the window, the
-decision events, the populations and the floors before any decision is captured; a missing
-floor blocks the export. It promotes nothing and changes nothing.
+verification. The fingerprint it compares covers what a decision is a function of — the
+import closure of `recommend`, `projections` and `snapshots`, plus `uv.lock` — and not the
+whole tree; the whole-tree hash is still recorded beside it, so drift stays visible without
+an unrelated module invalidating a capture it could not have changed. `baseline` describes
+the captures under the dated [3C protocol](experiments/phase3c-baseline.toml), which
+declares the window, the decision events, the populations and the floors; a missing floor
+blocks the export. That window was closed without being run, and the command is kept
+against a future one. It promotes nothing and changes nothing.
 
 Scoring counts every touchdown thrown or scored, including returns and recoveries.
 The importer uses nflverse's explicit scorer identifier and separately credits the

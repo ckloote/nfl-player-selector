@@ -391,12 +391,26 @@ def reconstruction(
     written down, and no later diagnostic over that surface describes the decision that
     was actually made.
     """
+    # Read before rebuilding, so a decision the fingerprint refuses still reports what
+    # moved. Taking it from the rebuild's own return would leave the failing case -- the
+    # one an operator most needs described -- with no drift record at all.
     try:
-        _frame, advice, recorded, drift = capture.reconstruct(
+        payload = capture.recorded_identity(conn, decision_id)
+        drift = dict(
+            capture.fingerprint_drift(payload),
+            constants_changed=capture.constants_drift(payload.get("constants", {})),
+        )
+    except (ValueError, KeyError):
+        drift = {}
+    try:
+        _frame, advice, recorded, rebuilt_drift = capture.reconstruct(
             conn, decision_id, allow_code_drift=allow_code_drift
         )
     except ValueError as exc:
-        return dict(decision_id=decision_id, ok=False, reason=str(exc), slots={})
+        return dict(decision_id=decision_id, ok=False, reason=str(exc), slots={}, drift=drift)
+    # The rebuild's own record where there is one; the pre-computed stands in only on the
+    # failure path, and carries the same keys so a reader never has to ask which produced it.
+    drift = rebuilt_drift
     derived = _advice_details(advice)
     slots = {slot: derived.get(slot) == recorded.get(slot) for slot in set(derived) | set(recorded)}
     return dict(
@@ -498,8 +512,12 @@ def parity(
         identity_payload = capture.recorded_identity(conn, decision_id)
     except ValueError as exc:
         return dict(unchecked, reason=str(exc))
-    code_hash, _, _ = capture._code_identity()
-    code_ok = allow_code_drift or identity_payload.get("code_hash") == code_hash
+    # The decision-scoped fingerprint, not the whole tree: parity rebuilds the surface
+    # from `projections` and `snapshots`, and a module outside that closure cannot have
+    # moved it.
+    code_ok = (
+        allow_code_drift or not capture.fingerprint_drift(identity_payload)["code_hash_changed"]
+    )
     advice_reason = (
         None if code_ok else "source tree differs from the one the decision was captured under"
     )
@@ -986,12 +1004,21 @@ def fidelity(conn: sqlite3.Connection, spec: dict, *, allow_code_drift: bool = F
     for row in captured.itertuples():
         rebuilt = reconstruction(conn, row.decision_id, allow_code_drift=allow_code_drift)
         matched = parity(conn, row.decision_id, spec, allow_code_drift=allow_code_drift)
+        # What was compared, and what moved outside it. The narrow fingerprint is the one
+        # the floors are read against, so a table that named neither would leave a reader
+        # unable to tell a clean window from one where the tree moved and was tolerated.
+        drift = rebuilt.get("drift") or {}
         rows.append(
             dict(
                 decision_id=row.decision_id,
                 week=int(row.week),
                 event=row.event,
                 decision_at=row.decision_at,
+                fingerprint_scope=drift.get("fingerprint_scope"),
+                fingerprint_changed=drift.get("code_hash_changed"),
+                recorded_fingerprint=drift.get("recorded_code_hash"),
+                current_fingerprint=drift.get("current_code_hash"),
+                whole_tree_changed=drift.get("whole_tree_changed"),
                 reconstructs=bool(rebuilt["ok"]),
                 reconstruction_reason=rebuilt.get("reason"),
                 parity=bool(matched["ok"]),
@@ -1061,7 +1088,15 @@ def provenance(conn: sqlite3.Connection, spec: dict) -> dict:
                 identity_hash=digest,
                 model=payload.get("model"),
                 calibrator=payload.get("calibrator"),
+                # Both, and which one the checks enforce. `code_hash` covers the whole
+                # tree and is recorded so drift stays visible; `decision_hash` covers what
+                # a decision is a function of and is what reconstruction and parity
+                # compare. A capture predating the narrowing carries only the first.
                 code_hash=payload.get("code_hash"),
+                decision_hash=payload.get("decision_hash"),
+                enforced_fingerprint=(
+                    "decision path" if "decision_hash" in payload else "whole tree"
+                ),
                 revision=payload.get("revision"),
                 dirty=payload.get("dirty"),
                 # The planning quantity is derived under this, so it is part of what
@@ -1174,6 +1209,35 @@ def baseline_note(
         "be checked: a decision whose archive was never written cannot be verified, and an "
         "unverifiable decision is not a verified one.",
         "",
+    ]
+    # Verified means both checks passed. Reconstruction alone is not verification: a
+    # decision whose archive was never written re-derives its advice from its own stored
+    # surface and still fails parity, and describing it as verified would contradict the
+    # table printed directly above.
+    overridden = tolerated = 0
+    if {"fingerprint_changed", "whole_tree_changed"} <= set(checks.columns):
+        verified = checks.reconstructs.astype(bool) & checks.parity.astype(bool)
+        moved = checks.fingerprint_changed.fillna(False).astype(bool)
+        outside = checks.whole_tree_changed.fillna(False).astype(bool)
+        overridden = int((verified & moved).sum())
+        tolerated = int((verified & ~moved & outside).sum())
+    if overridden:
+        lines += [
+            f"{overridden:,} of these decisions passed only because the fingerprint check "
+            "was overridden: the source the checks enforce had moved and they were accepted "
+            "anyway. That is a deliberate override and not the narrow fingerprint doing its "
+            "job, and no floor reading over it describes decisions this code would produce.",
+            "",
+        ]
+    if tolerated:
+        lines += [
+            f"{tolerated:,} verified against a source tree that had moved outside the "
+            "decision path, with the enforced fingerprint unchanged. That fingerprint covers "
+            "what a decision is a function of, so a module it cannot reach was recorded "
+            "rather than counted against it; `decisions.csv` names both per decision.",
+            "",
+        ]
+    lines += [
         "### Outcome coverage",
         "",
     ]

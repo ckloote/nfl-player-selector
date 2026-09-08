@@ -2,8 +2,11 @@
 
 **Specification date:** 2026-09-07 (UTC).
 
-**Status:** amended 2026-09-07 (UTC), after the first sign-off and before any decision was
-captured. **The amendment awaits owner sign-off.**
+**Status: closed without collection, 2026-09-07 (UTC).** No decision was ever captured
+under this protocol and no floor was measured. See the
+[outcome](PHASE3C_OUTCOME.md) for the decision and what it gives up. Everything below is
+kept as written — it resolves, it is tested, and it is the specification to start from if
+this window is ever re-declared against a new date. Nothing in it was run.
 
 **Decision maker:** project owner, before the 2026 week 1 pick deadline.
 
@@ -18,6 +21,9 @@ reported as an outcome rather than adjusted away.
 **Signed 2026-09-07** on [PR #6](https://github.com/ckloote/nfl-player-selector/pull/6) at
 commit `48a9f3303110a659d38dca735644bdf905b0cd05`, covering specification
 `958118e635d5b2718a10dbe0846335e0e39306a4445a23386fb370656fa474ab`.
+
+**Closed 2026-09-07** without collection, before the first captured decision. The
+amendment below was never signed, and the window it describes was never opened.
 
 **Amended 2026-09-07**, the same day, before the first captured decision. The declared
 schedule named two decision events per week, but every week of this window has three
