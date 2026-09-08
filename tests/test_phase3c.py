@@ -382,16 +382,14 @@ def test_drift_outside_the_decision_path_is_reported_and_still_verifies(tmp_path
     _publish(conn, unplayed, "rest")
     spec = prospective.resolve(_protocol(tmp_path))
 
-    _code, decision_hash, revision, dirty = capture._code_identity()
-    capture._code_identity.cache_clear()
-    moved = ("a module outside the closure moved", decision_hash, revision, dirty)
-    monkeypatch.setattr(capture, "_code_identity", lambda: moved)
+    decision_hash = _moved(monkeypatch, decision_hash=None)  # only the whole tree moved
 
     checks, _events, rates = prospective.fidelity(conn, spec)
     row = checks.iloc[0]
     assert row.reconstructs and row.parity  # the decision is a function of what did not move
     assert row.whole_tree_changed and row.fingerprint_scope == "decision path"
     assert row.recorded_fingerprint == row.current_fingerprint == decision_hash
+    assert not row.fingerprint_changed  # the enforced fingerprint held
     assert rates[rates.measure.eq("reconstruction")].iloc[0].rate == 1.0
 
     out = prospective.export(conn, spec, tmp_path / "drift", log=lambda _x: None)
@@ -402,7 +400,8 @@ def test_drift_outside_the_decision_path_is_reported_and_still_verifies(tmp_path
     identity = identity["collection_provenance"]["decision_identities"][0]
     assert identity["decision_hash"] == decision_hash
     assert identity["enforced_fingerprint"] == "decision path"
-    assert identity["code_hash"] != moved[0]  # what was recorded, not what is running now
+    # What the decision recorded, not what is running now.
+    assert identity["code_hash"] != capture._code_identity()[0]
 
     conn.commit()
     conn.close()
@@ -411,6 +410,86 @@ def test_drift_outside_the_decision_path_is_reported_and_still_verifies(tmp_path
     )
     assert result.exit_code == 0, result.output
     assert "outside the decision path" in result.output
+
+
+def _moved(monkeypatch, decision_hash):
+    """Pretend the source moved, holding the enforced fingerprint at `decision_hash`."""
+    _code, real, revision, dirty = capture._code_identity()
+    capture._code_identity.cache_clear()
+    fake = ("a module outside the closure moved", decision_hash or real, revision, dirty)
+    monkeypatch.setattr(capture, "_code_identity", lambda: fake)
+    return real
+
+
+def test_an_overridden_fingerprint_is_not_reported_as_harmless_drift(tmp_path, monkeypatch):
+    """`--allow-code-drift` lets a decision pass with the enforced fingerprint moved. That
+    is an override, not the narrow fingerprint doing its job, and reporting it as code
+    moving outside the decision path asserts the opposite of what happened."""
+    conn, unplayed = _archived(tmp_path)
+    _decide(conn, 3, datetime.fromisoformat(DECISION))
+    _publish(conn, unplayed, "rest")
+    spec = prospective.resolve(_protocol(tmp_path))
+    _moved(monkeypatch, decision_hash="the decision path moved too")
+
+    checks, _events, _rates = prospective.fidelity(conn, spec, allow_code_drift=True)
+    row = checks.iloc[0]
+    assert row.reconstructs and row.parity  # accepted, but only by the override
+    assert row.fingerprint_changed and row.whole_tree_changed
+    out = prospective.export(
+        conn, spec, tmp_path / "override", allow_code_drift=True, log=lambda _x: None
+    )
+    note = (out / "BASELINE.md").read_text()
+    assert "fingerprint check was overridden" in note
+    assert "moved outside the decision path" not in note
+
+    conn.commit()
+    conn.close()
+    result = CliRunner().invoke(
+        app,
+        [
+            "verify-capture",
+            "--season",
+            str(SEASON),
+            "--db",
+            str(tmp_path / "parity.db"),
+            "--allow-code-drift",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "overridden" in result.output
+    assert "outside the decision path" not in result.output
+
+
+def test_a_decision_that_failed_parity_is_not_called_verified(tmp_path, monkeypatch):
+    """Reconstruction alone is not verification. A decision whose archive was never
+    written re-derives its advice from its own stored surface and still fails parity, and
+    counting it as verified would contradict the table printed directly above it."""
+    conn, _ = _staged(tmp_path)  # nothing archived, so there is nothing to replay against
+    _decide(conn, 3, datetime.fromisoformat(DECISION))
+    spec = prospective.resolve(_protocol(tmp_path))
+    _moved(monkeypatch, decision_hash=None)  # only the whole tree moved
+
+    checks, _events, _rates = prospective.fidelity(conn, spec)
+    row = checks.iloc[0]
+    assert row.reconstructs and not row.parity and row.whole_tree_changed
+    out = prospective.export(conn, spec, tmp_path / "unverified", log=lambda _x: None)
+    assert "moved outside the decision path" not in (out / "BASELINE.md").read_text()
+    exported = pd.read_csv(out / "decisions.csv").iloc[0]
+    assert bool(exported.whole_tree_changed) and not bool(exported.fingerprint_changed)
+
+
+def test_the_reconstruction_wrapper_keeps_the_constants_diagnostic(tmp_path):
+    """The drift record said which settings had moved before the fingerprint work wrapped
+    it. Returning only the fingerprint comparison drops that silently, and a diagnostic
+    nothing reads yet is exactly the kind that rots unnoticed."""
+    conn, _ = _archived(tmp_path)
+    decision_id, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    assert prospective.reconstruction(conn, decision_id)["drift"]["constants_changed"] == {}
+
+    with config.override(HOME_MULT=config.HOME_MULT + 0.5):
+        drift = prospective.reconstruction(conn, decision_id)["drift"]
+    assert "HOME_MULT" in drift["constants_changed"]
+    assert not drift["code_hash_changed"]  # a constant moving is not the source moving
 
 
 # --- submissions attach to the decision they came from ---------------------

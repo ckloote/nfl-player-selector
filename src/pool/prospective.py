@@ -395,15 +395,22 @@ def reconstruction(
     # moved. Taking it from the rebuild's own return would leave the failing case -- the
     # one an operator most needs described -- with no drift record at all.
     try:
-        drift = capture.fingerprint_drift(capture.recorded_identity(conn, decision_id))
+        payload = capture.recorded_identity(conn, decision_id)
+        drift = dict(
+            capture.fingerprint_drift(payload),
+            constants_changed=capture.constants_drift(payload.get("constants", {})),
+        )
     except (ValueError, KeyError):
         drift = {}
     try:
-        _frame, advice, recorded, _rebuilt = capture.reconstruct(
+        _frame, advice, recorded, rebuilt_drift = capture.reconstruct(
             conn, decision_id, allow_code_drift=allow_code_drift
         )
     except ValueError as exc:
         return dict(decision_id=decision_id, ok=False, reason=str(exc), slots={}, drift=drift)
+    # The rebuild's own record where there is one; the pre-computed stands in only on the
+    # failure path, and carries the same keys so a reader never has to ask which produced it.
+    drift = rebuilt_drift
     derived = _advice_details(advice)
     slots = {slot: derived.get(slot) == recorded.get(slot) for slot in set(derived) | set(recorded)}
     return dict(
@@ -1008,6 +1015,7 @@ def fidelity(conn: sqlite3.Connection, spec: dict, *, allow_code_drift: bool = F
                 event=row.event,
                 decision_at=row.decision_at,
                 fingerprint_scope=drift.get("fingerprint_scope"),
+                fingerprint_changed=drift.get("code_hash_changed"),
                 recorded_fingerprint=drift.get("recorded_code_hash"),
                 current_fingerprint=drift.get("current_code_hash"),
                 whole_tree_changed=drift.get("whole_tree_changed"),
@@ -1202,17 +1210,31 @@ def baseline_note(
         "unverifiable decision is not a verified one.",
         "",
     ]
-    tolerated = (
-        checks[checks.whole_tree_changed.fillna(False).astype(bool) & checks.reconstructs]
-        if "whole_tree_changed" in checks
-        else checks.iloc[:0]
-    )
-    if len(tolerated):
+    # Verified means both checks passed. Reconstruction alone is not verification: a
+    # decision whose archive was never written re-derives its advice from its own stored
+    # surface and still fails parity, and describing it as verified would contradict the
+    # table printed directly above.
+    overridden = tolerated = 0
+    if {"fingerprint_changed", "whole_tree_changed"} <= set(checks.columns):
+        verified = checks.reconstructs.astype(bool) & checks.parity.astype(bool)
+        moved = checks.fingerprint_changed.fillna(False).astype(bool)
+        outside = checks.whole_tree_changed.fillna(False).astype(bool)
+        overridden = int((verified & moved).sum())
+        tolerated = int((verified & ~moved & outside).sum())
+    if overridden:
         lines += [
-            f"{len(tolerated):,} of these decisions verified against a source tree that had "
-            "moved outside the decision path. The enforced fingerprint covers what a "
-            "decision is a function of, so a module it cannot reach was recorded rather "
-            "than counted against it; `decisions.csv` names both fingerprints per decision.",
+            f"{overridden:,} of these decisions passed only because the fingerprint check "
+            "was overridden: the source the checks enforce had moved and they were accepted "
+            "anyway. That is a deliberate override and not the narrow fingerprint doing its "
+            "job, and no floor reading over it describes decisions this code would produce.",
+            "",
+        ]
+    if tolerated:
+        lines += [
+            f"{tolerated:,} verified against a source tree that had moved outside the "
+            "decision path, with the enforced fingerprint unchanged. That fingerprint covers "
+            "what a decision is a function of, so a module it cannot reach was recorded "
+            "rather than counted against it; `decisions.csv` names both per decision.",
             "",
         ]
     lines += [
