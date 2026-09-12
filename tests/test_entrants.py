@@ -6,8 +6,10 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from typer.testing import CliRunner
 
 from pool import capture, config, db, entrants, freshness, snapshots
+from pool.cli import app
 
 REFERENCE = Path(__file__).parent / "fixtures" / "pool_report.csv"
 
@@ -415,3 +417,122 @@ def test_missing_schedule_is_archived_before_validation(tmp_path):
         assert count(conn, "input_observations") == 1 and count(conn, "pool_picks") == 0
     finally:
         conn.close()
+
+
+@pytest.fixture
+def report_cli(report_db, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "240")
+    path = report_db.execute("PRAGMA database_list").fetchone()[2]
+
+    def invoke(*args):
+        return CliRunner().invoke(app, [*args, "--season", "2026", "--db", path])
+
+    return invoke
+
+
+def test_cli_import_list_and_reported_standings(report_cli, report_db, tmp_path):
+    result = report_cli("report", "import", str(REFERENCE))
+    assert result.exit_code == 0, result.output
+    assert "observation 1" in result.output and "2 entrants, 6 picks" in result.output
+    listing = report_cli("report", "list")
+    assert listing.exit_code == 0 and "imported" in listing.output
+    assert "pool_report.csv" in listing.output
+    standings = report_cli("standings")
+    assert standings.exit_code == 0 and "as of week 1" in standings.output
+    assert "Reported total TDs" in standings.output and "Quarter One" in standings.output
+    assert "Chris K." in standings.output and "Pat" in standings.output
+    assert "computed" not in standings.output.lower()
+    frame = entrants.parse_csv(REFERENCE.read_bytes()).assign(week=2)
+    frame.loc[frame.entrant.eq("Pat"), "reported_total"] = "12"
+    frame.loc[frame.entrant.eq("Chris K."), "reported_total"] = "13"
+    path = tmp_path / "week2.csv"
+    path.write_text(frame.to_csv(index=False))
+    imported = report_cli("report", "import", str(path))
+    assert imported.exit_code == 0 and "games complete" in imported.output
+    assert "as of week 2" in report_cli("standings").output
+    assert "as of week 1" in report_cli("standings", "--week", "1").output
+    assert len(entrants.reported_totals(report_db, 2026)) == 4
+
+
+@pytest.mark.parametrize(
+    "raw, extra, message, written",
+    [
+        (b"not a report", [], "missing required columns", False),
+        (REFERENCE.read_bytes(), ["--format", "pdf"], "Unknown report format", False),
+        (REFERENCE.read_bytes(), ["--week", "2"], "disagrees", False),
+        (REFERENCE.read_bytes().replace(b"1,", b"19,"), ["--week", "19"], "outside", False),
+        (REFERENCE.read_bytes().replace(b"Quarter One", b"Mystery Player"), [], "no match", True),
+        (REFERENCE.read_bytes().replace(b"Quarter One", b"Quarter"), [], "ambiguous", True),
+    ],
+)
+def test_cli_nonzero_failures_keep_archive(
+    report_cli, report_db, tmp_path, raw, extra, message, written
+):
+    path = tmp_path / "delivered.csv"
+    path.write_bytes(raw)
+    result = report_cli("report", "import", str(path), "--week", "1", *extra)
+    assert result.exit_code == 1 and message in result.output
+    assert "observation 1" in result.output
+    assert count(report_db, "input_observations") == 1
+    assert count(report_db, "pool_picks") == (6 if written else 0)
+    assert "review needed" in report_cli("report", "list").output
+    if message == "ambiguous":
+        assert "Quarter One" in result.output and "Quarter Two" in result.output
+    if message == "no match":
+        assert "Mystery Player" in result.output
+        assert "(unresolved)" in report_cli("standings").output
+
+
+def test_cli_check_does_not_change_standings_or_entrant_identity(report_cli, report_db, tmp_path):
+    assert report_cli("report", "import", str(REFERENCE)).exit_code == 0
+    path = tmp_path / "week2.csv"
+    path.write_text(entrants.parse_csv(REFERENCE.read_bytes()).assign(week=2).to_csv(index=False))
+    checked = report_cli("report", "import", str(path), "--check", "--me", "Chris K.")
+    assert checked.exit_code == 1 and "Check only" in checked.output
+    assert "my_picks mismatch" in checked.output
+    assert count(report_db, "input_observations") == 2
+    assert count(report_db, "pool_picks") == 6
+    assert report_db.execute("SELECT SUM(is_me) FROM pool_entrants").fetchone()[0] == 0
+    assert "as of week 1" in report_cli("standings").output
+    assert "check" in report_cli("report", "list").output
+
+
+def test_cli_roster_acknowledgement_and_my_pick_comparison(report_cli, report_db, tmp_path):
+    result = report_cli("report", "import", str(REFERENCE), "--me", "Chris K.")
+    assert result.exit_code == 1 and "my_picks mismatch" in result.output
+    assert "(me)" in report_cli("standings").output
+    assert count(report_db, "my_picks") == 0
+    path = tmp_path / "renamed.csv"
+    path.write_bytes(REFERENCE.read_bytes().replace(b"Pat", b"Robin"))
+    rejected = report_cli("report", "import", str(path))
+    assert rejected.exit_code == 1 and "Added: robin" in rejected.output
+    assert "Removed: pat" in rejected.output and "--allow-roster-change" in rejected.output
+    # Matching recorded picks remove the independent self-comparison failure.
+    with report_db:
+        report_db.execute(
+            "INSERT INTO my_picks(season, week, slot, player_id, player_name, recorded_at) "
+            "SELECT season, week, slot, player_id, player_name, '2026-09-10T00:00:00Z' "
+            "FROM pool_picks WHERE entrant_id = 'chris k'"
+        )
+    accepted = report_cli("report", "import", str(path), "--allow-roster-change")
+    assert accepted.exit_code == 0, accepted.output
+
+
+def test_cli_empty_reports_and_missing_path_are_clear(report_cli):
+    assert "No archived pool reports" in report_cli("report", "list").output
+    assert "No imported pool standings" in report_cli("standings").output
+    result = report_cli("report", "import", "/no/such/report.csv")
+    assert result.exit_code == 1 and "Cannot read report" in result.output
+
+
+def test_cli_check_success_and_missing_totals_remain_unknown(report_cli, report_db, tmp_path):
+    checked = report_cli("report", "import", str(REFERENCE), "--check")
+    assert checked.exit_code == 0 and "Check only" in checked.output
+    assert count(report_db, "pool_picks") == 0
+    raw = entrants.parse_csv(REFERENCE.read_bytes()).drop(columns=entrants.TOTAL_COLUMNS)
+    path = tmp_path / "no_totals.csv"
+    path.write_text(raw.to_csv(index=False))
+    assert report_cli("report", "import", str(path)).exit_code == 0
+    shown = report_cli("standings")
+    assert shown.exit_code == 0 and "— means not supplied" in shown.output
+    assert entrants.reported_totals(report_db, 2026)[entrants.TOTAL_COLUMNS].isna().all().all()

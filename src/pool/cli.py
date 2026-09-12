@@ -18,6 +18,7 @@ from . import (
     config,
     db,
     diagnostics,
+    entrants,
     freshness,
     ingest,
     models,
@@ -32,6 +33,10 @@ from .optimizer import plan_slot
 from .recommend import Candidate, SlotAdvice, advise_week
 
 app = typer.Typer(help="NFL touchdown pool decision support.", no_args_is_help=True)
+report_app = typer.Typer(
+    help="Archive and read official weekly pool reports.", no_args_is_help=True
+)
+app.add_typer(report_app, name="report")
 console = Console()
 
 SeasonOpt = typer.Option(config.DEFAULT_SEASON, "--season", "-s", help="Season year")
@@ -135,6 +140,182 @@ def _fmt_dt(dt: datetime) -> str:
 
 
 # --- commands ---------------------------------------------------------------
+@report_app.command("import")
+def report_import(
+    path: Annotated[Path, typer.Argument(help="Delivered report file")],
+    week: int | None = typer.Option(None, "--week", "-w", help="Week (default: report column)"),
+    season: int = SeasonOpt,
+    fmt: str = typer.Option("csv", "--format", help="Report format (csv)"),
+    me: str | None = typer.Option(None, "--me", help="Your entrant display name"),
+    allow_roster_change: bool = typer.Option(
+        False, "--allow-roster-change", help="Acknowledge additions or removals of entrants"
+    ),
+    check: bool = typer.Option(False, "--check", help="Archive and validate without writing picks"),
+    db_path: Path | None = DbOpt,
+):
+    """Archive the original bytes, then import a complete week of entrant picks."""
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        console.print(f"Cannot read report: {exc}", style="red", markup=False)
+        raise typer.Exit(1) from exc
+    conn = _conn(db_path)
+    try:
+        result = entrants.import_report(
+            conn,
+            season,
+            week,
+            raw,
+            fmt=fmt,
+            me=me,
+            check=check,
+            allow_roster_change=allow_roster_change,
+            source=str(path),
+        )
+    finally:
+        conn.close()
+    console.print(f"Archived report as observation {result.observation_id}: {path}", markup=False)
+    if result.parsed:
+        action = "Imported" if result.written else "Parsed"
+        console.print(
+            f"{action} {season} week {result.week}: {result.entrants} entrants, "
+            f"{result.picks} picks, {result.totals} reported totals."
+        )
+    if check:
+        console.print("Check only: no entrant, pick, or total rows written.")
+    for warning in result.warnings:
+        console.print(f"Warning: {warning}", style="yellow", markup=False)
+    for item in result.unresolved:
+        reason = "ambiguous" if item["candidates"] else "no match"
+        console.print(
+            f"Unresolved {item['entrant_id']} {item['slot']}: {item['player_name']!r} ({reason})",
+            style="yellow",
+            markup=False,
+        )
+        for candidate in item["candidates"]:
+            console.print(
+                f"  {candidate['player_name']} ({candidate['team']} {candidate['position']}; "
+                f"{candidate['player_id']})",
+                markup=False,
+            )
+    if result.added or result.removed:
+        console.print(f"Entrant changes compared with week {result.previous_week}:")
+        if result.added:
+            console.print("  Added: " + ", ".join(result.added), markup=False)
+        if result.removed:
+            console.print("  Removed: " + ", ".join(result.removed), markup=False)
+    for item in result.comparison:
+        console.print(
+            f"Warning: my_picks mismatch for {item['slot']}: "
+            f"recorded {item['recorded'] or '(missing)'}; "
+            f"reported {item['reported'] or '(missing)'}. "
+            "my_picks was not changed.",
+            style="yellow",
+            markup=False,
+        )
+    for error in result.errors:
+        console.print(error, style="red", markup=False)
+    if not result.ok:
+        raise typer.Exit(1)
+
+
+def _reported_number(value) -> str:
+    return str(int(value)) if pd.notna(value) else "—"
+
+
+@report_app.command("list")
+def report_list(season: int = SeasonOpt, db_path: Path | None = DbOpt):
+    """List every archived attempt, including checks and failed imports."""
+    conn = _conn(db_path)
+    try:
+        reports = entrants.reports(conn, season)
+    finally:
+        conn.close()
+    if reports.empty:
+        console.print(f"No archived pool reports for {season}.")
+        return
+    table = Table(
+        "Week",
+        "Observation",
+        "Observed (UTC)",
+        "Status",
+        "Entrants",
+        "Picks",
+        "Unresolved",
+        "Source",
+        title=f"Archived pool reports — {season}",
+    )
+    for row in reports.itertuples():
+        status = "imported" if row.written else "check" if row.check else "not imported"
+        if row.needs_review:
+            status += "; review needed"
+        table.add_row(
+            _reported_number(row.week),
+            str(row.observation_id),
+            row.observed_at,
+            status,
+            _reported_number(row.entrants) if row.parsed else "—",
+            _reported_number(row.picks) if row.parsed else "—",
+            _reported_number(row.unresolved) if row.parsed else "—",
+            row.source,
+        )
+    console.print(table)
+
+
+@app.command()
+def standings(
+    week: int | None = typer.Option(None, "--week", "-w", help="Week (default: latest imported)"),
+    season: int = SeasonOpt,
+    db_path: Path | None = DbOpt,
+):
+    """Show picks and standings as reported by the pool for one imported week."""
+    conn = _conn(db_path)
+    try:
+        if week is None:
+            week = conn.execute(
+                "SELECT MAX(week) FROM pool_picks WHERE season = ?", (season,)
+            ).fetchone()[0]
+        totals = entrants.reported_totals(conn, season, week)
+        picks = entrants.entrant_picks(conn, season, week)
+    finally:
+        conn.close()
+    if totals.empty:
+        suffix = f", week {week}" if week is not None else ""
+        console.print(f"No imported pool standings for {season}{suffix}.")
+        return
+    table = Table(
+        "Reported rank",
+        "Entrant",
+        *config.SLOTS,
+        "Reported week TDs",
+        "Reported total TDs",
+        title=f"Pool-reported standings — {season}, as of week {week}",
+    )
+    by_entrant = {
+        entrant: {r.slot: r for r in rows.itertuples()}
+        for entrant, rows in picks.groupby("entrant_id")
+    }
+    for row in totals.sort_values(["reported_rank", "entrant_id"], na_position="last").itertuples():
+        chosen = by_entrant.get(row.entrant_id, {})
+        names = []
+        for slot in config.SLOTS:
+            pick = chosen.get(slot)
+            names.append(
+                pick.player_name + (" (unresolved)" if pd.isna(pick.player_id) else "")
+                if pick is not None
+                else "—"
+            )
+        table.add_row(
+            _reported_number(row.reported_rank),
+            row.display_name + (" (me)" if row.is_me else ""),
+            *names,
+            _reported_number(row.reported_week),
+            _reported_number(row.reported_total),
+        )
+    console.print(table)
+    console.print("Values are reported by the pool; — means not supplied.")
+
+
 @app.command()
 def refresh(season: int = SeasonOpt, db_path: Path | None = DbOpt):
     """Pull latest stats, schedule, rosters, injuries from nflverse."""
