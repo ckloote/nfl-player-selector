@@ -291,10 +291,20 @@ opponent modeling and win-probability optimization belong to later work, not Pha
 
 ## Phase 4 — Opponents, standings and winning
 
-**Planned 2026-09-07; nothing built.** The full plan is in
+**Stage 1 implemented 2026-09-11; stages 2 and 3 remain planned.** The full plan is in
 [PHASE4_PLAN.md](PHASE4_PLAN.md). Three stages in the order their dependencies force:
 opponent-pick ingestion, then standings, then deciding by the chance of finishing first
 rather than by expected touchdowns.
+
+[Stage 1](PHASE4_STAGE1_PLAN.md) adds the entrant, pick, and reported-total tables in
+migration 4; raw report bytes are committed before parsing, with one immutable observation
+per attempt and content-addressed payload deduplication. Separate `meta` entries hold
+parse outcomes, joined by observation id. `pool report import`, `pool report list`, and
+`pool standings` support re-imports, unresolved names, roster-change acknowledgement,
+`--me` comparison, and archive-only checks. The initial CSV fixture is provisional until
+the delivery format is confirmed. Tests cover failure durability, rollback, provenance,
+identity checks, and exclusion from decision capture/replay. Reported standings compute
+no scores; the stage 2 scoring comparison and remaining-pool queries are still unbuilt.
 
 The first two are ordinary feature work. The third changes what the tool optimises and
 cannot be validated the way the first two can: a season is one Bernoulli trial, and

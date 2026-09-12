@@ -2,6 +2,10 @@
 
 **Drafted:** 2026-09-07 (UTC), before any of it exists.
 
+**Stage 1 implemented:** 2026-09-11, following the refined
+[stage 1 plan](PHASE4_STAGE1_PLAN.md): three tables, raw bytes committed before parsing,
+and separate parse metadata. Stages 2 and 3 remain planned.
+
 Phase 3 ended without a promotion and without a collection window: 3B found no candidate
 worth shipping, and [3C was closed](PHASE3C_OUTCOME.md) rather than freeze the source tree
 through the season this tool is meant to be used in. What remains is the work the pool

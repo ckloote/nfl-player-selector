@@ -3,6 +3,11 @@
 **Drafted:** 2026-09-11 (UTC), before any of it exists. Implements stage 1 of
 [the Phase 4 plan](PHASE4_PLAN.md); stages 2 and 3 are unchanged by it.
 
+**Implemented:** 2026-09-11. The initial parser uses the
+[reference CSV](../tests/fixtures/pool_report.csv); the real delivery format remains
+unconfirmed. The archive/parse metadata split below resolves the draft's conflict between
+committing before parsing and keeping observations append-only.
+
 The pool reports every entrant's picks once a week has resolved. This stage makes that
 report land somewhere durable, identified, and re-readable. It computes nothing: no
 scoring, no leaderboard, no remaining-pool query, no opponent model. Those are stage 2
@@ -164,12 +169,17 @@ for the rest of the season and nothing announces it.
 spaces). That makes "Chris K." and "chris k" the same entrant, which is what we want, and
 makes "Chris K." and "CK" different entrants, which we cannot fix by guessing.
 
-So the import compares the week's entrant set against the previously ingested week and
+So the import compares the week's entrant set against the preceding ingested week and
 **fails on any change** — an addition, a removal, a rename — unless `--allow-roster-change`
 is given. Week 1 establishes the set. The pool's entrant list is fixed after week 1 in
 practice, so this tripwire should never fire; the season it does fire is the season it
 saves. The failure happens after the rows are written, so the flag is a re-run, not a
 re-import.
+
+If no preceding week exists, the implementation compares against an existing import of
+the same week, then the earliest later week. This also checks corrections to the first
+report and reports imported out of order. A corrected report removes obsolete picks and
+totals from that week while keeping the original observations and entrant identities.
 
 ### Players, from names
 
@@ -216,11 +226,20 @@ The codec is `zlib-bytes`, distinct from `zlib-json`. Nothing reads these payloa
 `snapshots.restore` only iterates `TABLES` and so never sees one — but if something ever
 does, an unrecognised codec makes it fail loudly instead of parsing raw CSV as JSON.
 
-`input_observations` has no `week` column, so the week goes in `coverage` alongside what
-the reading contained:
-`{"week": 4, "entrants": 12, "picks": 36, "unresolved": 0, "parsed": true, "source": "week4.csv"}`.
-An unparseable file archives with `"parsed": false` and the counts absent. That row is the
-week-4 report, and it is enough to recover everything later.
+`input_observations` has no `week` column, so the requested week goes in `coverage`:
+`{"week": 4, "parsed": false, "source": "week4.csv", "format": "csv"}`. If the week is
+to be inferred from the file, the receipt's week is NULL. Every receipt says
+`"parsed": false`: parsing has not happened when it is committed, and append-only triggers
+prevent rewriting it afterward.
+
+**Implementation decision:** parse outcomes are stored separately in the existing `meta`
+table under `pool_report:<observation_id>`. They contain the resolved week, parsed/written/
+check flags, row counts, unresolved candidates, roster differences, self-comparison, and
+errors or warnings. They commit with the derived rows; a parse/validation failure writes
+only its outcome. `entrants.reports` and `pool report list` join the receipt to that outcome.
+An interrupted attempt with no outcome still has its original bytes and appears unimported.
+This preserves one immutable observation per attempt without a fourth table or another
+schema change. The receipt alone is enough to recover the delivery later.
 
 **Every import attempt is an observation.** Importing the same file three times while
 fixing a parser leaves three observations and one payload. That is the honest record — a
@@ -243,6 +262,7 @@ def archive_report(conn, season, week, raw, ...)     # committed before anything
 def import_report(conn, season, week, raw, *, fmt, me=None, check=False) -> ImportResult
 def entrant_picks(conn, season, week=None)           # readback, joined to its observation
 def reported_totals(conn, season, week=None)
+def reports(conn, season)                           # receipts joined to parse metadata
 ```
 
 `ImportResult` carries the observation id, the row counts, the unresolved names with their

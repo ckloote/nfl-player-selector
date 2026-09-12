@@ -108,9 +108,17 @@ Four layers, deliberately decoupled so each can improve independently:
     and Vegas lines, weekly rosters, depth charts, injury reports. Team-defense
     strength is derived from opponents' stat lines at query time rather than
     imported as its own table.
-  - *Pool state*: your picks and results, each opponent's picks and results,
-    weekly standings. (Only your own picks exist today; the opponent and
-    standings tables are later work, after Phase 3 calibration/policy validation.)
+  - *Pool state*: your picks and results, plus `pool_entrants`, `pool_picks`, and
+    `pool_report_totals` for official weekly reports. Entrant picks retain the
+    reported name even when player resolution fails; totals and ranks preserve
+    what the pool reported. Entrant scoring and remaining-pool comparisons are
+    Phase 4, stage 2 work.
+- **Pool reports:** `report import` commits the delivered bytes to the existing
+  content-addressed archive before parsing. A second transaction writes resolved
+  records and parse outcomes in `meta`, keyed by observation id; immutable observations
+  retain their original archive coverage. Failed files and `--check` attempts remain
+  recoverable. The `pool_report` feed is deliberately excluded from projection inputs,
+  snapshot restoration, and freshness checks. See [the stage 1 plan](PHASE4_STAGE1_PLAN.md).
 - **Refresh:** one command (`refresh`) re-pulls current-season data. Everything
   downstream reads only from the database, so the model and optimizer never
   care where data came from — which also makes backtesting on past seasons
@@ -244,11 +252,16 @@ pool record --week 4 --rb "B.Robinson"     # lock one slot (slots lock at
 pool record --week 4 --qb "J.Allen"        #   different times, so recording
                                            #   is per-slot; repeatable)
 pool report import week4.csv    # ingest the official end-of-week report
-                                #   (everyone's picks + totals); manual
-                                #   `pool opponent record` as fallback
-pool standings                  # leaderboard + remaining-arsenal comparison
+                                #   --check archives and validates without writing picks
+pool report list                # archived attempts, times, counts, and status
+pool standings                  # picks, totals, and ranks reported for the latest imported week
 pool plan                       # full remaining-season assignment view
 ```
+
+The initial report parser accepts one CSV row per entrant/slot, with optional reported
+totals. `--me` enables comparison against recorded picks; `--allow-roster-change`
+acknowledges entrant-set changes. See the [CSV format and examples](../README.md#importing-the-pools-weekly-report).
+Computed standings, remaining-player comparisons, and manual `opponent record` are deferred.
 
 A web dashboard is a possible Phase 4 nicety, not a requirement.
 
@@ -264,7 +277,7 @@ A web dashboard is a possible Phase 4 nicety, not a requirement.
   better features or estimation. Joint context ablations do not identify defense alone.
 - **Leaderboard from the official weekly report:** the pool publishes
   everyone's picks and totals at week's end, so opponent state is entered once
-  a week from that report (a CSV/paste import, with manual entry as fallback)
+  a week from that report (CSV import, with a hand-written CSV as fallback)
   rather than scraped or guessed. The one-week lag is a fact of the game, not
   a tooling gap — everyone plays under it. The tool works (in EV mode) even if
   you skip opponent tracking entirely.
