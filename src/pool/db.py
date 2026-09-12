@@ -154,6 +154,25 @@ def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
 
 # Migrations deliberately do not infer scoring completeness from legacy totals.
 MIGRATIONS = {
+    4: [
+        """CREATE TABLE pool_entrants (
+            season INTEGER NOT NULL, entrant_id TEXT NOT NULL,
+            display_name TEXT NOT NULL, is_me INTEGER NOT NULL DEFAULT 0,
+            first_seen TEXT NOT NULL,
+            PRIMARY KEY (season, entrant_id))""",
+        """CREATE TABLE pool_picks (
+            season INTEGER NOT NULL, week INTEGER NOT NULL, entrant_id TEXT NOT NULL,
+            slot TEXT NOT NULL, player_id TEXT, player_name TEXT NOT NULL, game_id TEXT,
+            observation_id INTEGER NOT NULL REFERENCES input_observations(observation_id),
+            PRIMARY KEY (season, week, entrant_id, slot),
+            FOREIGN KEY (season, entrant_id) REFERENCES pool_entrants(season, entrant_id))""",
+        "CREATE INDEX pool_picks_player ON pool_picks(season, player_id)",
+        """CREATE TABLE pool_report_totals (
+            season INTEGER NOT NULL, week INTEGER NOT NULL, entrant_id TEXT NOT NULL,
+            reported_week INTEGER, reported_total INTEGER, reported_rank INTEGER,
+            observation_id INTEGER NOT NULL REFERENCES input_observations(observation_id),
+            PRIMARY KEY (season, week, entrant_id))""",
+    ],
     3: [
         # Prospective decision capture. Append-only for the same reason observations
         # are: a decision is something that happened at a time, and a record you can
