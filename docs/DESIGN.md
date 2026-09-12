@@ -110,9 +110,11 @@ Four layers, deliberately decoupled so each can improve independently:
     imported as its own table.
   - *Pool state*: your picks and results, plus `pool_entrants`, `pool_picks`, and
     `pool_report_totals` for official weekly reports. Entrant picks retain the
-    reported name even when player resolution fails; totals and ranks preserve
-    what the pool reported. Entrant scoring and remaining-pool comparisons are
-    Phase 4, stage 2 work.
+    reported name even when player resolution fails, and a slot the report says
+    went unpicked is stored as such, so a real zero, a name we could not resolve
+    and a week never imported stay three different things; totals and ranks
+    preserve what the pool reported. Entrant scoring and remaining-pool
+    comparisons are Phase 4, stage 2 work.
 - **Pool reports:** `report import` commits the delivered bytes to the existing
   content-addressed archive before parsing. A second transaction writes resolved
   records and parse outcomes in `meta`, keyed by observation id; immutable observations

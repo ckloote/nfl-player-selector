@@ -204,13 +204,20 @@ def report_import(
             console.print("  Added: " + ", ".join(result.added), markup=False)
         if result.removed:
             console.print("  Removed: " + ", ".join(result.removed), markup=False)
-    for item in result.comparison:
+    for item in result.unrecorded:
         console.print(
-            f"Warning: my_picks mismatch for {item['slot']}: "
-            f"recorded {item['recorded'] or '(missing)'}; "
-            f"reported {item['reported'] or '(missing)'}. "
-            "my_picks was not changed.",
+            f"Note: no recorded pick for {item['slot']}; the report has "
+            f"{item['reported']}. Run `pool record` if that is an omission.",
             style="yellow",
+            markup=False,
+        )
+    for item in result.conflicts:
+        console.print(
+            f"my_picks mismatch for {item['slot']}: "
+            f"recorded {item['recorded'] or '(missing)'}; "
+            f"reported {item['reported'] or '(no pick)'}. "
+            "my_picks was not changed.",
+            style="red",
             markup=False,
         )
     for error in result.errors:
@@ -300,11 +307,14 @@ def standings(
         names = []
         for slot in config.SLOTS:
             pick = chosen.get(slot)
-            names.append(
-                pick.player_name + (" (unresolved)" if pd.isna(pick.player_id) else "")
-                if pick is not None
-                else "—"
-            )
+            if pick is None:
+                names.append("—")  # no row: this week was never imported for them
+            elif pd.isna(pick.player_name):
+                names.append("(no pick)")  # the report says they submitted nothing
+            else:
+                names.append(
+                    pick.player_name + (" (unresolved)" if pd.isna(pick.player_id) else "")
+                )
         table.add_row(
             _reported_number(row.reported_rank),
             row.display_name + (" (me)" if row.is_me else ""),

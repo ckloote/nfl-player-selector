@@ -33,16 +33,25 @@ class ImportResult:
     picks: int = 0
     totals: int = 0
     unresolved: list[dict] = field(default_factory=list)
+    blanks: list[dict] = field(default_factory=list)
     previous_week: int | None = None
     added: list[str] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
-    comparison: list[dict] = field(default_factory=list)
+    unrecorded: list[dict] = field(default_factory=list)
+    conflicts: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
-        return not (self.errors or self.unresolved or self.comparison)
+        """Findings that mean the import cannot be trusted as it stands.
+
+        `unrecorded` and `blanks` are deliberately absent. A week I never recorded is
+        incomplete bookkeeping of my own, and a slot the report says went unpicked is a
+        fact about the week; neither says the ingested data is wrong. Failing on them
+        would make the routine import red and teach the exit code to be ignored.
+        """
+        return not (self.errors or self.unresolved or self.conflicts)
 
 
 def parse_csv(raw: bytes) -> pd.DataFrame:
@@ -67,6 +76,11 @@ def parse_csv(raw: bytes) -> pd.DataFrame:
 
 
 PARSERS = {"csv": parse_csv}
+
+
+def _blank(value) -> bool:
+    """True when the report supplied no player for a slot."""
+    return value is None or pd.isna(value)
 
 
 def _integer(value, column: str) -> int:
@@ -109,9 +123,17 @@ def transform_report(
     if "season" in frame and {_integer(v, "season") for v in frame.season} != {season}:
         raise ValueError(f"Report season disagrees with --season {season}")
     work = frame.copy()
-    for column in required:
+    for column in ("entrant", "slot"):
         if work[column].isna().any() or work[column].astype(str).str.strip().eq("").any():
             raise ValueError(f"Report contains an empty {column}")
+    # A blank player_name is the report saying this entrant submitted nothing for the
+    # slot. That is a fact about the week, so it is stored; a slot row that is absent
+    # entirely is still rejected below, because it cannot be told from a truncated file.
+    work["player_name"] = pd.Series(
+        [None if pd.isna(v) or not str(v).strip() else v for v in work.player_name],
+        index=work.index,
+        dtype=object,
+    )
     # Names remain exactly as delivered; only identifiers and slots are normalized.
     work["entrant_id"] = work.entrant.map(state._norm)
     if work.entrant_id.eq("").any():
@@ -162,6 +184,8 @@ def resolve_players(
     resolved["game_id"] = None
     unresolved = []
     for index, pick in picks.iterrows():
+        if _blank(pick.player_name):
+            continue  # the report named no player; there is nothing to resolve
         matches = state.find_player(history, pick.player_name, positions=config.SLOTS[pick.slot])
         if len(matches) != 1:
             unresolved.append(
@@ -228,9 +252,15 @@ def archive_report(
     return cursor.lastrowid
 
 
-def _compare_me(conn, season, week, me_id, picks) -> list[dict]:
+def _compare_me(conn, season, week, me_id, picks) -> tuple[list[dict], list[dict]]:
+    """My recorded picks against the report's own row for me, split by what it means.
+
+    A slot I never recorded is a gap in my bookkeeping; a slot where the report
+    contradicts what I recorded means one of the two is wrong about what I submitted.
+    Only the second is a reason to distrust the import, so they are returned separately.
+    """
     if me_id is None:
-        return []
+        return [], []
     mine = {
         r["slot"]: dict(r)
         for r in conn.execute(
@@ -239,20 +269,21 @@ def _compare_me(conn, season, week, me_id, picks) -> list[dict]:
         )
     }
     reported = {r.slot: r for r in picks[picks.entrant_id.eq(me_id)].itertuples()}
-    comparison = []
+    unrecorded, conflicts = [], []
     for slot in config.SLOTS:
         own, report = mine.get(slot), reported.get(slot)
-        if own is None and report is None:
+        name = None if report is None or _blank(report.player_name) else report.player_name
+        if own is None and name is None:
             continue
-        if own is None or report is None or own["player_id"] != report.player_id:
-            comparison.append(
-                dict(
-                    slot=slot,
-                    recorded=own["player_name"] if own else None,
-                    reported=report.player_name if report else None,
-                )
-            )
-    return comparison
+        entry = dict(slot=slot, recorded=own["player_name"] if own else None, reported=name)
+        if own is None:
+            unrecorded.append(entry)
+        elif name is None or own["player_id"] != report.player_id:
+            # An unresolved reported name is already reported as unresolved, and its
+            # identity is unknown rather than different, so it is not a contradiction.
+            if name is None or report.player_id is not None:
+                conflicts.append(entry)
+    return unrecorded, conflicts
 
 
 def _write_report(conn, result, entrant_rows, picks, totals, me_id):
@@ -330,6 +361,17 @@ def import_report(
         result.entrants, result.picks, result.totals = len(entrant_rows), len(picks), len(totals)
         state.validate_week(conn, season, week)
         picks, result.unresolved = resolve_players(conn, season, week, picks)
+        result.blanks = [
+            dict(entrant_id=r.entrant_id, slot=r.slot)
+            for r in picks.itertuples()
+            if _blank(r.player_name)
+        ]
+        if result.blanks:
+            result.warnings.append(
+                "No pick reported for "
+                + ", ".join(f"{b['entrant_id']} {b['slot']}" for b in result.blanks)
+                + "; stored as reported."
+            )
         games = scoring.coverage(conn, season)
         games = games[games.week.eq(week)]
         if not games.complete.eq(1).all():
@@ -370,9 +412,12 @@ def import_report(
             if me_id is not None and me_id != requested:
                 raise ValueError(f"--me disagrees with the existing identity {me_id!r}")
             me_id = requested
-        result.comparison = _compare_me(conn, season, week, me_id, picks)
+        result.unrecorded, result.conflicts = _compare_me(conn, season, week, me_id, picks)
+        # An unacknowledged roster change writes nothing. `_write_report` drops the rows
+        # of any entrant absent from the file, so writing first and complaining after
+        # would let a truncated delivery destroy the week the tripwire exists to protect.
         with db.transaction(conn):
-            if not check:
+            if not check and not result.errors:
                 _write_report(conn, result, entrant_rows, picks, totals, me_id)
                 result.written = True
             # The immutable receipt predates parsing. Its derived outcome belongs in
@@ -415,7 +460,7 @@ def reports(conn: sqlite3.Connection, season: int) -> pd.DataFrame:
                 unresolved=len(outcome["unresolved"]) if outcome else None,
                 errors=outcome.get("errors", []),
                 needs_review=bool(
-                    outcome.get("errors") or outcome.get("unresolved") or outcome.get("comparison")
+                    outcome.get("errors") or outcome.get("unresolved") or outcome.get("conflicts")
                 ),
             )
         )

@@ -104,7 +104,7 @@ def test_transform_separates_grains_and_preserves_reported_names():
         (lambda f: f.iloc[:-1], "missing slots"),
         (lambda f: pd.concat([f, f.iloc[:1]]), "Duplicate entrant/slot"),
         (lambda f: f.assign(entrant="!!!"), "letters or numbers"),
-        (lambda f: f.assign(player_name=" "), "empty player_name"),
+        (lambda f: f.assign(slot=" "), "empty slot"),
         (lambda f: f.assign(reported_total="1.5"), "integer"),
         (lambda f: f.assign(reported_total="-1"), "integer"),
         (lambda f: f.assign(reported_rank="0"), "positive"),
@@ -278,7 +278,7 @@ def test_ambiguity_lists_candidates_and_slot_restriction_resolves_names(report_d
 
 
 @pytest.mark.parametrize("change", ["rename", "addition", "removal"])
-def test_roster_changes_are_written_then_flagged_and_can_be_acknowledged(report_db, change):
+def test_roster_changes_are_flagged_before_any_rows_change(report_db, change):
     import_reference(report_db)
     frame = entrants.parse_csv(REFERENCE.read_bytes()).assign(week="2")
     if change == "rename":
@@ -289,25 +289,31 @@ def test_roster_changes_are_written_then_flagged_and_can_be_acknowledged(report_
         frame = frame[frame.entrant.ne("Pat")]
     raw = frame.to_csv(index=False).encode()
     rejected = import_reference(report_db, raw, week=2)
-    assert not rejected.ok and rejected.written and rejected.previous_week == 1
+    assert not rejected.ok and not rejected.written and rejected.previous_week == 1
     assert bool(rejected.added) == (change != "removal")
     assert bool(rejected.removed) == (change != "addition")
-    assert len(entrants.entrant_picks(report_db, 2026, 2)) == len(frame)
+    assert entrants.entrant_picks(report_db, 2026, 2).empty
     assert import_reference(report_db, raw, week=2, allow_roster_change=True).ok
+    assert len(entrants.entrant_picks(report_db, 2026, 2)) == len(frame)
 
 
-def test_corrected_week_removes_obsolete_rows_and_check_preserves_them(report_db):
+def test_corrected_week_removes_obsolete_rows_only_once_acknowledged(report_db):
     import_reference(report_db)
     frame = entrants.parse_csv(REFERENCE.read_bytes()).query("entrant != 'Pat'")
     raw = frame.to_csv(index=False).encode()
     assert not import_reference(report_db, raw, check=True).ok
     assert len(entrants.entrant_picks(report_db, 2026, 1)) == 6
-    result = import_reference(report_db, raw)
-    assert not result.ok and result.removed == ["pat"]
+    # A file missing an entrant is a correction or a truncation, and nothing distinguishes
+    # them here. Until that is acknowledged the week keeps every pick it already had.
+    rejected = import_reference(report_db, raw)
+    assert not rejected.ok and not rejected.written and rejected.removed == ["pat"]
+    assert len(entrants.entrant_picks(report_db, 2026, 1)) == 6
+    assert len(entrants.reported_totals(report_db, 2026, 1)) == 2
+    accepted = import_reference(report_db, raw, allow_roster_change=True)
+    assert accepted.ok and accepted.written
     assert len(entrants.entrant_picks(report_db, 2026, 1)) == 3
     assert len(entrants.reported_totals(report_db, 2026, 1)) == 1
     assert count(report_db, "pool_entrants") == 2
-    assert import_reference(report_db, raw, allow_roster_change=True).ok
 
 
 def test_normalized_entrant_name_remains_one_identity_across_weeks(report_db):
@@ -327,9 +333,9 @@ def test_me_comparison_persists_and_never_edits_my_picks(report_db):
         )
     before = db.read_df(report_db, "SELECT * FROM my_picks")
     first = import_reference(report_db, me="chris k")
-    assert first.comparison == [dict(slot="QB", recorded="Quarter Two", reported="Quarter One")]
-    assert not first.ok and first.written
-    assert import_reference(report_db).comparison == first.comparison
+    assert first.conflicts == [dict(slot="QB", recorded="Quarter Two", reported="Quarter One")]
+    assert not first.ok and first.written and not first.unrecorded
+    assert import_reference(report_db).conflicts == first.conflicts
     assert not import_reference(report_db, me="Nobody").ok
     assert not import_reference(report_db, me="Pat").ok
     pd.testing.assert_frame_equal(before, db.read_df(report_db, "SELECT * FROM my_picks"))
@@ -393,6 +399,73 @@ def test_report_is_invisible_to_capture_restore_and_freshness(report_db):
     finally:
         restored.close()
     assert "pool_report" in set(snapshots.coverage(report_db).feed)
+
+
+BLANK_RB = (b"1,Chris K.,RB,Runner One,,,", b"1,Chris K.,RB,,,,")
+
+
+def test_blank_pick_is_stored_as_a_no_pick_but_an_absent_row_is_still_rejected():
+    """A report that says an entrant picked nothing is evidence; a row that simply is not
+    there is indistinguishable from a truncated file, and only the first is storable."""
+    frame = entrants.parse_csv(REFERENCE.read_bytes())
+    blank = frame.copy()
+    blank.loc[blank.slot.eq("RB") & blank.entrant.eq("Chris K."), "player_name"] = ""
+    _, picks, _ = entrants.transform_report(blank, 2026, 1)
+    assert picks.set_index(["entrant_id", "slot"]).loc[("chris k", "RB"), "player_name"] is None
+    absent = frame[~(frame.slot.eq("RB") & frame.entrant.eq("Chris K."))]
+    with pytest.raises(ValueError, match="missing slots"):
+        entrants.transform_report(absent, 2026, 1)
+
+
+def test_reported_no_pick_is_not_an_unresolved_name(report_db):
+    result = import_reference(report_db, REFERENCE.read_bytes().replace(*BLANK_RB))
+    assert result.ok and result.written and not result.unresolved
+    assert result.blanks == [dict(entrant_id="chris k", slot="RB")]
+    assert "No pick reported for chris k RB" in result.warnings[0]
+    row = report_db.execute(
+        "SELECT player_name, player_id, game_id FROM pool_picks "
+        "WHERE entrant_id = 'chris k' AND slot = 'RB'"
+    ).fetchone()
+    assert row["player_name"] is None and row["player_id"] is None and row["game_id"] is None
+    # Distinguishable from a week nobody imported, which has no row at all.
+    assert len(entrants.entrant_picks(report_db, 2026, 1)) == 6
+    assert entrants.entrant_picks(report_db, 2026, 2).empty
+
+
+def test_unrecorded_slots_note_while_a_contradicted_slot_fails(report_db):
+    assert import_reference(report_db, me="Chris K.").ok
+    noted = import_reference(report_db)
+    assert len(noted.unrecorded) == 3 and not noted.conflicts and noted.ok
+    with report_db:
+        report_db.execute(
+            "INSERT INTO my_picks(season, week, slot, player_id, player_name, recorded_at) "
+            "VALUES (2026, 1, 'QB', 'q2', 'Quarter Two', '2026-09-10T00:00:00Z')"
+        )
+    conflicted = import_reference(report_db)
+    assert conflicted.conflicts == [dict(slot="QB", recorded="Quarter Two", reported="Quarter One")]
+    assert len(conflicted.unrecorded) == 2 and not conflicted.ok
+
+
+def test_recorded_pick_against_a_reported_no_pick_is_a_contradiction(report_db):
+    with report_db:
+        report_db.execute(
+            "INSERT INTO my_picks(season, week, slot, player_id, player_name, recorded_at) "
+            "VALUES (2026, 1, 'RB', 'r1', 'Runner One', '2026-09-10T00:00:00Z')"
+        )
+    result = import_reference(report_db, REFERENCE.read_bytes().replace(*BLANK_RB), me="Chris K.")
+    assert result.conflicts == [dict(slot="RB", recorded="Runner One", reported=None)]
+    assert not result.ok
+
+
+def test_an_unresolved_report_name_is_not_also_called_a_contradiction(report_db):
+    with report_db:
+        report_db.execute(
+            "INSERT INTO my_picks(season, week, slot, player_id, player_name, recorded_at) "
+            "VALUES (2026, 1, 'QB', 'q1', 'Quarter One', '2026-09-10T00:00:00Z')"
+        )
+    raw = REFERENCE.read_bytes().replace(b"Quarter One", b"Mystery Player")
+    result = import_reference(report_db, raw, me="Chris K.")
+    assert result.unresolved and not result.conflicts and not result.ok
 
 
 def test_missing_totals_stay_missing_and_literal_na_names_survive():
@@ -488,8 +561,8 @@ def test_cli_check_does_not_change_standings_or_entrant_identity(report_cli, rep
     path = tmp_path / "week2.csv"
     path.write_text(entrants.parse_csv(REFERENCE.read_bytes()).assign(week=2).to_csv(index=False))
     checked = report_cli("report", "import", str(path), "--check", "--me", "Chris K.")
-    assert checked.exit_code == 1 and "Check only" in checked.output
-    assert "my_picks mismatch" in checked.output
+    assert checked.exit_code == 0 and "Check only" in checked.output
+    assert "no recorded pick for QB" in checked.output
     assert count(report_db, "input_observations") == 2
     assert count(report_db, "pool_picks") == 6
     assert report_db.execute("SELECT SUM(is_me) FROM pool_entrants").fetchone()[0] == 0
@@ -498,8 +571,11 @@ def test_cli_check_does_not_change_standings_or_entrant_identity(report_cli, rep
 
 
 def test_cli_roster_acknowledgement_and_my_pick_comparison(report_cli, report_db, tmp_path):
+    # Nothing recorded yet is a note, not a failure: an import must not be red because
+    # the operator has not also typed their own picks in.
     result = report_cli("report", "import", str(REFERENCE), "--me", "Chris K.")
-    assert result.exit_code == 1 and "my_picks mismatch" in result.output
+    assert result.exit_code == 0 and "no recorded pick for QB" in result.output
+    assert "my_picks mismatch" not in result.output
     assert "(me)" in report_cli("standings").output
     assert count(report_db, "my_picks") == 0
     path = tmp_path / "renamed.csv"
@@ -516,6 +592,16 @@ def test_cli_roster_acknowledgement_and_my_pick_comparison(report_cli, report_db
         )
     accepted = report_cli("report", "import", str(path), "--allow-roster-change")
     assert accepted.exit_code == 0, accepted.output
+
+
+def test_cli_standings_distinguishes_a_no_pick_from_an_unresolved_name(report_cli, tmp_path):
+    path = tmp_path / "blank.csv"
+    path.write_bytes(REFERENCE.read_bytes().replace(*BLANK_RB))
+    imported = report_cli("report", "import", str(path))
+    assert imported.exit_code == 0 and "No pick reported for chris k RB" in imported.output
+    shown = report_cli("standings")
+    assert shown.exit_code == 0 and "(no pick)" in shown.output
+    assert "(unresolved)" not in shown.output
 
 
 def test_cli_empty_reports_and_missing_path_are_clear(report_cli):

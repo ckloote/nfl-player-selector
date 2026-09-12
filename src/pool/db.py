@@ -155,6 +155,11 @@ def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
 # Migrations deliberately do not infer scoring completeness from legacy totals.
 MIGRATIONS = {
     4: [
+        # Delivered pool reports. A pick row distinguishes three states the leaderboard
+        # must not conflate: a resolved pick (both columns set), a reported name we could
+        # not resolve (name set, id null) and a slot the report says went unpicked (both
+        # null). A week that was never imported has no row at all, which is why a missed
+        # pick is stored rather than omitted -- absence already means something else.
         """CREATE TABLE pool_entrants (
             season INTEGER NOT NULL, entrant_id TEXT NOT NULL,
             display_name TEXT NOT NULL, is_me INTEGER NOT NULL DEFAULT 0,
@@ -162,7 +167,7 @@ MIGRATIONS = {
             PRIMARY KEY (season, entrant_id))""",
         """CREATE TABLE pool_picks (
             season INTEGER NOT NULL, week INTEGER NOT NULL, entrant_id TEXT NOT NULL,
-            slot TEXT NOT NULL, player_id TEXT, player_name TEXT NOT NULL, game_id TEXT,
+            slot TEXT NOT NULL, player_id TEXT, player_name TEXT, game_id TEXT,
             observation_id INTEGER NOT NULL REFERENCES input_observations(observation_id),
             PRIMARY KEY (season, week, entrant_id, slot),
             FOREIGN KEY (season, entrant_id) REFERENCES pool_entrants(season, entrant_id))""",

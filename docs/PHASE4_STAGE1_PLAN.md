@@ -173,13 +173,21 @@ So the import compares the week's entrant set against the preceding ingested wee
 **fails on any change** — an addition, a removal, a rename — unless `--allow-roster-change`
 is given. Week 1 establishes the set. The pool's entrant list is fixed after week 1 in
 practice, so this tripwire should never fire; the season it does fire is the season it
-saves. The failure happens after the rows are written, so the flag is a re-run, not a
-re-import.
+saves.
+
+**Corrected after review:** the draft said the failure happens *after* the rows are
+written, "so the flag is a re-run, not a re-import". That was wrong, and it composed
+badly with a decision the draft never made — that a corrected report removes the rows of
+any entrant absent from it. Together they meant a truncated delivery deleted the missing
+entrants' picks and only then complained, which is the thing the tripwire exists to
+prevent. An unacknowledged roster change now writes nothing at all: the week keeps every
+pick it had, and `--allow-roster-change` performs the replacement. A correction and a
+truncation are indistinguishable from the file alone, so the operator decides which it
+is before anything moves.
 
 If no preceding week exists, the implementation compares against an existing import of
 the same week, then the earliest later week. This also checks corrections to the first
-report and reports imported out of order. A corrected report removes obsolete picks and
-totals from that week while keeping the original observations and entrant identities.
+report and reports imported out of order.
 
 ### Players, from names
 
@@ -200,6 +208,32 @@ Dropping an unresolved entrant row would produce a leaderboard that is quietly s
 player, which is worse than a leaderboard that says it is incomplete. This is the same
 discipline as *pending is not zero*, applied one stage earlier: **unresolved is not
 absent.**
+
+### The third state: no pick at all
+
+**Added after review.** An entrant who forgets a week is routine, and the draft's schema
+could not represent one: a missing slot rejected the whole file and `player_name` was
+`NOT NULL`. Discovering that against a real report would have cost a second migration and
+a second fingerprint move — the thing this stage set out to spend exactly once. The branch
+was unmerged, so migration 4 was amended in place instead.
+
+A pick row now carries three distinguishable states, and a fourth is the absence of the
+row itself:
+
+| State | Row | `player_name` | `player_id` |
+|---|---|---|---|
+| Resolved pick | present | set | set |
+| Name we could not resolve | present | set | NULL |
+| No pick submitted | present | NULL | NULL |
+| Week never imported | absent | — | — |
+
+Omitting the row for a missed pick was the obvious alternative and is wrong: absence
+already means "never imported", and stage 2 needs to tell a real zero from a week it has
+no evidence about. A blank `player_name` cell is therefore stored as a no-pick and named
+in a warning. A slot row that is **absent** is still rejected, because nothing
+distinguishes it from a truncated file — and if the real report turns out to omit rows
+rather than blank them, that is a change to `parse_csv`, not to the schema. Which is the
+property this stage was built for: the format is a function, the schema is stable.
 
 No alias table. If the pool spells names the way nflverse does, one is friction for
 nothing; if it does not, a re-import after the mapping exists is the natural fix and the
@@ -282,7 +316,17 @@ database.
 `--me "<display name>"` on the first import sets `is_me`. From then on, every import
 compares my reported picks to `my_picks` for that week and reports any disagreement. It
 does not resolve it: either the report is wrong or my record is, and both are worth a
-human look. A disagreement is a warning and a non-zero exit, never an edit to `my_picks`.
+human look. Nothing is ever edited into `my_picks`.
+
+**Split after review.** The draft treated "I never recorded this slot" and "my record
+names a different player" as one finding, and failed the import on both. Since `is_me`
+persists, that made every import for a week I had not also typed into `pool record` exit
+non-zero — which teaches the exit code to be ignored, and the exit code is the only thing
+guarding the findings that matter. An unrecorded slot is now a note that does not affect
+the exit status; a contradiction is an error. A reported blank against a pick I recorded
+counts as a contradiction — the report says I submitted nothing and I say otherwise — and
+a reported name that could not be resolved does not, because it is already reported as
+unresolved and its identity is unknown rather than different.
 
 ### Week validation
 
