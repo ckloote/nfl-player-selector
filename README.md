@@ -17,6 +17,7 @@ appetite change with your position on the leaderboard?
 - [`docs/PHASE3C_PROTOCOL.md`](docs/PHASE3C_PROTOCOL.md) - dated prospective baseline protocol: window, decision events, parity criteria and floors, written but never run
 - [`docs/PHASE3C_OUTCOME.md`](docs/PHASE3C_OUTCOME.md) - the decision to close that window without collecting, and what it gives up
 - [`docs/PHASE4_PLAN.md`](docs/PHASE4_PLAN.md) - opponent ingestion, standings, and deciding by win probability: staging, and what can and cannot be validated
+- [`docs/PHASE4_STAGE1_PLAN.md`](docs/PHASE4_STAGE1_PLAN.md) - implemented report ingestion, archive guarantees, and identity checks
 - [`docs/REVIEW.md`](docs/REVIEW.md) — September 2026 review: open defects, validation limitations, and recommended priorities
 
 ## Status
@@ -35,6 +36,11 @@ measured. The window required a source freeze for its duration, which the season
 work — opponent ingestion, standings, a win-probability objective — could not accommodate.
 The replay assumption it would have checked is still open, and a single captured decision
 verified the same day settles it whenever that is worth doing.
+
+Phase 4, stage 1 is implemented: weekly entrant reports are archived before parsing,
+imported with player and entrant identity checks, and displayed as pool-reported standings.
+`pool report list` includes failed imports and checks. Entrant scoring, remaining-pool
+queries, and win probability remain later stages.
 
 The [evaluation report](docs/EVALUATION.md) combines actual season scores from each model's
 greedy and optimizer pick history with ranking and calibration diagnostics. Its
@@ -230,6 +236,65 @@ picks. Legacy timestamps retain an unspecified-timezone label. New import metada
 uses UTC; kickoff display remains Eastern. Existing databases lack complete TD
 coverage until refreshed. Live projections may use legacy offensive-TD estimates
 with a warning; finalized scoring and replay comparisons require complete coverage.
+
+### Importing the pool's weekly report
+
+```bash
+uv run pool report import week1.csv --season 2026 --check
+uv run pool report import week1.csv --season 2026 --me "Chris K."
+uv run pool report list --season 2026
+uv run pool standings --season 2026             # latest imported week, reported values
+uv run pool standings --season 2026 --week 1
+```
+
+The initial `--format csv` parser accepts UTF-8 CSV with one row per entrant and slot:
+
+```csv
+week,entrant,slot,player_name,reported_week,reported_total,reported_rank
+1,Chris K.,QB,Quarter One,3,3,1
+1,Chris K.,RB,Runner One,,,
+1,Chris K.,WR/TE,Flex One,,,
+```
+
+Include every entrant and all three slots: `QB`, `RB`, and `FLEX` (`WR`, `TE`, and
+`WR/TE` also map to `FLEX`). The `entrant`, `slot`, and `player_name` columns are all
+required, and `entrant` and `slot` must be filled in on every row. Supply
+`week` on every row or use `--week`; when both are present they must agree. An optional
+`season` column must agree with `--season`. Totals and rank are optional integers; put
+them on one row per entrant or repeat consistent values. Missing totals stay unknown.
+Duplicate slots, conflicting totals, and unknown columns are rejected.
+The full [reference fixture](tests/fixtures/pool_report.csv) includes two entrants.
+The delivery format has not yet been confirmed against a real pool report.
+
+To report an entrant who submitted nothing for a slot, keep the row and leave
+`player_name` empty. That stores a no-pick, which `standings` shows as `(no pick)` and
+which stays distinct from a name that could not be resolved and from a week that was
+never imported. Dropping the row instead is still rejected as a missing slot, because
+nothing distinguishes it from a truncated file.
+
+Every attempt commits the original bytes before parsing, including failed imports and
+`--check`. Re-imports add an observation while sharing the same stored payload and
+updating the week's picks. Parse outcomes live separately in metadata so the original
+observation remains immutable. `--check` validates and prints counts and issues without
+changing entrants, picks, or totals.
+
+Unresolved player names are retained and listed with candidates; re-import after updating
+the roster to resolve them. Entrant names are normalized across weeks. Additions, removals,
+and renames leave the week exactly as it was and exit nonzero until acknowledged with
+`--allow-roster-change`; review those differences before acknowledging them. A correction
+that drops an entrant and a delivery that was truncated look identical, so nothing is
+written until you say which it is; acknowledging then replaces that week's entrant set
+while preserving the archived originals. `--me` identifies your row once, then every
+import compares it with `my_picks`. A slot you have not recorded is a note; a slot where
+your record and the report name different players — or where the report says you picked
+nobody — is a mismatch. Unresolved names, unacknowledged roster changes, and mismatches
+exit nonzero. `my_picks` is never edited by a report import. Incomplete game coverage
+warns but permits the import.
+
+`standings` shows the supplied picks, weekly count, running total, and rank, explicitly
+labelled as reported. It uses the latest imported week, so checks and failed parses cannot
+advance the display. Report archives appear in `status` but are excluded from projection
+inputs, snapshot replay, and feed freshness checks.
 
 ## Backtesting
 
