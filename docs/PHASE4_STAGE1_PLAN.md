@@ -8,7 +8,8 @@
 unconfirmed. The archive/parse metadata split below resolves the draft's conflict between
 committing before parsing and keeping observations append-only.
 
-The pool reports every entrant's picks once a week has resolved. This stage makes that
+The person running the pool sends every entrant's picks by hand, sometimes before a week's
+games have finished and always before the next week's first lock. This stage makes that
 report land somewhere durable, identified, and re-readable. It computes nothing: no
 scoring, no leaderboard, no remaining-pool query, no opponent model. Those are stage 2
 and stage 3, and each of them is a different kind of mistake to make. What stage 1 owes
@@ -194,8 +195,10 @@ report and reports imported out of order.
 The report names players as text. Resolution is
 `state.find_player(state.historical_pool(conn, season, week), name, positions=config.SLOTS[slot])`
 — the same function `pool record` uses, restricted by the slot the report already tells
-us, which removes most of the ambiguity for free. The week is resolved, so
+us, which removes most of the ambiguity for free. Once the week's games are played,
 `player_weeks` is populated and the pool to match against is as good as it will ever be.
+A report that arrives earlier resolves against roster history as of that week instead,
+exactly as `pool record` does before kickoff.
 
 On exactly one match, `player_id` and `game_id` are filled. On zero or several:
 
@@ -280,6 +283,15 @@ fixing a parser leaves three observations and one payload. That is the honest re
 reading is a reading, and the observation table is append-only for the same reason the
 decision log is — and the content addressing means it costs one row, not one copy.
 
+**A check is not.** Changed 2026-09-13. `--check` originally archived too, on the argument
+that a delivered file checked for the first time should survive even if it fails. In
+practice a check is run repeatedly over a file that is still being put together: five
+checks of the 2026 week 1 report left five observations of four different versions, and a
+draft of a hand-typed CSV is not evidence of anything the pool sent. The import itself
+still archives before it parses, so every report that is imported keeps the guarantee. The
+case given up is narrow: a file that is checked, fails, and is thrown away without an
+import ever being attempted.
+
 ## Code Shape
 
 A new module, `src/pool/entrants.py`, following `ingest.py`'s split: a parse step that
@@ -354,9 +366,9 @@ pool report list                    # reports ingested: week, observation, time,
 pool standings [--week N]           # the pool's reported table, read back
 ```
 
-`--check` archives and parses and prints, and writes no rows — which is what you want the
-first time an unfamiliar file lands, and which still honours the deadline because the
-archive happens regardless.
+`--check` parses, resolves and prints, and writes nothing at all — no rows, no observation,
+no receipt. That is what you want while a file is still being put together. The deadline
+is honoured by the import, which archives before it parses.
 
 `pool standings` at this stage shows **what the pool said**: entrant, their three picks,
 the reported weekly count, the reported total and rank, as of the last ingested week,
@@ -389,7 +401,8 @@ assertions; the rest are the claims this document makes that would be silent if 
    and restores no entrant rows. This is the load-bearing claim of the whole storage
    design, and nothing else in the suite would notice if it stopped being true.
 10. A week outside the season is rejected; an incomplete week warns and imports.
-11. `--check` archives and parses and writes no `pool_picks` rows.
+11. `--check` parses and writes nothing — no rows, observation, payload or receipt — even
+    when it fails.
 
 `tests/test_workflow.py` already asserts `user_version == max(db.MIGRATIONS)`, so the
 migration is covered there without a new test. `tests/test_phase3a.py`'s `outside` set

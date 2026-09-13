@@ -23,7 +23,7 @@ META_PREFIX = "pool_report:"
 
 @dataclass
 class ImportResult:
-    observation_id: int
+    observation_id: int | None
     season: int
     week: int | None
     check: bool = False
@@ -348,15 +348,25 @@ def import_report(
     source: str = "<bytes>",
     observed_at: str | datetime | None = None,
 ) -> ImportResult:
-    observation_id = archive_report(
-        conn,
-        season,
-        week,
-        raw,
-        source=source,
-        observed_at=observed_at,
-        coverage=dict(parsed=False, format=fmt),
-    )
+    """Archive the delivered bytes, then parse, resolve and write one week of picks.
+
+    `check` is a dry run and leaves no trace: no observation, no payload, no receipt, no
+    rows. Archiving before parsing is the import's guarantee, and the import still keeps
+    it, so a report that is actually imported survives any parser failure. A check used to
+    archive too; run repeatedly over a file still being put together, it archived drafts,
+    which are not evidence of anything the pool sent.
+    """
+    observation_id = None
+    if not check:
+        observation_id = archive_report(
+            conn,
+            season,
+            week,
+            raw,
+            source=source,
+            observed_at=observed_at,
+            coverage=dict(parsed=False, format=fmt),
+        )
     result = ImportResult(observation_id, season, week, check=check)
     try:
         if fmt not in PARSERS:
@@ -420,29 +430,36 @@ def import_report(
                 raise ValueError(f"--me disagrees with the existing identity {me_id!r}")
             me_id = requested
         result.unrecorded, result.conflicts = _compare_me(conn, season, week, me_id, picks)
+        if check:
+            return result
         # An unacknowledged roster change writes nothing. `_write_report` drops the rows
         # of any entrant absent from the file, so writing first and complaining after
         # would let a truncated delivery destroy the week the tripwire exists to protect.
         with db.transaction(conn):
-            if not check and not result.errors:
+            if not result.errors:
                 _write_report(conn, result, entrant_rows, picks, totals, me_id)
                 result.written = True
             # The immutable receipt predates parsing. Its derived outcome belongs in
-            # separate metadata, committed with the rows it describes, even for --check.
+            # separate metadata, committed with the rows it describes.
             conn.execute(
                 "INSERT INTO meta(key, value) VALUES (?, ?)",
                 (f"{META_PREFIX}{observation_id}", json.dumps(asdict(result), sort_keys=True)),
             )
     except ValueError as exc:
         result.errors.append(str(exc))
-        db.set_meta(
-            conn, f"{META_PREFIX}{observation_id}", json.dumps(asdict(result), sort_keys=True)
-        )
+        if not check:
+            db.set_meta(
+                conn, f"{META_PREFIX}{observation_id}", json.dumps(asdict(result), sort_keys=True)
+            )
     return result
 
 
 def reports(conn: sqlite3.Connection, season: int) -> pd.DataFrame:
-    """List every receipt, including failures/checks, joined to its parse outcome."""
+    """List every archived import attempt, including failures, joined to its parse outcome.
+
+    Checks no longer archive. Receipts from checks made before that change are still
+    listed, and still say they were checks.
+    """
     rows = []
     for row in conn.execute(
         "SELECT o.*, m.value AS parse_result FROM input_observations o "

@@ -345,14 +345,28 @@ def test_me_comparison_persists_and_never_edits_my_picks(report_db):
     )
 
 
-def test_check_archives_and_parses_without_any_entrant_rows(report_db):
+def test_check_parses_without_archiving_or_writing_anything(report_db):
+    """A dry run leaves no trace. Archiving before parsing is the import's guarantee, and
+    the import keeps it; a check run over a file still being typed would archive drafts."""
     result = import_reference(report_db, check=True, me="Chris K.")
     assert result.check and result.parsed and not result.written and result.picks == 6
-    assert count(report_db, "input_observations") == 1
-    assert all(
-        count(report_db, t) == 0 for t in ("pool_entrants", "pool_picks", "pool_report_totals")
-    )
-    assert entrants.reports(report_db, 2026).iloc[0].check
+    assert result.observation_id is None
+    tables = ("input_observations", "input_payloads", "pool_entrants", "pool_picks")
+    assert all(count(report_db, t) == 0 for t in (*tables, "pool_report_totals"))
+    receipts = report_db.execute("SELECT COUNT(*) FROM meta WHERE key LIKE 'pool_report:%'")
+    assert receipts.fetchone()[0] == 0
+    assert entrants.reports(report_db, 2026).empty
+
+
+def test_failed_check_leaves_nothing_but_importing_the_same_bytes_still_archives(report_db):
+    raw = b"%PDF-unrecognized"
+    checked = import_reference(report_db, raw, check=True)
+    assert not checked.ok and checked.observation_id is None
+    assert count(report_db, "input_observations") == count(report_db, "input_payloads") == 0
+    assert db.get_meta(report_db, "pool_report:None") is None
+    imported = import_reference(report_db, raw)
+    assert not imported.ok and imported.observation_id is not None
+    assert count(report_db, "input_observations") == count(report_db, "input_payloads") == 1
 
 
 def test_week_inference_and_incomplete_scoring_warning(report_db):
@@ -581,13 +595,14 @@ def test_cli_check_does_not_change_standings_or_entrant_identity(report_cli, rep
     path = tmp_path / "week2.csv"
     path.write_text(entrants.parse_csv(REFERENCE.read_bytes()).assign(week=2).to_csv(index=False))
     checked = report_cli("report", "import", str(path), "--check", "--me", "Chris K.")
-    assert checked.exit_code == 0 and "Check only" in checked.output
+    assert checked.exit_code == 0 and "Check only: nothing archived" in checked.output
+    assert "Archived report as observation" not in checked.output
     assert "no recorded pick for QB" in checked.output
-    assert count(report_db, "input_observations") == 2
+    assert count(report_db, "input_observations") == 1
     assert count(report_db, "pool_picks") == 6
     assert report_db.execute("SELECT SUM(is_me) FROM pool_entrants").fetchone()[0] == 0
     assert "as of week 1" in report_cli("standings").output
-    assert "check" in report_cli("report", "list").output
+    assert len(entrants.reports(report_db, 2026)) == 1
 
 
 def test_cli_roster_acknowledgement_and_my_pick_comparison(report_cli, report_db, tmp_path):
@@ -634,7 +649,7 @@ def test_cli_empty_reports_and_missing_path_are_clear(report_cli):
 def test_cli_check_success_and_missing_totals_remain_unknown(report_cli, report_db, tmp_path):
     checked = report_cli("report", "import", str(REFERENCE), "--check")
     assert checked.exit_code == 0 and "Check only" in checked.output
-    assert count(report_db, "pool_picks") == 0
+    assert count(report_db, "pool_picks") == count(report_db, "input_observations") == 0
     raw = entrants.parse_csv(REFERENCE.read_bytes()).drop(columns=entrants.TOTAL_COLUMNS)
     path = tmp_path / "no_totals.csv"
     path.write_text(raw.to_csv(index=False))

@@ -298,13 +298,14 @@ rather than by expected touchdowns.
 
 [Stage 1](PHASE4_STAGE1_PLAN.md) adds the entrant, pick, and reported-total tables in
 migration 4; raw report bytes are committed before parsing, with one immutable observation
-per attempt and content-addressed payload deduplication. Separate `meta` entries hold
-parse outcomes, joined by observation id. `pool report import`, `pool report list`, and
-`pool standings` support re-imports, unresolved names, roster-change acknowledgement,
-`--me` comparison, and archive-only checks. The initial CSV fixture is provisional until
-the delivery format is confirmed. Tests cover failure durability, rollback, provenance,
-identity checks, and exclusion from decision capture/replay. Reported standings compute
-no scores; the stage 2 scoring comparison and remaining-pool queries are still unbuilt.
+per import attempt and content-addressed payload deduplication. Separate `meta` entries
+hold parse outcomes, joined by observation id. `pool report import`, `pool report list`,
+and `pool standings` support re-imports, unresolved names, roster-change acknowledgement,
+`--me` comparison, and `--check` dry runs that archive and write nothing. The initial CSV
+fixture is provisional until the delivery format is confirmed. Tests cover failure
+durability, rollback, provenance, identity checks, and exclusion from decision
+capture/replay. Reported standings compute no scores; the stage 2 scoring comparison and
+remaining-pool queries are still unbuilt.
 
 The first two are ordinary feature work. The third changes what the tool optimises and
 cannot be validated the way the first two can: a season is one Bernoulli trial, and
@@ -314,11 +315,13 @@ beside the expected-TD advice rather than replacing it. Simulations must share o
 player-week outcome across every entrant selecting that player, with relevant player
 correlations, ties, uncertainty about opponent choices and future policy updates.
 
-The pool reports every entrant's picks once a week has resolved, so standings and every
-rival's remaining pool are reliably in hand before the next picks are due, and the current
-week's opposition is never observable — it can only be predicted. The one deadline is to
-keep every weekly report from the first one, ingested or not: a report discarded is a week
-of evidence gone.
+The person running the pool sends every entrant's picks by hand, sometimes before a week's
+games have finished and always before the next week's first lock. Standings and every
+rival's remaining pool through last week are therefore reliably in hand before the next
+picks are due. The current week's opposition is sometimes visible and never guaranteed, so
+it must be predicted whenever the report has not arrived, and a reported pick whose game
+has not locked can still change. The one deadline is to keep every weekly report from the
+first one, ingested or not: a report discarded is a week of evidence gone.
 
 A local dashboard, deadline reminders and additional input providers remain optional. The
 projection-frame interface and assignment solver continue to support expected-TD planning;

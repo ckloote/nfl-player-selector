@@ -6,6 +6,13 @@
 [stage 1 plan](PHASE4_STAGE1_PLAN.md): three tables, raw bytes committed before parsing,
 and separate parse metadata. Stages 2 and 3 remain planned.
 
+**Corrected:** 2026-09-13. Reports do not wait for a week to resolve. The person running
+the pool sends them by hand: sometimes before a week's games have finished, and always
+before the next week's first lock. The 2026 week 1 report arrived before that Sunday's
+games. The passages below that assumed after-the-fact delivery are rewritten in place,
+because stages 2 and 3 will be built from this text, and each now says what the real
+cadence changes.
+
 Phase 3 ended without a promotion and without a collection window: 3B found no candidate
 worth shipping, and [3C was closed](PHASE3C_OUTCOME.md) rather than freeze the source tree
 through the season this tool is meant to be used in. What remains is the work the pool
@@ -26,23 +33,23 @@ You cannot fit or test an opponent model without opponent data, and you cannot c
 win probability without an opponent model. Stage 3 is therefore gated on stage 1 by
 substance, not by scheduling.
 
-The pool reports every entrant's picks once a week has resolved, so history is delivered
-rather than queried. Two things follow. **Keep every weekly report from the first one**,
-whether or not ingestion is built yet: a report that arrives and is discarded is a week of
-evidence gone, and that is the only deadline in this plan. And the first report cannot land
-until week 1 has been played, which is the runway — stage 1 has a week to be built
-properly rather than a Wednesday.
+The person running the pool sends every entrant's picks by hand, so history is delivered
+rather than queried. **Keep every weekly report from the first one**: a report that
+arrives and is discarded is a week of evidence gone, and that is the only deadline in this
+plan.
 
-The delivery also fixes what stage 3 is allowed to know. Picks arrive *after* the week
-resolves, so at a decision you have every entrant's standings and remaining pool through
-week N-1 and nobody's pick for week N. Everything needed to know where you stand is
-therefore reliably in hand, and the current week's opposition is never observable — it can
-only be predicted.
+The delivery also fixes what stage 3 is allowed to know. A week's report can arrive while
+that week is still being played, but it always arrives before the next week's first lock.
+So at any decision for week N, every entrant's picks and remaining pool through week N-1
+are guaranteed to be in hand, and their week-N picks sometimes are too. Where you stand is
+reliably known. The current week's opposition is sometimes observable and never
+guaranteed, so it has to be predicted whenever the report has not arrived — and an early
+report can include picks whose games have not locked, which their owners can still change.
 
 ## Stage 1 — Opponent Ingestion
 
-**What the pool provides:** every entrant's picks for a week, reported once that week has
-resolved. Per entrant, per week, complete — which is what the design below assumed, so the
+**What the pool provides:** every entrant's picks for a week, sent by hand at some point
+before the next week's first lock. Per entrant, per week, complete — which is what the design below assumed, so the
 shape stands. The remaining unknown is only the delivery format, and that decides the
 `fetch_` and `transform_` pair, not the schema or the staging; the schema can be built
 before the first report arrives.
@@ -86,10 +93,11 @@ not lose:
 - **Each entrant has their own used pool.** One player per entrant per season. This is not
   presentation — stage 3 needs to know what each opponent can still pick, and it is the
   only place that state will exist.
-- **Everyone is compared as of the same week.** Entrant picks arrive only for resolved
-  weeks, while `my_picks` may already hold the current one. Ranking my in-progress week
-  against their settled totals would invent a lead or a deficit; the standings are stated
-  as of the last resolved week, and anything of mine beyond it is shown separately.
+- **Everyone is compared as of the last week whose games are all final.** Not the last
+  week imported: a report can arrive while its week is still being played, and `my_picks`
+  may hold the current week before any report does. Ranking a half-played week would
+  invent a lead or a deficit, so the standings are stated as of the last resolved week,
+  and anything beyond it — mine or theirs — is shown separately as in progress.
 - **Ties are real.** The pool has a tie rule; the leaderboard must implement whatever it
   is rather than sorting and hoping.
 
@@ -118,15 +126,22 @@ repo already states: one sampled outcome per player-week is shared by every entr
 picked that player, and within-game correlation is represented rather than assumed away.
 Independently useful — it turns every projection into a distribution instead of a point.
 
-**An opponent model.** What will each rival pick in weeks not yet played? This is
-required, not a convenience: the pool reports picks only after a week resolves, so the
-current week's opposition is never observable at the moment you choose. The defensible
-baseline is greedy-from-remaining-pool on projected touchdowns, which is also what this
-tool's own `greedy` policy does, run against the remaining pool stage 2 already tracks.
+**An opponent model.** What will each rival pick in weeks not yet played? This is still
+required, not a convenience: a week's report sometimes arrives before you choose, but
+nothing guarantees it, so the policy has to work without one. When the report *has*
+arrived, use the real picks rather than predictions of them. Each of my slots locks
+separately, so an early report can land before my later slots lock, and that is when
+seeing them can change a decision. A reported pick whose game has not locked is likely,
+not final. The defensible baseline for prediction is greedy-from-remaining-pool on
+projected touchdowns, which is also what this tool's own `greedy` policy does, run against
+the remaining pool stage 2 already tracks.
 
 The reporting cadence also hands it a clean validation loop, which is the one place this
-stage gets to be empirical: predict every entrant's week-N pick before the week, read the
-report after it resolves, and score the prediction. That accrues an observation per
+stage gets to be empirical: predict every entrant's week-N pick, read the report, and score
+the prediction. The prediction must be recorded before that report is imported, or it is
+scored against an answer it could have seen. Because reports can arrive early, that is an
+ordering rule rather than a calendar one, and the archive already makes it checkable:
+every imported report records when it was observed. That accrues an observation per
 entrant per week rather than one per season, and it is checkable from the first report
 onward, long before any policy is built on top of it.
 

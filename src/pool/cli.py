@@ -150,7 +150,9 @@ def report_import(
     allow_roster_change: bool = typer.Option(
         False, "--allow-roster-change", help="Acknowledge additions or removals of entrants"
     ),
-    check: bool = typer.Option(False, "--check", help="Archive and validate without writing picks"),
+    check: bool = typer.Option(
+        False, "--check", help="Validate and report issues; archives and writes nothing"
+    ),
     db_path: Path | None = DbOpt,
 ):
     """Archive the original bytes, then import a complete week of entrant picks."""
@@ -174,7 +176,10 @@ def report_import(
         )
     finally:
         conn.close()
-    console.print(f"Archived report as observation {result.observation_id}: {path}", markup=False)
+    if not check:
+        console.print(
+            f"Archived report as observation {result.observation_id}: {path}", markup=False
+        )
     if result.parsed:
         action = "Imported" if result.written else "Parsed"
         console.print(
@@ -182,7 +187,7 @@ def report_import(
             f"{result.picks} picks, {result.totals} reported totals."
         )
     if check:
-        console.print("Check only: no entrant, pick, or total rows written.")
+        console.print("Check only: nothing archived, and no entrant, pick, or total rows written.")
     for warning in result.warnings:
         console.print(f"Warning: {warning}", style="yellow", markup=False)
     for item in result.unresolved:
@@ -232,7 +237,7 @@ def _reported_number(value) -> str:
 
 @report_app.command("list")
 def report_list(season: int = SeasonOpt, db_path: Path | None = DbOpt):
-    """List every archived attempt, including checks and failed imports."""
+    """List every archived import attempt, including failed imports."""
     conn = _conn(db_path)
     try:
         reports = entrants.reports(conn, season)
