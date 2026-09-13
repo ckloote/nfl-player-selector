@@ -328,6 +328,12 @@ counts as a contradiction — the report says I submitted nothing and I say othe
 a reported name that could not be resolved does not, because it is already reported as
 unresolved and its identity is unknown rather than different.
 
+A file that leaves my row out entirely is not compared at all. The first cut of the split
+treated a missing row like a blank one, and so reported all three of my recorded slots as
+"reported: no pick" — a claim the file never made. A blank row is the report saying I
+submitted nothing; an absent row is the report not mentioning me, and that is a roster
+change, which the roster check already reports.
+
 ### Week validation
 
 `state.validate_week` rejects a week outside the season. A week whose games are not all

@@ -468,6 +468,26 @@ def test_an_unresolved_report_name_is_not_also_called_a_contradiction(report_db)
     assert result.unresolved and not result.conflicts and not result.ok
 
 
+def test_a_report_that_leaves_me_out_is_not_a_contradiction(report_db):
+    """A present row with a blank name is the report saying I picked nobody. A file with no
+    row for me says nothing about my picks at all; my absence is a roster change and is
+    reported as one, so comparing slots against it would invent three contradictions."""
+    assert import_reference(report_db, me="Chris K.").ok
+    with report_db:
+        report_db.executemany(
+            "INSERT INTO my_picks(season, week, slot, player_id, player_name, recorded_at) "
+            "VALUES (2026, 2, ?, ?, ?, '2026-09-19T00:00:00Z')",
+            [("QB", "q1", "Quarter One"), ("RB", "r1", "Runner One"), ("FLEX", "f1", "Flex One")],
+        )
+    frame = entrants.parse_csv(REFERENCE.read_bytes()).assign(week="2")
+    raw = frame[frame.entrant.ne("Chris K.")].to_csv(index=False).encode()
+    rejected = import_reference(report_db, raw, week=2)
+    assert rejected.removed == ["chris k"] and not rejected.written
+    assert not rejected.conflicts and not rejected.unrecorded
+    accepted = import_reference(report_db, raw, week=2, allow_roster_change=True)
+    assert accepted.ok and accepted.written and not accepted.conflicts
+
+
 def test_missing_totals_stay_missing_and_literal_na_names_survive():
     raw = b'entrant,slot,player_name\nNA,QB,NA\nNA,RB,"Runner, One"\nNA,FLEX,Flex One\n'
     identities, picks, totals = entrants.transform_report(entrants.parse_csv(raw), 2026, 1)

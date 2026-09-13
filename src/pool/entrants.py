@@ -258,8 +258,16 @@ def _compare_me(conn, season, week, me_id, picks) -> tuple[list[dict], list[dict
     A slot I never recorded is a gap in my bookkeeping; a slot where the report
     contradicts what I recorded means one of the two is wrong about what I submitted.
     Only the second is a reason to distrust the import, so they are returned separately.
+
+    A file with no row for me is not compared at all. A present row with a blank name is
+    the report saying I picked nobody; an absent row says nothing about my picks, and my
+    absence is already reported as a roster change. Every entrant in a file carries all
+    three slots, so an empty lookup here means exactly that I am not in it.
     """
     if me_id is None:
+        return [], []
+    reported = {r.slot: r for r in picks[picks.entrant_id.eq(me_id)].itertuples()}
+    if not reported:
         return [], []
     mine = {
         r["slot"]: dict(r)
@@ -268,7 +276,6 @@ def _compare_me(conn, season, week, me_id, picks) -> tuple[list[dict], list[dict
             (season, week),
         )
     }
-    reported = {r.slot: r for r in picks[picks.entrant_id.eq(me_id)].itertuples()}
     unrecorded, conflicts = [], []
     for slot in config.SLOTS:
         own, report = mine.get(slot), reported.get(slot)
