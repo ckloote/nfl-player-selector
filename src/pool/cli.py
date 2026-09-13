@@ -203,6 +203,14 @@ def report_import(
                 f"{candidate['player_id']})",
                 markup=False,
             )
+    for item in result.inexact:
+        console.print(
+            f"Note: {item['entrant_id']} {item['slot']}: typed {item['player_name']!r}, "
+            f"matched {item['matched']} ({item['team']} {item['position']}). "
+            "Not an exact name match; confirm it is the intended player.",
+            style="yellow",
+            markup=False,
+        )
     if result.added or result.removed:
         console.print(f"Entrant changes compared with week {result.previous_week}:")
         if result.added:

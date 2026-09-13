@@ -281,7 +281,11 @@ trace. A report can be imported as soon as it arrives, even before that week's g
 finish; re-importing the week later replaces it in place.
 
 Unresolved player names are retained and listed with candidates; re-import after updating
-the roster to resolve them. Entrant names are normalized across weeks. Additions, removals,
+the roster to resolve them. A name that is not an exact match (ignoring case and
+punctuation) but fits exactly one player by a partial name or a close spelling is imported
+and printed as a note showing what you typed and who it matched, in both `--check` and the
+import. Read those notes: a typo can match the wrong player. Entrant names are normalized
+across weeks. Additions, removals,
 and renames leave the week exactly as it was and exit nonzero until acknowledged with
 `--allow-roster-change`; review those differences before acknowledging them. A correction
 that drops an entrant and a delivery that was truncated look identical, so nothing is

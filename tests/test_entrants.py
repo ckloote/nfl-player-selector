@@ -277,6 +277,28 @@ def test_ambiguity_lists_candidates_and_slot_restriction_resolves_names(report_d
     assert import_reference(report_db).ok
 
 
+def test_a_name_matched_only_by_partial_or_close_spelling_is_noted_not_failed(report_db):
+    """`find_player` quietly accepts one partial or close-spelling match. That is usually a
+    typo finding the right player, so it imports, but it is listed so a wrong one is seen."""
+    raw = (
+        REFERENCE.read_bytes()
+        .replace(b"1,Chris K.,RB,Runner One", b"1,Chris K.,RB,Runner")
+        .replace(b"1,Pat,RB,Runner One", b"1,Pat,RB,Runer One")
+        .replace(b"Quarter Two", b"QUARTER TWO")
+    )
+    result = import_reference(report_db, raw)
+    assert result.ok and result.written and not result.unresolved
+    matched = dict(matched="Runner One", player_id="r1", team="A", position="RB")
+    assert result.inexact == [
+        dict(entrant_id="chris k", slot="RB", player_name="Runner", **matched),
+        dict(entrant_id="pat", slot="RB", player_name="Runer One", **matched),
+    ]
+    rows = entrants.entrant_picks(report_db, 2026, 1).set_index(["entrant_id", "slot"])
+    assert rows.loc[("pat", "RB"), "player_name"] == "Runer One"
+    assert rows.loc[("pat", "RB"), "player_id"] == "r1"
+    assert not import_reference(report_db).inexact
+
+
 @pytest.mark.parametrize("change", ["rename", "addition", "removal"])
 def test_roster_changes_are_flagged_before_any_rows_change(report_db, change):
     import_reference(report_db)
@@ -637,6 +659,17 @@ def test_cli_standings_distinguishes_a_no_pick_from_an_unresolved_name(report_cl
     shown = report_cli("standings")
     assert shown.exit_code == 0 and "(no pick)" in shown.output
     assert "(unresolved)" not in shown.output
+
+
+def test_cli_notes_an_inexact_name_match_in_check_and_import(report_cli, tmp_path):
+    path = tmp_path / "typo.csv"
+    path.write_bytes(REFERENCE.read_bytes().replace(b"1,Pat,RB,Runner One", b"1,Pat,RB,Runer One"))
+    expected = "Note: pat RB: typed 'Runer One', matched Runner One (A RB)."
+    checked = report_cli("report", "import", str(path), "--check")
+    assert checked.exit_code == 0 and expected in checked.output
+    imported = report_cli("report", "import", str(path))
+    assert imported.exit_code == 0 and expected in imported.output
+    assert "Note:" not in report_cli("report", "import", str(REFERENCE)).output
 
 
 def test_cli_empty_reports_and_missing_path_are_clear(report_cli):
