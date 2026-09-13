@@ -285,7 +285,10 @@ and renames leave the week exactly as it was and exit nonzero until acknowledged
 that drops an entrant and a delivery that was truncated look identical, so nothing is
 written until you say which it is; acknowledging then replaces that week's entrant set
 while preserving the archived originals. `--me` identifies your row once, then every
-import compares it with `my_picks`. A slot you have not recorded is a note; a slot where
+import that contains your row compares it with `my_picks`; a file without your row is a
+roster change, not a mismatch. Include yourself: `standings` only lists entrants in the
+report, and the comparison is what catches the pool registering a different pick than the
+one you recorded. A slot you have not recorded is a note; a slot where
 your record and the report name different players — or where the report says you picked
 nobody — is a mismatch. Unresolved names, unacknowledged roster changes, and mismatches
 exit nonzero. `my_picks` is never edited by a report import. Incomplete game coverage
