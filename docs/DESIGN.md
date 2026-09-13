@@ -13,8 +13,9 @@ Pool rules, restated as constraints:
 5. Each pick locks independently, **1 hour before that player's game starts**.
    The three picks in a week need not be submitted together: you could lock a
    RB before Thursday's game, a QB before Sunday's, and a WR before Monday's.
-6. At the end of each week, an official report confirms every entrant's picks
-   and running totals.
+6. Each week, the person running the pool sends a report of every entrant's
+   picks and running totals. It is sent by hand: sometimes before that week's
+   games have finished, always before the next week's first lock.
 
 Consequences worth calling out:
 
@@ -42,11 +43,14 @@ Consequences worth calling out:
   lead, you can dial up variance on the QB and WR/TE picks that haven't locked
   yet. The recommender must therefore work slot-by-slot within a week, not
   only week-by-week.
-- Opponents' current-week picks are hidden until the end-of-week report, so
-  in-week you're playing against a one-week-old picture of the leaderboard and
-  everyone's remaining player pools. That's still highly informative — the
-  used-player lists are exact — but blocking/mirroring decisions are made
-  against *predicted* opponent picks, never observed ones.
+- Opponents' current-week picks are hidden until the report arrives, which is
+  guaranteed only before the next week's first lock. So you always have an
+  exact picture of the leaderboard and everyone's remaining player pools as of
+  last week — highly informative, because the used-player lists are exact.
+  Sometimes the report arrives early, before your own later slots lock; then
+  blocking/mirroring can use observed picks, remembering that a pick whose game
+  has not locked can still change. Otherwise those decisions are made against
+  *predicted* opponent picks.
 
 ## 2. What the tool does
 
@@ -72,7 +76,7 @@ re-recommending for the still-open slots with everything known at that moment
 results).
 
 It also tracks state: your used players, your weekly scores, and every
-opponent's picks and totals (entered from the official end-of-week report),
+opponent's picks and totals (entered from the pool's weekly report),
 and adjusts recommendations based on your leaderboard position.
 
 ## 3. Architecture
@@ -118,8 +122,9 @@ Four layers, deliberately decoupled so each can improve independently:
 - **Pool reports:** `report import` commits the delivered bytes to the existing
   content-addressed archive before parsing. A second transaction writes resolved
   records and parse outcomes in `meta`, keyed by observation id; immutable observations
-  retain their original archive coverage. Failed files and `--check` attempts remain
-  recoverable. The `pool_report` feed is deliberately excluded from projection inputs,
+  retain their original archive coverage. A file that fails to import remains
+  recoverable; `--check` is a dry run that archives and writes nothing. The
+  `pool_report` feed is deliberately excluded from projection inputs,
   snapshot restoration, and freshness checks. See [the stage 1 plan](PHASE4_STAGE1_PLAN.md).
 - **Refresh:** one command (`refresh`) re-pulls current-season data. Everything
   downstream reads only from the database, so the model and optimizer never
@@ -218,8 +223,9 @@ far-future matchups that may never materialize.
 Turns "maximize expected TDs" into "maximize probability of winning the pool."
 
 - **State tracked:** every opponent's cumulative score *and used players*,
-  imported from the official end-of-week report (they face the same one-use
-  constraint, so their remaining arsenal is exactly knowable, one week behind).
+  imported from the pool's weekly report (they face the same one-use
+  constraint, so their remaining arsenal is exactly knowable, at most one week
+  behind).
 - **Monte Carlo simulation:** simulate the rest of the season a few thousand
   times. Your picks follow the optimizer plan; opponents are modeled as playing
   a near-optimal assignment over their own remaining pools (with noise). Each
@@ -253,9 +259,9 @@ pool recommend --week 4         # open slots only: picks, alternatives, plan,
 pool record --week 4 --rb "B.Robinson"     # lock one slot (slots lock at
 pool record --week 4 --qb "J.Allen"        #   different times, so recording
                                            #   is per-slot; repeatable)
-pool report import week4.csv    # ingest the official end-of-week report
-                                #   --check archives and validates without writing picks
-pool report list                # archived attempts, times, counts, and status
+pool report import week4.csv    # ingest the pool's weekly report
+                                #   --check validates only; archives and writes nothing
+pool report list                # archived import attempts, times, counts, and status
 pool standings                  # picks, totals, and ranks reported for the latest imported week
 pool plan                       # full remaining-season assignment view
 ```
@@ -277,12 +283,14 @@ A web dashboard is a possible Phase 4 nicety, not a requirement.
   lines + shrinkage is transparent and debuggable. Comparing a few hand-built models
   does not establish a ceiling for these inputs; the projection-frame interface permits
   better features or estimation. Joint context ablations do not identify defense alone.
-- **Leaderboard from the official weekly report:** the pool publishes
-  everyone's picks and totals at week's end, so opponent state is entered once
+- **Leaderboard from the official weekly report:** the person running the pool
+  sends everyone's picks and totals by hand, so opponent state is entered once
   a week from that report (CSV import, with a hand-written CSV as fallback)
-  rather than scraped or guessed. The one-week lag is a fact of the game, not
-  a tooling gap — everyone plays under it. The tool works (in EV mode) even if
-  you skip opponent tracking entirely.
+  rather than scraped or guessed. The report is guaranteed only before the next
+  week's first lock, so the tool must work from last week's picture and treat
+  an early report as a bonus. That lag is a fact of the game, not a tooling
+  gap — everyone plays under it. The tool works (in EV mode) even if you skip
+  opponent tracking entirely.
 - **SQLite over files:** pool state (picks, opponents) needs transactional
   updates and joins against stats; SQLite gives that with zero infrastructure.
 - **Backtesting as a first-class concern:** because data access is behind the

@@ -39,7 +39,7 @@ verified the same day settles it whenever that is worth doing.
 
 Phase 4, stage 1 is implemented: weekly entrant reports are archived before parsing,
 imported with player and entrant identity checks, and displayed as pool-reported standings.
-`pool report list` includes failed imports and checks. Entrant scoring, remaining-pool
+`pool report list` includes failed imports. Entrant scoring, remaining-pool
 queries, and win probability remain later stages.
 
 The [evaluation report](docs/EVALUATION.md) combines actual season scores from each model's
@@ -272,11 +272,13 @@ which stays distinct from a name that could not be resolved and from a week that
 never imported. Dropping the row instead is still rejected as a missing slot, because
 nothing distinguishes it from a truncated file.
 
-Every attempt commits the original bytes before parsing, including failed imports and
-`--check`. Re-imports add an observation while sharing the same stored payload and
-updating the week's picks. Parse outcomes live separately in metadata so the original
-observation remains immutable. `--check` validates and prints counts and issues without
-changing entrants, picks, or totals.
+Every import commits the original bytes before parsing, including imports that fail.
+Re-imports add an observation while sharing the same stored payload and updating the
+week's picks. Parse outcomes live separately in metadata so the original observation
+remains immutable. `--check` is a dry run: it validates and prints counts and issues but
+archives and writes nothing, so checking a file repeatedly while you fix it leaves no
+trace. A report can be imported as soon as it arrives, even before that week's games
+finish; re-importing the week later replaces it in place.
 
 Unresolved player names are retained and listed with candidates; re-import after updating
 the roster to resolve them. Entrant names are normalized across weeks. Additions, removals,
