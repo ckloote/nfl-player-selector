@@ -1,9 +1,9 @@
 # NFL Player Selector
 
 A decision-support tool for a season-long NFL touchdown pool: each week you pick
-one QB, one RB, and one WR/TE, you score a point for every TD your picks throw or
+one QB, one RB, and one WR/TE, your score is the number of TDs your picks throw or
 score, and every player can only be used **once per season**. Most TDs at the end
-of the season wins, winner take all.
+of the season wins, winner take all; entrants tied at the top split the pot.
 
 This turns weekly picks into a season-long resource-allocation problem: *when* do
 you spend your best players, given their schedules, and how should your risk
@@ -240,12 +240,15 @@ with a warning; finalized scoring and replay comparisons require complete covera
 ### Importing the pool's weekly report
 
 ```bash
-uv run pool report import week1.csv --season 2026 --check
-uv run pool report import week1.csv --season 2026 --me "Chris K."
+uv run pool report import data/reports/week1.csv --season 2026 --check
+uv run pool report import data/reports/week1.csv --season 2026 --me "Chris K."
 uv run pool report list --season 2026
 uv run pool standings --season 2026             # latest imported week, reported values
 uv run pool standings --season 2026 --week 1
 ```
+
+Keep report files in `data/reports/`. Git ignores that folder, because a report names every
+entrant in the pool.
 
 The initial `--format csv` parser accepts UTF-8 CSV with one row per entrant and slot:
 
