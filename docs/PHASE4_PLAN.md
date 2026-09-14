@@ -13,6 +13,12 @@ games. The passages below that assumed after-the-fact delivery are rewritten in 
 because stages 2 and 3 will be built from this text, and each now says what the real
 cadence changes.
 
+**Pool rules confirmed:** 2026-09-13. Every TD of any kind a pick throws or scores counts;
+two-point conversions do not. Scores are TD counts and are reported as TDs, never points.
+A tie at the top splits the winnings among the tied entrants, so stage 2 shows ties as ties
+and stage 3 maximises the expected share of the pot rather than the chance of an outright
+win.
+
 Phase 3 ended without a promotion and without a collection window: 3B found no candidate
 worth shipping, and [3C was closed](PHASE3C_OUTCOME.md) rather than freeze the source tree
 through the season this tool is meant to be used in. What remains is the work the pool
@@ -98,8 +104,14 @@ not lose:
   may hold the current week before any report does. Ranking a half-played week would
   invent a lead or a deficit, so the standings are stated as of the last resolved week,
   and anything beyond it — mine or theirs — is shown separately as in progress.
-- **Ties are real.** The pool has a tie rule; the leaderboard must implement whatever it
-  is rather than sorting and hoping.
+- **Ties are real, and at the top they split the pot.** Entrants level on TDs are shown
+  as tied rather than ordered by name or entry. Only a tie for first has consequences:
+  the tied entrants split the winnings, so the leaderboard must say so rather than name
+  one of them the leader.
+- **Score is a TD count, never points.** Every TD of any kind a picked player throws or
+  scores counts, including returns, fumble recoveries and trick-play passes; two-point
+  conversions do not. That is what `scoring` already credits, so entrants and `my_picks`
+  share one definition, and totals are displayed and labelled as TDs.
 
 **Done when** `pool leaderboard` reproduces the pool's own standings for a scored week. If
 it disagrees with the official table, the ingestion or the scoring is wrong and that is
@@ -125,6 +137,8 @@ It stays as the expected-TD planner and becomes the starting point for something
 repo already states: one sampled outcome per player-week is shared by every entrant who
 picked that player, and within-game correlation is represented rather than assumed away.
 Independently useful — it turns every projection into a distribution instead of a point.
+Ties at the top have to come out of the simulation rather than be broken arbitrarily:
+season totals are small integers, so ties are common, and a tie splits the pot.
 
 **An opponent model.** What will each rival pick in weeks not yet played? This is still
 required, not a convenience: a week's report sometimes arrives before you choose, but
@@ -147,7 +161,8 @@ onward, long before any policy is built on top of it.
 
 **A policy.** The search space is far too large to enumerate, so the tractable form is a
 one-step lookahead: hold the expected-TD plan for the rest of the season, vary only this
-week's pick, and score each candidate by simulated P(finish first). That is a real policy
+week's pick, and score each candidate by its simulated expected share of the pot, where a win counts 1 and a
+k-way tie for first counts 1/k. That is a real policy
 and it should be described as exactly that, not as "the optimal win-probability plan".
 
 **A seam.** `backtest.STRATEGIES` already maps a name to a policy function, which is where
@@ -158,7 +173,7 @@ correct, because this genuinely changes what a decision is.
 
 ### The part that cannot be finessed
 
-**A season is one Bernoulli trial.** You either win the pool or you do not. No season, and
+**A season is one Bernoulli trial.** You win the pool, share it, or do not. No season, and
 no five seasons, can establish that a win-probability policy raised your chance of winning.
 Any claim of the form "this worked" is unavailable here, and the plan should stop
 pretending otherwise before it starts.
@@ -174,7 +189,7 @@ What *can* be established, and what stage 3 should be judged on:
 | The simulator is calibrated | Simulated player-week touchdown frequencies against 15 seasons of observed ones, including the conditional tails, not just the mean |
 | The opponent model predicts picks | Hit rate against the picks entrants actually made, once stage 1 has weeks of them |
 | The policy behaves as intended | In simulation: takes variance when behind, sheds it when ahead, and converges on the expected-TD pick when the standings are level |
-| The advantage exists in the model | P(win) under win-max against P(win) under TD-max, **inside the simulator** |
+| The advantage exists in the model | Expected share of the pot under win-max against the same under TD-max, **inside the simulator** |
 
 The last row is a simulated gain and must be reported as one. The repo's own earlier note
 put it correctly: validate conditional tails and simulation behaviour before treating a

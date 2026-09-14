@@ -5,11 +5,14 @@
 Pool rules, restated as constraints:
 
 1. Each week, pick exactly one **QB**, one **RB**, and one **WR/TE**.
-2. You score one point for every TD a pick **scores or throws** that week
-   (a QB gets credit for passing *and* rushing TDs; a RB for rushing *and*
-   receiving TDs, etc.).
+2. Your score is the number of TDs your picks **score or throw** that week:
+   every TD of any kind counts, including returns, fumble recoveries and
+   trick-play passes (a QB gets credit for passing *and* rushing TDs; a RB for
+   rushing *and* receiving TDs, etc.). Two-point conversions do not count.
+   Scores are TD counts and are reported as TDs, not points.
 3. A player may be used **at most once per season**, across all weeks.
-4. Highest cumulative TD total after the final week wins. **Winner take all.**
+4. Highest cumulative TD total after the final week wins. **Winner take all**,
+   except that entrants tied at the top split the winnings.
 5. Each pick locks independently, **1 hour before that player's game starts**.
    The three picks in a week need not be submitted together: you could lock a
    RB before Thursday's game, a QB before Sunday's, and a WR before Monday's.
@@ -29,8 +32,9 @@ Consequences worth calling out:
   TDs, subject to one-use-per-player. Exact assignment maximizes the fixed pruned forecast matrix. Its rolling
   policy is compared with greedy using each policy's own history; uncertain, changing
   projections prevent that mathematical optimum from proving a season-score advantage.
-- Winner-take-all means the true objective is **probability of finishing
-  first**, not expected TDs. Those diverge exactly when you're not in the
+- Winner-take-all means the true objective is **your expected share of the
+  pot** — the probability of finishing first, with a tie at the top counted as
+  a share — not expected TDs. Those diverge exactly when you're not in the
   middle of the pack: a trailing player should prefer a high-variance pick with
   a lower mean, a leader should prefer a high-floor pick and/or copy the
   second-place player's likely picks to deny them ground.
@@ -230,7 +234,8 @@ Turns "maximize expected TDs" into "maximize probability of winning the pool."
   times. Your picks follow the optimizer plan; opponents are modeled as playing
   a near-optimal assignment over their own remaining pools (with noise). Each
   simulation draws actual TD outcomes from the projection distributions. Output:
-  P(you finish first) for each candidate pick this week.
+  your expected share of the pot for each candidate pick this week (a win counts
+  1, a k-way tie for first counts 1/k).
 - **Decision rule:** rank this week's candidate picks by *win probability*, not
   expected TDs. This automatically produces the intuitive behavior:
   - **Trailing:** high-variance picks and *differentiation* — avoid picking the

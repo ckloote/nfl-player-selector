@@ -12,3 +12,6 @@ data/*.db-journal
 
 # uv.lock is intentionally committed — it pins the exact environment.
 data/experiments/
+
+# Delivered pool reports name every entrant; keep them out of the repository.
+data/reports/

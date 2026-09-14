@@ -212,6 +212,24 @@ player, which is worse than a leaderboard that says it is incomplete. This is th
 discipline as *pending is not zero*, applied one stage earlier: **unresolved is not
 absent.**
 
+### Names that match only approximately
+
+**Added 2026-09-13.** `find_player` is forgiving. After an exact match, ignoring case and
+punctuation, it tries a word-start match and then a close spelling, and when either finds
+exactly one player it uses that player without saying so. The report stores the name as
+typed, so neither the import nor `pool standings` would show that `Jalen Hurst` became
+Jalen Hurts — or that a typo became somebody else.
+
+Measured against the 2026 week 1 pool before changing anything: 491 single-letter typos of
+the 255 players ranked first or second on a depth chart resolved to the intended player 85%
+of the time, were flagged the other 15%, and never silently resolved to someone else. That
+is reassuring and not proof, so the fix is visibility rather than a stricter matcher: every
+pick resolved by a partial or close-spelling match is reported as a note naming what was
+typed and who it matched, in `--check` and in the import. It leaves the exit code alone,
+because most are typos that found the right player and failing them would make a correct
+import red. Exact means equal after the matcher's own normalisation, so the note never fires
+on case or punctuation. The matcher itself is unchanged, because `pool record` shares it.
+
 ### The third state: no pick at all
 
 **Added after review.** An entrant who forgets a week is routine, and the draft's schema
@@ -403,6 +421,9 @@ assertions; the rest are the claims this document makes that would be silent if 
 10. A week outside the season is rejected; an incomplete week warns and imports.
 11. `--check` parses and writes nothing — no rows, observation, payload or receipt — even
     when it fails.
+12. A name resolved by a partial or close-spelling match imports, is listed with what was
+    typed and who it matched, and leaves the exit code alone; a case-only difference is
+    not listed.
 
 `tests/test_workflow.py` already asserts `user_version == max(db.MIGRATIONS)`, so the
 migration is covered there without a new test. `tests/test_phase3a.py`'s `outside` set
