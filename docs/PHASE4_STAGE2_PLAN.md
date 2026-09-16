@@ -244,8 +244,14 @@ Four sentences, chosen by how many leaders there are and whether the board is fi
 |---|---|---|
 | 1 | yes | `Jamie leads with 5 TDs.` |
 | 1 | no | `As it stands Jamie leads with 5 TDs, with 2 picks pending.` |
-| more than 1 | yes | `Jamie and Keith are tied for first with 5 TDs. A tie for first splits the winnings: each takes 1/2 of the pot.` |
-| more than 1 | no | `As it stands Jamie and Keith are tied for first with 5 TDs, with 2 picks pending. A tie at the end splits the winnings 1/2 each.` |
+| more than 1 | season over | `Jamie and Keith are tied for first with 5 TDs. A tie for first splits the winnings: each takes 1/2 of the pot.` |
+| more than 1 | otherwise | `As it stands Jamie and Keith are tied for first with 5 TDs, with 2 picks pending. A tie at the end splits the winnings 1/2 each.` |
+
+**Corrected 2026-09-15**, after review. The settled sentence was first gated on `Board.final`,
+which only says the ranked prefix has no gaps — true after one cleanly scored week of
+eighteen, so a week 1 tie announced a split pot. It is gated on `Board.season_complete`
+instead: every regular-season week ranked. `final` still drives the `(provisional)` label,
+where it is the right question.
 
 The word *leader* is never printed when there is more than one, and the split is never stated as
 settled while the board is provisional. Season totals are small integers, so ties are common

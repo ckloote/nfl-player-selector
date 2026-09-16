@@ -311,7 +311,9 @@ def test_cli_computed_and_reported_columns_final_tie_and_score_parity(pool, invo
     shown = invoke("standings")
     assert "week 1 picks; ranked on season totals through week 1" in shown
     assert "Chris and Pat are tied for first with 2 TDs." in shown
-    assert "each takes 1/2 of the pot" in shown and "leader" not in shown
+    # Week 2 is still unplayed, so the tie is real but the split is not settled.
+    assert "A tie at the end splits the winnings 1/2 each." in shown
+    assert "each takes" not in shown and "leader" not in shown
     assert "Week TDs" in shown and "Season TDs" in shown
     assert "Reported week TDs" in shown and "Reported total TDs" in shown
     assert "99" in shown and "123" in shown
@@ -424,3 +426,24 @@ def test_standings_refuses_a_week_outside_the_season_rather_than_inventing_one(p
         assert result.exit_code == 1, result.output
         assert "outside the 2026 season" in result.output
         assert "missing" not in result.output
+
+
+def test_a_tie_for_first_splits_the_pot_only_once_the_season_runs_out_of_weeks(pool, invoke):
+    """`final` means the ranked weeks have no gaps, which is true after the first one.
+
+    Saying the pot is shared is a claim about money, and it is only true when no week is
+    left to change the standing. The fixture's week 2 is unplayed, so the same tie is
+    reported two different ways either side of that fact.
+    """
+    conn, _ = pool
+    from pool import standings
+
+    assert standings.board(conn, 2026).final
+    assert not standings.board(conn, 2026).season_complete
+    assert "A tie at the end splits the winnings 1/2 each." in invoke("standings")
+    with conn:
+        conn.execute("DELETE FROM games WHERE season = 2026 AND week > 1")
+    assert standings.board(conn, 2026).season_complete
+    shown = invoke("standings")
+    assert "A tie for first splits the winnings: each takes 1/2 of the pot." in shown
+    assert "leader" not in shown

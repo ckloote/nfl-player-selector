@@ -79,6 +79,21 @@ class Board:
     cache_stale: bool
     report_conflicts: bool
     used_through: int | None
+    season_weeks: int | None = None
+
+    @property
+    def season_complete(self) -> bool:
+        """Every regular-season week is ranked, so a tie for first really does split.
+
+        `final` says only that the ranked prefix has no gaps, which is true after one
+        scored week of eighteen. Whether money is shared is decided when the season runs
+        out of weeks, not when the weeks played so far happen to be fully scored.
+        """
+        return (
+            self.final
+            and self.season_weeks is not None
+            and (self.as_of or 0) >= self.season_weeks
+        )
 
     @property
     def final(self) -> bool:
@@ -87,6 +102,13 @@ class Board:
             and bool(self.rows)
             and all(not row.season_total.incomplete for row in self.rows)
         )
+
+
+def _season_weeks(conn, season) -> int | None:
+    last = conn.execute(
+        "SELECT MAX(week) FROM games WHERE season = ? AND game_type = 'REG'", (season,)
+    ).fetchone()[0]
+    return int(last) if last is not None else None
 
 
 def _optional(value):
@@ -306,4 +328,5 @@ def _board(conn, season, week) -> Board:
         cache_stale,
         conflicts,
         latest,
+        _season_weeks(conn, season),
     )

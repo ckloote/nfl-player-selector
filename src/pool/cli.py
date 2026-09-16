@@ -341,7 +341,10 @@ def _standing_lead(result: st.Board) -> str:
         sentence += ", with " + ", ".join(issues)
     sentence += "."
     if len(names) > 1:
-        if result.final:
+        # Settled language needs the season to be over, not merely the ranked weeks to be
+        # fully scored -- `final` is true after one clean week of eighteen, and the pot is
+        # not shared until there are no weeks left to change it.
+        if result.season_complete:
             sentence += (" A tie for first splits the winnings: "
                          f"each takes 1/{len(names)} of the pot.")
         else:
