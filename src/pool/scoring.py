@@ -291,6 +291,7 @@ class PickScore:
     game_id: str | None
     tds: int | None
     pending: str
+    note: str = ""  # a final score that is worth explaining; never a reason to wait
 
 
 @dataclass(frozen=True)
@@ -325,11 +326,24 @@ def resolve_pick_game(
 
 
 def score_pick(board: ScoreBoard, week: int, player_id: str, game_id: str | None) -> PickScore:
-    """A final zero is a score; absent or incomplete coverage is not."""
+    """A final zero is a score; absent or incomplete coverage is not.
+
+    A pick with no game at all is the pool's own zero once that week has finished: the
+    player did not play, so he scored nothing, and the pool treats a pick on a player who
+    is not playing as worth nothing rather than as unfinished business. Waiting instead
+    left one such pick holding the whole season at provisional forever.
+
+    The zero waits for the week's games to be final, because before that "no game found"
+    and "no game yet" are the same silence. It also carries a note, because the other way
+    to reach it is a team abbreviation the schedule does not know -- which would otherwise
+    zero every pick on that team without a word.
+    """
     if game_id not in board.games.index or int(board.games.loc[game_id, "week"]) != week:
-        reason = "game unresolved"
-    else:
-        reason = "" if board.games.loc[game_id, "complete"] else board.games.loc[game_id, "reason"]
+        played = board.games[board.games.week == week]
+        if len(played) and played.complete.all():
+            return PickScore(game_id, 0, "", "no game that week; scored zero")
+        return PickScore(game_id, None, "game unresolved")
+    reason = "" if board.games.loc[game_id, "complete"] else board.games.loc[game_id, "reason"]
     value = None if reason else int(board.credits.get((game_id, player_id), 0))
     return PickScore(game_id, value, reason)
 

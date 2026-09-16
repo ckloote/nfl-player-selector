@@ -477,3 +477,44 @@ $ pool verify-capture --season 2026 --allow-code-drift
 5 passed only because the fingerprint check was overridden. The source these checks enforce had moved and they were accepted anyway.
 All 5 captured decisions reconstruct and match replay.
 ```
+
+## Corrected After Review — 2026-09-15
+
+Four findings, three fixed here and one ruled on by the pool's own rules.
+
+**A standings week the season does not have** (`5b5b857`). `--week 99`, `0` and `-3` each
+rendered a full table with every entrant's three slots shown as a missing report. The board
+treats the requested week as a display cutoff and synthesizes a missing pick for anything it
+cannot find, which is right for an unimported week and a fabrication for an impossible one.
+Stage 1 said plainly that nothing was imported; validating first restores that.
+
+**A tie called settled while weeks remained** (`8577674`). The settled sentence was gated on
+`Board.final`, which only says the ranked prefix has no gaps — true after one cleanly scored
+week of eighteen, so a week 1 tie announced a split pot. It is gated on `season_complete`
+instead, read from the schedule because `config` has no season length.
+
+**Availability that used the week it was asked about** (`bb200ce`). `remaining_counts` scoped
+the pool to `week` but subtracted every imported week. Because reports routinely arrive before
+a week is played, "what could they pick in week N" answered differently once week N's own
+report landed — the exact leak the reporting cadence makes easy, in the function stage 3 was
+told to ask. Spending now stops at `week - 1`. The test that pinned the old numbers was
+pinning the leak.
+
+**A pick with no game now scores zero.** Previously it stayed `game unresolved` forever, so a
+single bye-week pick would hold the whole season at provisional and no suggested remedy could
+clear it. The pool's rule settles it: nobody picks a player who is not playing, the organizer
+would make them pick again, and if one got through it is worth nothing. The zero waits until
+that week's games are all final, because until then "no game found" and "no game yet" are the
+same silence, and it carries a note, because the other route to it is a team abbreviation the
+schedule does not know — which would otherwise zero every pick on that team without a word.
+
+**A consequence worth stating:** inside a ranked week nothing can be pending any more. Every
+game in the prefix is final by construction and a game-less pick now scores, so a ranked week's
+`pending` count is structurally zero. A lead is still provisional for an unresolved name or a
+week nobody reported, which is what `test_cli_single_lead_and_lower_tie_then_provisional_lead`
+now covers.
+
+This second edit to `scoring.py` moved the enforced fingerprint again, from
+`f9682cdd5dbe57bafcd197865dd5fcdbcaeeb9f5bd155bf4769c5dd4bf59987f` to
+`9328b3199b360f31b926a3c9c00df8e189e806e0aed5c0f3e628f455eda1268d`. The five 2026 captures still reconstruct and match replay under
+`--allow-code-drift`; they already required it after the first move.

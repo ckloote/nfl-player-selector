@@ -25,6 +25,7 @@ class EntrantPick:
     status: str  # final, pending, unresolved, missing
     pending: str = ""
     source: str = "reported"
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,7 @@ def _score_rows(conn, season, rows, scores) -> list[EntrantPick]:
     for row in rows.itertuples():
         name, pid = _optional(row.player_name), _optional(row.player_id)
         gid = _optional(row.game_id)
+        note = ""
         if name is None:
             value, status, reason = 0, "final", ""
         elif pid is None:
@@ -127,7 +129,7 @@ def _score_rows(conn, season, rows, scores) -> list[EntrantPick]:
         else:
             gid = scoring.resolve_pick_game(conn, season, int(row.week), pid, gid)
             score = scoring.score_pick(scores, int(row.week), pid, gid)
-            value, reason = score.tds, score.pending
+            value, reason, note = score.tds, score.pending, score.note
             status = "pending" if reason else "final"
         result.append(
             EntrantPick(
@@ -142,6 +144,7 @@ def _score_rows(conn, season, rows, scores) -> list[EntrantPick]:
                 value,
                 status,
                 reason,
+                note=note,
             )
         )
     return result

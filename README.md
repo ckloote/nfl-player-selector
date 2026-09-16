@@ -195,7 +195,8 @@ The five existing 2026 captures now require
 `uv run pool verify-capture --season 2026 --allow-code-drift`: stage 2 extracted the shared
 pick-scoring core in `scoring.py`, which is inside the enforced decision closure. Three
 captures already needed that override before this change. The refactor moved the fingerprint
-once in an isolated commit; the existing workflow tests passed unchanged. All five captures
+in an isolated commit, and a later review fix to the same file — scoring a pick with no game
+zero once its week is final — moved it a second time. All five captures
 still reconstruct and match replay with the override, which explicitly reports that the
 fingerprint check was bypassed. See the [recorded verification](docs/PHASE4_STAGE2_PLAN.md#implementation-verification--2026-09-15).
 
@@ -220,8 +221,11 @@ passer on a credited passing touchdown, excluding negated plays and conversions.
 See the [official play-by-play field definitions](https://nflfastr.com/reference/fast_scraper.html).
 A game is complete only with an end-of-game marker, terminal scores matching the
 schedule, and resolved touchdown identities. A complete game with no credits for
-a pick scores **0**, including a player who did not play. Missing/incomplete feeds
-or unresolved games remain **pending**. Completed picks score independently;
+a pick scores **0**, including a player who did not play. Once every game in a week is
+final, a pick with no game of its own also scores **0** — the pool treats a pick on a
+player who is not playing as worth nothing — and says so, because the other way to reach
+that state is a team the schedule does not match. Missing or incomplete feeds remain
+**pending**, and so does a missing game while its week is still unfinished. Completed picks score independently;
 weekly and season subtotals are labeled incomplete while any picks remain pending.
 Stored scores survive missing results and appear as “last scored” while pending.
 If `score --refresh` partially fails, it retains existing scores, scores completed
@@ -335,7 +339,8 @@ when no report has arrived for their week. Where a report differs from your reco
 shown with a note to review the `pool report import --me` comparison.
 
 A completed game with no credits scores zero, and a reported no-pick is also a final zero.
-An unfinished or unresolvable game is pending; an unresolved name needs re-importing; a
+So does a pick with no game once that week is final, reported as a note naming the player.
+An unfinished week is pending; an unresolved name needs re-importing; a
 missing report leaves three missing slots. Weekly and season subtotals explicitly remain
 incomplete while any of these gaps exists. Ranks are provisional in that case. Tied entrants
 share competition ranks (1, 2, 2, 4), and a tie for first splits the pot equally. A provisional

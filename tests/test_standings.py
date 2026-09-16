@@ -205,10 +205,13 @@ def test_missing_entrant_week_and_unresolved_game_remain_incomplete(pool):
     jamie = next(r for r in result.rows if r.entrant_id == "jamie")
     assert jamie.season_total.missing == 3 and jamie.week_total.missing == 3
     assert jamie.used.missing_weeks == (1,) and not jamie.used.complete
+    # Week 1 is final, so a pick with no game is the pool's zero rather than a wait --
+    # but it carries a note, because a team the schedule cannot match looks identical.
     pat = next(r for r in result.rows if r.entrant_id == "pat")
-    assert pat.season_total.pending == 1
+    assert pat.season_total.pending == 0
     pick = next(p for p in pat.picks if p.slot == "QB")
-    assert pick.tds is None and pick.pending == "game unresolved"
+    assert pick.tds == 0 and pick.pending == "" and pick.status == "final"
+    assert pick.note == "no game that week; scored zero"
 
 
 def test_resolved_prefix_cannot_skip_a_week(pool):
@@ -344,18 +347,31 @@ def test_cli_provisional_tie_distinguishes_unresolved_names(pool, invoke):
     assert "incomplete" in shown and "pool report import" in shown
 
 
-def test_cli_single_lead_and_lower_tie_then_pending_lead(pool, invoke):
+def test_cli_single_lead_and_lower_tie_then_provisional_lead(pool, invoke):
+    """A ranked week has no pending picks left, so a lead is provisional for other reasons.
+
+    Every game in a ranked week is final by construction, and a pick with no game of its
+    own now scores zero, so nothing inside the prefix is still waiting. What can still
+    hold a lead open is a name that never resolved or a week nobody reported.
+    """
     conn, _ = pool
     report(
         conn, picks={"Chris": DEFAULT_PICKS["Chris"], "Jamie": ("", "", ""), "Pat": ("", "", "")}
     )
     shown = invoke("standings")
     assert "Chris leads with 2 TDs." in shown and "splits" not in shown
-    with conn:
-        conn.execute("UPDATE pool_picks SET game_id=NULL WHERE entrant_id='chris' AND slot='FLEX'")
+    report(
+        conn,
+        picks={
+            "Chris": ("Quarter One", "Runner One", "Unknown Flex"),
+            "Jamie": ("", "", ""),
+            "Pat": ("", "", ""),
+        },
+    )
     shown = invoke("standings")
-    assert "As it stands Chris leads with 2 TDs, with 1 pick pending." in shown
+    assert "As it stands Chris leads with 2 TDs, with 1 unresolved name." in shown
     assert "provisional" in shown and "splits" not in shown
+    assert "pick pending" not in shown
 
 
 def test_cli_in_progress_spending_repeats_and_selected_week(pool, invoke):
@@ -449,3 +465,34 @@ def test_a_tie_for_first_splits_the_pot_only_once_the_season_runs_out_of_weeks(p
     shown = invoke("standings")
     assert "A tie for first splits the winnings: each takes 1/2 of the pot." in shown
     assert "leader" not in shown
+
+
+def test_a_pick_with_no_game_waits_while_the_week_is_unfinished_then_scores_zero(pool, invoke):
+    """Nobody picks a player who is not playing, and the pool scores it zero if they do.
+
+    The zero waits for the week to finish, because until then "no game found" and "no game
+    yet" are the same silence, and one pick left waiting forever held the whole season at
+    provisional. The note exists because the other route here is a team abbreviation the
+    schedule does not know, which would otherwise zero every pick on that team silently.
+    """
+    from pool import standings
+
+    conn, _ = pool
+    with conn:
+        conn.execute("UPDATE pool_picks SET game_id = NULL WHERE entrant_id = 'pat'")
+        conn.execute("UPDATE game_results SET complete = 0, reason = 'no end-of-game marker' "
+                     "WHERE game_id = 'g2'")
+    pat = next(p for p in standings.entrant_scores(conn, 2026) if p.entrant_id == "pat")
+    assert pat.tds is None and pat.pending == "game unresolved" and pat.note == ""
+
+    with conn:
+        conn.execute("UPDATE game_results SET complete = 1, reason = 'complete' "
+                     "WHERE game_id = 'g2'")
+    scored = [p for p in standings.entrant_scores(conn, 2026) if p.entrant_id == "pat"]
+    assert all(p.tds == 0 and p.pending == "" for p in scored)
+    assert [p.note for p in scored if p.player_name] == ["no game that week; scored zero"] * 2
+    board = standings.board(conn, 2026)
+    assert next(r for r in board.rows if r.entrant_id == "pat").season_total.incomplete is False
+    shown = invoke("standings")
+    assert "had no week 1 game; scored 0" in shown
+    assert "A bye or a team the schedule does not match." in shown

@@ -413,6 +413,17 @@ def _render_standings(result: st.Board) -> None:
             f"Used includes all imported picks through week {result.used_through}. "
             f"Reported columns describe week {result.week}; — means not supplied."
         )
+    noted = [
+        (row, pick)
+        for row in result.rows
+        for pick in row.picks
+        if pick.note
+    ]
+    for row, pick in noted:
+        console.print(
+            f"{row.display_name} {pick.slot}: {pick.player_name} had no week {pick.week} game; "
+            "scored 0. A bye or a team the schedule does not match.", markup=False,
+        )
     if result.report_conflicts:
         console.print(
             "Reported picks differ from your recorded picks. The report is shown; "
