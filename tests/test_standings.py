@@ -286,3 +286,120 @@ def test_ties_below_first_do_not_split_pot(pool):
     assert [r.rank for r in result.rows] == [1, 2, 2]
     assert [r.share for r in result.rows] == [1, 0, 0]
     assert len(result.leaders) == 1
+
+
+@pytest.fixture
+def invoke(pool, monkeypatch):
+    from typer.testing import CliRunner
+
+    from pool.cli import app
+
+    monkeypatch.setenv("COLUMNS", "240")
+    _, path = pool
+
+    def run(*args):
+        result = CliRunner().invoke(app, [*args, "--season", "2026", "--db", str(path)])
+        assert result.exit_code == 0, result.output
+        return " ".join(result.output.split())
+
+    return run
+
+
+def test_cli_computed_and_reported_columns_final_tie_and_score_parity(pool, invoke):
+    conn, _ = pool
+    record(conn, QB="q1", RB="r1", FLEX="f1")
+    shown = invoke("standings")
+    assert "week 1 picks; ranked on season totals through week 1" in shown
+    assert "Chris and Pat are tied for first with 2 TDs." in shown
+    assert "each takes 1/2 of the pot" in shown and "leader" not in shown
+    assert "Week TDs" in shown and "Season TDs" in shown
+    assert "Reported week TDs" in shown and "Reported total TDs" in shown
+    assert "99" in shown and "123" in shown
+    assert "Totals are touchdown counts, not points." in shown
+    assert "Run pool score" in shown
+    assert "pending: not scored; run pool score" in invoke("picks")
+    assert "Week 1 subtotal: 2 TDs; 0 pending" in invoke("score")
+    assert "Season 2026 subtotal: 2 TDs; 0 pending" in invoke("picks")
+    shown = invoke("standings")
+    assert "Run pool score" not in shown
+    assert "Chris and Pat are tied for first with 2 TDs." in shown
+
+
+def test_cli_provisional_tie_distinguishes_unresolved_names(pool, invoke):
+    conn, _ = pool
+    report(conn, picks=DEFAULT_PICKS | {"Pat": ("Quarter One", "Unknown Runner", "Flex Two")})
+    shown = invoke("standings")
+    assert "as of week 1 (provisional)" in shown
+    assert (
+        "As it stands Chris and Pat are tied for first with 2 TDs, with 1 unresolved name."
+        in shown
+    )
+    assert "A tie at the end splits the winnings 1/2 each." in shown
+    assert "each takes" not in shown and "leader" not in shown
+    assert "Unknown Runner (unresolved)" in shown and "1 unknown" in shown
+    assert "incomplete" in shown and "pool report import" in shown
+
+
+def test_cli_single_lead_and_lower_tie_then_pending_lead(pool, invoke):
+    conn, _ = pool
+    report(
+        conn, picks={"Chris": DEFAULT_PICKS["Chris"], "Jamie": ("", "", ""), "Pat": ("", "", "")}
+    )
+    shown = invoke("standings")
+    assert "Chris leads with 2 TDs." in shown and "splits" not in shown
+    with conn:
+        conn.execute("UPDATE pool_picks SET game_id=NULL WHERE entrant_id='chris' AND slot='FLEX'")
+    shown = invoke("standings")
+    assert "As it stands Chris leads with 2 TDs, with 1 pick pending." in shown
+    assert "provisional" in shown and "splits" not in shown
+
+
+def test_cli_in_progress_spending_repeats_and_selected_week(pool, invoke):
+    conn, _ = pool
+    report(conn, 2)
+    shown = invoke("standings")
+    assert "week 2 picks; ranked on season totals through week 1" in shown
+    assert "In progress" in shown and "reported" in shown
+    assert "pending: scoring feed missing" in shown
+    assert "Used includes all imported picks through week 2" in shown
+    assert "repeated player q1 in weeks 1, 2; counted once" in shown
+    selected = invoke("standings", "--week", "1")
+    assert "week 1 picks; ranked on season totals through week 1" in selected
+    assert "In progress" in selected
+
+
+def test_cli_recorded_future_picks_without_report(pool, invoke):
+    from datetime import datetime
+
+    from pool import state
+
+    conn, _ = pool
+    state.record_picks(
+        conn,
+        2026,
+        2,
+        [dict(slot="QB", player_id="q2", player_name="Quarter Two", position="QB")],
+        now=datetime(2026, 9, 15),
+    )
+    shown = invoke("standings")
+    assert "In progress" in shown and "recorded" in shown and "Quarter Two" in shown
+    report(conn, 2)
+    shown = invoke("standings")
+    assert "Reported picks differ from your recorded picks" in shown
+    assert "use pool report import with --me" in shown
+
+
+def test_cli_no_completed_week_and_no_imports(pool, invoke):
+    conn, _ = pool
+    with conn:
+        conn.execute("DELETE FROM game_results")
+    shown = invoke("standings")
+    assert "season cannot be ranked yet" in shown
+    assert "In progress" in shown
+    assert "leads" not in shown and "tied for first" not in shown
+    with conn:
+        conn.execute("DELETE FROM pool_picks")
+        conn.execute("DELETE FROM pool_report_totals")
+        conn.execute("DELETE FROM pool_entrants")
+    shown = invoke("standings")
+    assert "No imported pool standings" in shown and "Run pool report import" in shown

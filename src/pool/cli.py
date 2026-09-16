@@ -29,6 +29,7 @@ from . import (
     state,
 )
 from . import evaluate as ev
+from . import standings as st
 from .optimizer import plan_slot
 from .recommend import Candidate, SlotAdvice, advise_week
 
@@ -288,55 +289,141 @@ def standings(
     season: int = SeasonOpt,
     db_path: Path | None = DbOpt,
 ):
-    """Show picks and standings as reported by the pool for one imported week."""
+    """Show computed season standings beside the pool's reported weekly picks and totals."""
     conn = _conn(db_path)
     try:
-        if week is None:
-            week = conn.execute(
-                "SELECT MAX(week) FROM pool_picks WHERE season = ?", (season,)
-            ).fetchone()[0]
-        totals = entrants.reported_totals(conn, season, week)
-        picks = entrants.entrant_picks(conn, season, week)
+        result = st.board(conn, season, week=week)
     finally:
         conn.close()
-    if totals.empty:
-        suffix = f", week {week}" if week is not None else ""
-        console.print(f"No imported pool standings for {season}{suffix}.")
-        return
-    table = Table(
-        "Reported rank",
-        "Entrant",
-        *config.SLOTS,
-        "Reported week TDs",
-        "Reported total TDs",
-        title=f"Pool-reported standings — {season}, as of week {week}",
-    )
-    by_entrant = {
-        entrant: {r.slot: r for r in rows.itertuples()}
-        for entrant, rows in picks.groupby("entrant_id")
-    }
-    for row in totals.sort_values(["reported_rank", "entrant_id"], na_position="last").itertuples():
-        chosen = by_entrant.get(row.entrant_id, {})
-        names = []
-        for slot in config.SLOTS:
-            pick = chosen.get(slot)
-            if pick is None:
-                names.append("—")  # no row: this week was never imported for them
-            elif pd.isna(pick.player_name):
-                names.append("(no pick)")  # the report says they submitted nothing
-            else:
-                names.append(
-                    pick.player_name + (" (unresolved)" if pd.isna(pick.player_id) else "")
-                )
-        table.add_row(
-            _reported_number(row.reported_rank),
-            row.display_name + (" (me)" if row.is_me else ""),
-            *names,
-            _reported_number(row.reported_week),
-            _reported_number(row.reported_total),
+    _render_standings(result)
+
+
+def _standing_pick(pick: st.EntrantPick) -> str:
+    if pick.status == "missing":
+        return "—"
+    if pick.player_name is None:
+        return "(no pick)"
+    return pick.player_name + (" (unresolved)" if pick.status == "unresolved" else "")
+
+
+def _standing_total(total: st.Total) -> str:
+    issues = []
+    for count, label in ((total.pending, "pending"), (total.unresolved, "unresolved"),
+                         (total.missing, "missing")):
+        if count:
+            issues.append(f"{count} {label}")
+    return str(total.tds) + (f" (incomplete; {', '.join(issues)})" if issues else "")
+
+
+def _standing_lead(result: st.Board) -> str:
+    if not result.leaders:
+        return ""
+    names = [r.display_name for r in result.leaders]
+    name = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    total = result.leaders[0].season_total.tds
+    verb = "leads" if len(names) == 1 else "are tied for first"
+    sentence = ("" if result.final else "As it stands ") + f"{name} {verb} with {total} TDs"
+    if not result.final:
+        issues = []
+        for field, singular, plural in (
+            ("pending", "pick pending", "picks pending"),
+            ("unresolved", "unresolved name", "unresolved names"),
+            ("missing", "missing pick", "missing picks"),
+        ):
+            count = sum(getattr(r.season_total, field) for r in result.rows)
+            if count:
+                issues.append(f"{count} {singular if count == 1 else plural}")
+        sentence += ", with " + ", ".join(issues)
+    sentence += "."
+    if len(names) > 1:
+        if result.final:
+            sentence += (" A tie for first splits the winnings: "
+                         f"each takes 1/{len(names)} of the pot.")
+        else:
+            sentence += f" A tie at the end splits the winnings 1/{len(names)} each."
+    return sentence
+
+
+def _render_standings(result: st.Board) -> None:
+    if not result.rows:
+        console.print(
+            f"No imported pool standings for {result.season}. Run pool report import."
         )
-    console.print(table)
-    console.print("Values are reported by the pool; — means not supplied.")
+    else:
+        ranking = (f"ranked on season totals through week {result.as_of}"
+                   if result.as_of is not None else "season unranked")
+        table = Table(
+            "Rank", "Entrant", *config.SLOTS, "Week TDs", "Season TDs", "Used",
+            "Reported week TDs", "Reported total TDs", "Reported rank",
+            title=f"Computed standings — {result.season}, week {result.week} picks; {ranking}",
+        )
+        for row in result.rows:
+            used = str(len(row.used.player_ids))
+            if row.used.unknown:
+                used += f" + {row.used.unknown} unknown"
+            if not row.used.complete:
+                used += " (incomplete)"
+            table.add_row(
+                str(row.rank) if row.rank is not None else "—",
+                row.display_name + (" (me)" if row.is_me else ""),
+                *(_standing_pick(p) for p in row.picks),
+                _standing_total(row.week_total),
+                _standing_total(row.season_total) if result.as_of is not None else "—",
+                used, _reported_number(row.reported_week), _reported_number(row.reported_total),
+                _reported_number(row.reported_rank),
+            )
+        console.print(table)
+    if result.as_of is None:
+        console.print("No consecutive completed weeks from week 1; season cannot be ranked yet.")
+    elif result.rows:
+        qualifier = " (provisional)" if not result.final else ""
+        console.print(f"Season standings as of week {result.as_of}{qualifier}.")
+        console.print(_standing_lead(result), markup=False)
+    for row in result.rows:
+        if row.season_total.incomplete:
+            console.print(
+                f"{row.display_name}: season total {_standing_total(row.season_total)} TDs.",
+                markup=False,
+            )
+        if row.used.unknown:
+            console.print(
+                f"{row.display_name}: {row.used.unknown} unresolved names in the used pool; "
+                "re-import with pool report import.", markup=False,
+            )
+        if row.used.missing_weeks:
+            console.print(
+                f"{row.display_name}: used pool missing reports for weeks "
+                + ", ".join(map(str, row.used.missing_weeks)) + ".", markup=False,
+            )
+        for pid, weeks in row.used.repeats.items():
+            console.print(
+                f"{row.display_name}: repeated player {pid} in weeks "
+                + ", ".join(map(str, weeks)) + "; counted once in Used.", markup=False,
+            )
+    if result.rows:
+        console.print(
+            f"Used includes all imported picks through week {result.used_through}. "
+            f"Reported columns describe week {result.week}; — means not supplied."
+        )
+    if result.report_conflicts:
+        console.print(
+            "Reported picks differ from your recorded picks. The report is shown; "
+            "use pool report import with --me to review the comparison."
+        )
+    if result.in_progress:
+        table = Table("Week", "Entrant", "Slot", "Player", "Source", "TDs / status",
+                      title="In progress — excluded from season ranks")
+        for pick in result.in_progress:
+            value = str(pick.tds) if pick.status == "final" else f"{pick.status}: {pick.pending}"
+            table.add_row(str(pick.week), pick.display_name, pick.slot, _standing_pick(pick),
+                          pick.source, value)
+        console.print(table)
+    console.print("Totals are touchdown counts, not points.")
+    if result.cache_stale:
+        console.print(
+            "Your recorded score cache is empty or stale for a finished game. "
+            "Run pool score so pool picks and standings use the same current counts."
+        )
 
 
 @app.command()
