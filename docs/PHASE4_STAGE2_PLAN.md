@@ -384,3 +384,46 @@ real week is a different kind of confidence, and this is the season to find out 
   repeat is arithmetically impossible.
 - **The prefix rule in `resolved_through`.** Weeks 2 through 18 are uniformly missing their
   scoring feed, so no gap exists to hold the as-of week back until mid-season.
+
+## Implementation Verification — 2026-09-15
+
+Before editing `scoring.py`, the required strict command exited 1: three of five
+captures already had decision-path drift. A green strict baseline is therefore
+unavailable in the starting tree; no capture or fingerprint was rewritten to manufacture
+one. The override run exited 0, with all five reconstructing and matching replay.
+This records the actual baseline in place of the planned all-green prerequisite.
+
+```text
+$ pool verify-capture --season 2026
+┏━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Decision     ┃ Week ┃ Event             ┃ Reconstructs ┃ Parity ┃ Detail                                                                                                                                                 ┃
+┡━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ ea7b0ff08ff6 │ 1    │ thursday_deadline │ no           │ no     │ Decision ea7b0ff08ff64b99ad80edec801896c2 was captured under source fingerprint fc80de7aacbf3ad522842159a9f09686c8b5b6278ad1878f6fe0a86f4d228054,      │
+│              │      │                   │              │        │ running 204f5c2dc00340ef40978444824c5316770d08978588147a3fd4af79b7917e32 (decision path). The recommender's behaviour is not carried by the recorded   │
+│              │      │                   │              │        │ constants alone; pass allow_code_drift=True to reconstruct anyway.; source tree differs from the one the decision was captured under                   │
+│ 6e71a2be2ae2 │ 1    │ sunday_slate      │ no           │ no     │ Decision 6e71a2be2ae24e9aa55f35be9e65dba3 was captured under source fingerprint fc80de7aacbf3ad522842159a9f09686c8b5b6278ad1878f6fe0a86f4d228054,      │
+│              │      │                   │              │        │ running 204f5c2dc00340ef40978444824c5316770d08978588147a3fd4af79b7917e32 (decision path). The recommender's behaviour is not carried by the recorded   │
+│              │      │                   │              │        │ constants alone; pass allow_code_drift=True to reconstruct anyway.; source tree differs from the one the decision was captured under                   │
+│ 55134df98e15 │ 1    │ sunday_slate      │ no           │ no     │ Decision 55134df98e1546d693d75373ac6969cd was captured under source fingerprint fc80de7aacbf3ad522842159a9f09686c8b5b6278ad1878f6fe0a86f4d228054,      │
+│              │      │                   │              │        │ running 204f5c2dc00340ef40978444824c5316770d08978588147a3fd4af79b7917e32 (decision path). The recommender's behaviour is not carried by the recorded   │
+│              │      │                   │              │        │ constants alone; pass allow_code_drift=True to reconstruct anyway.; source tree differs from the one the decision was captured under                   │
+│ 155e11a74ea3 │ 1    │ sunday_slate      │ yes          │ yes    │ source outside the decision path moved (accepted)                                                                                                      │
+│ 071a5bc55c96 │ 2    │ thursday_deadline │ yes          │ yes    │ -                                                                                                                                                      │
+└──────────────┴──────┴───────────────────┴──────────────┴────────┴────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+1 verified against a source tree that moved outside the decision path, with the enforced fingerprint unchanged. That fingerprint covers what a decision is a function of; the whole-tree hash is recorded beside it.
+3 of 5 captured decisions did not verify.
+
+$ pool verify-capture --season 2026 --allow-code-drift
+┏━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Decision     ┃ Week ┃ Event             ┃ Reconstructs ┃ Parity ┃ Detail                                                ┃
+┡━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ ea7b0ff08ff6 │ 1    │ thursday_deadline │ yes          │ yes    │ decision path fingerprint moved; accepted by override │
+│ 6e71a2be2ae2 │ 1    │ sunday_slate      │ yes          │ yes    │ decision path fingerprint moved; accepted by override │
+│ 55134df98e15 │ 1    │ sunday_slate      │ yes          │ yes    │ decision path fingerprint moved; accepted by override │
+│ 155e11a74ea3 │ 1    │ sunday_slate      │ yes          │ yes    │ source outside the decision path moved (accepted)     │
+│ 071a5bc55c96 │ 2    │ thursday_deadline │ yes          │ yes    │ -                                                     │
+└──────────────┴──────┴───────────────────┴──────────────┴────────┴───────────────────────────────────────────────────────┘
+3 passed only because the fingerprint check was overridden. The source these checks enforce had moved and they were accepted anyway.
+1 verified against a source tree that moved outside the decision path, with the enforced fingerprint unchanged. That fingerprint covers what a decision is a function of; the whole-tree hash is recorded beside it.
+All 5 captured decisions reconstruct and match replay.
+```
