@@ -121,8 +121,11 @@ Four layers, deliberately decoupled so each can improve independently:
     reported name even when player resolution fails, and a slot the report says
     went unpicked is stored as such, so a real zero, a name we could not resolve
     and a week never imported stay three different things; totals and ranks
-    preserve what the pool reported. Entrant scoring and remaining-pool
-    comparisons are Phase 4, stage 2 work.
+    preserve what the pool reported. Entrant scoring shares `scoring.score_pick` with
+    personal picks, without caching entrant TDs or adding a migration. `standings`
+    computes competition ranks and leader shares from the complete-week prefix,
+    preserves incomplete totals, and tracks independent used sets, unknown names,
+    and repeats. Remaining counts use the historical pool and slot eligibility.
 - **Pool reports:** `report import` commits the delivered bytes to the existing
   content-addressed archive before parsing. A second transaction writes resolved
   records and parse outcomes in `meta`, keyed by observation id; immutable observations
@@ -267,14 +270,20 @@ pool record --week 4 --qb "J.Allen"        #   different times, so recording
 pool report import week4.csv    # ingest the pool's weekly report
                                 #   --check validates only; archives and writes nothing
 pool report list                # archived import attempts, times, counts, and status
-pool standings                  # picks, totals, and ranks reported for the latest imported week
+pool standings                  # latest imported picks; computed ranks through last resolved week
 pool plan                       # full remaining-season assignment view
 ```
 
 The initial report parser accepts one CSV row per entrant/slot, with optional reported
 totals. `--me` enables comparison against recorded picks; `--allow-roster-change`
 acknowledges entrant-set changes. See the [CSV format and examples](../README.md#importing-the-pools-weekly-report).
-Computed standings, remaining-player comparisons, and manual `opponent record` are deferred.
+`standings --week N` selects displayed picks; its season ranking cutoff remains the last
+consecutive complete week. Computed TDs and shared ranks sit beside unchanged reported
+columns. A tie for first prints the equal pot split, qualified while totals are incomplete.
+Later reported picks and your recorded picks for weeks without reports appear in progress.
+Used counts include all imported weeks and flag unknown names and repeats; the count API
+exposes remaining players by slot. Opponent projections, win probability, and manual
+`opponent record` remain deferred. See [stage 2](PHASE4_STAGE2_PLAN.md).
 
 A web dashboard is a possible Phase 4 nicety, not a requirement.
 

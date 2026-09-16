@@ -3,6 +3,10 @@
 **Drafted:** 2026-09-15 (UTC), before any of it exists. Implements stage 2 of
 [the Phase 4 plan](PHASE4_PLAN.md); stage 3 is unchanged by it.
 
+**Implemented:** 2026-09-15. Shared scoring, standings, CLI, and documentation landed
+in separate commits following the sequence below. See the verification record at the end
+for the pre-existing capture drift and the final results.
+
 Stage 1 made the pool's weekly report land somewhere durable, identified and re-readable, and
 deliberately computed nothing with it. `pool standings` shows what the pool said. This stage is
 the other half: score every entrant on the same terms `my_picks` is scored on, rank them with
@@ -425,5 +429,39 @@ $ pool verify-capture --season 2026 --allow-code-drift
 └──────────────┴──────┴───────────────────┴──────────────┴────────┴───────────────────────────────────────────────────────┘
 3 passed only because the fingerprint check was overridden. The source these checks enforce had moved and they were accepted anyway.
 1 verified against a source tree that moved outside the decision path, with the enforced fingerprint unchanged. That fingerprint covers what a decision is a function of; the whole-tree hash is recorded beside it.
+All 5 captured decisions reconstruct and match replay.
+```
+
+### Completed implementation
+
+- The shared core moved only `scoring.py` within the decision closure, in commit
+  `f9a6c8f`. `tests/test_workflow.py` was unchanged and passed. The enforced hash after
+  that refactor is `f9682cdd5dbe57bafcd197865dd5fcdbcaeeb9f5bd155bf4769c5dd4bf59987f`.
+- Standings (`ff48e77`) and the CLI (`4df2681`) remain outside the closure. No migration,
+  entrant-score cache, change to `entrants.py`, or comparison with reported totals was added.
+- `pytest -q`: **530 passed**. `ruff check .`: **All checks passed**. The 17 standings
+  tests include parameterized shared-core equivalences, the scored states, independent
+  used pools, missing weeks, the completed-week prefix, ties, in-progress sources, and CLI
+  parity. The final wording adjustment also passed all 17 standings cases.
+- Real week 1: Jamie 5 (rank 1), Keith 4 (rank 2), Brad 3 (rank 3), Adam 1 and CJ 1
+  (shared rank 4). All five used pools contain three players. The current personal
+  week-1 cache is now `[0, 1, 0]` with no pending reasons, and CJ's computed total is 1.
+  This differs from the drafting-time cache observation above; implementation verification
+  was read-only and did not run `pool score` against the real database.
+- Strict post-refactor verification exits 1 with `5 of 5 captured decisions did not verify`.
+  The explicit override exits 0 with the following output; it is not strict verification.
+
+```text
+$ pool verify-capture --season 2026 --allow-code-drift
+┏━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Decision     ┃ Week ┃ Event             ┃ Reconstructs ┃ Parity ┃ Detail                                                ┃
+┡━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ ea7b0ff08ff6 │ 1    │ thursday_deadline │ yes          │ yes    │ decision path fingerprint moved; accepted by override │
+│ 6e71a2be2ae2 │ 1    │ sunday_slate      │ yes          │ yes    │ decision path fingerprint moved; accepted by override │
+│ 55134df98e15 │ 1    │ sunday_slate      │ yes          │ yes    │ decision path fingerprint moved; accepted by override │
+│ 155e11a74ea3 │ 1    │ sunday_slate      │ yes          │ yes    │ decision path fingerprint moved; accepted by override │
+│ 071a5bc55c96 │ 2    │ thursday_deadline │ yes          │ yes    │ decision path fingerprint moved; accepted by override │
+└──────────────┴──────┴───────────────────┴──────────────┴────────┴───────────────────────────────────────────────────────┘
+5 passed only because the fingerprint check was overridden. The source these checks enforce had moved and they were accepted anyway.
 All 5 captured decisions reconstruct and match replay.
 ```
