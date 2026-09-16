@@ -77,11 +77,16 @@ def test_opposing_teams_in_one_game_move_together_and_separate_games_do_not(draw
     assert same_game > other_game
 
 
-def test_outcomes_are_overdispersed_relative_to_poisson(drawn):
-    """Team-game credits run var/mean 1.60 in the real seasons. Plain Poisson is 1.00."""
+def test_outcomes_carry_the_fitted_spread_rather_than_poisson(drawn):
+    """Poisson has var == mean. Mixing over the fitted game factor adds `lam^2 / k_game`,
+    and the calibration run shows that reproduces the observed player-level spread to
+    within three percent. Asserted against the model's own formula, not a round number,
+    so re-fitting `k_game` moves the expectation rather than breaking the test."""
     frame, draws = drawn
-    values = _series(frame, draws, "qa")
-    assert values.var() > values.mean() * 1.1
+    for pid, lam in (("wa", 0.6), ("ta", 0.4), ("ra", 0.5)):
+        values = _series(frame, draws, pid)
+        assert values.var() == pytest.approx(lam + lam**2 / simulate.K_GAME, rel=0.06)
+        assert values.var() > values.mean()
 
 
 def test_one_player_week_is_one_row_shared_by_everyone_who_picked_him(drawn):

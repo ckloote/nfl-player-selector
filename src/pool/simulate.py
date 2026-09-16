@@ -34,12 +34,19 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-# Provisional until the calibration run fits them; every value here is measured or declared,
-# never tuned to make an answer come out. `RECEIVE_SHARE` is the fraction of a non-quarter-
-# back's scores that his passer is also credited for -- a rushing touchdown links to nobody.
-THROW_SHARE = 0.906
+# Fitted and measured on 2011-2025 by `experiments/simulator_calibration.py`; see
+# `experiments/results/phase4-simulator/`. Frozen deliberately: a decision whose sampling
+# distribution moves with the data underneath it cannot be reconstructed, and
+# `capture.reconstruct` would have nothing to restore.
+#
+# `THROW_SHARE` and `RECEIVE_SHARE` are *measured*, straight off `touchdown_credits.kind`
+# and the offensive splits -- the fraction of a quarterback's credits that come from
+# throwing, and the fraction of everyone else's that his passer is also paid for. A rushing
+# touchdown links to nobody, which is why a running back sits at 0.207 and a receiver at
+# 0.975. `K_GAME` is *fitted*, from the covariance between opposing teams in one game.
+THROW_SHARE = 0.9064
 RECEIVE_SHARE = {"QB": 0.0, "RB": 0.207, "WR": 0.975, "TE": 0.980}
-K_GAME = 3.0
+K_GAME = 14.302
 
 
 @dataclass(frozen=True)
@@ -118,7 +125,9 @@ def sample(proj: pd.DataFrame, weeks, *, sims: int, seed: int, params: Params | 
 
     # Scale receiving down only where a team's catchers out-project its quarterback's arm.
     # Scaling the non-receiving part up by the same amount keeps E[Y_j] = lam_j exactly, so
-    # the identity survives the guard rather than being clamped away.
+    # the identity survives the guard instead of being clamped away. It fires often -- in
+    # roughly half of real team-weeks the projections put the two within a rounding of each
+    # other -- which is why it has to preserve the expectation rather than merely cap.
     recv = lam * rho
     scale = np.ones(n)
     rescaled = 0
@@ -127,36 +136,47 @@ def sample(proj: pd.DataFrame, weeks, *, sims: int, seed: int, params: Params | 
             continue
         members = (team_of == team) & (linked >= 0)
         supply, arm = recv[members].sum(), params.throw_share * lam[qb]
-        if supply > arm > 0:
-            scale[members] = arm / supply
-            rescaled += 1
-        elif supply > 0 and arm <= 0:
-            scale[members] = 0.0
+        if supply > arm:
+            scale[members] = (arm / supply) if supply > 0 else 0.0
             rescaled += 1
     recv = recv * scale
-    other = lam - recv
-    other = np.where(is_qb, (1 - params.throw_share) * lam, other)
-
-    # Every quarterback keeps his whole throwing rate; only the route differs. A starter
-    # takes his team's sampled receiving scores plus a residual for catchers the pool does
-    # not model. A backup takes his independently, because his team's receiving touchdowns
-    # were thrown once and crediting them twice would invent them.
-    residual = np.zeros(n)
-    for qb in np.flatnonzero(is_qb):
-        team = team_of[qb]
-        if starter[team] == qb:
-            members = (team_of == team) & (linked >= 0)
-            residual[qb] = max(0.0, params.throw_share * lam[qb] - recv[members].sum())
-        else:
-            residual[qb] = params.throw_share * lam[qb]
+    other = np.where(is_qb, (1 - params.throw_share) * lam, lam - recv)
 
     factor = rng.gamma(params.k_game, 1.0 / params.k_game, size=(game_of.max() + 1, sims))
     spread = factor[game_of]
-    receiving = rng.poisson(recv[:, None] * spread).astype(np.int32)
-    values = receiving + rng.poisson(other[:, None] * spread).astype(np.int32)
-    values += rng.poisson(residual[:, None] * spread).astype(np.int32)
-    for cell in np.flatnonzero(linked >= 0):
-        values[linked[cell]] += receiving[cell]
+    values = rng.poisson(other[:, None] * spread).astype(np.int32)
+
+    # A team's passing touchdowns are drawn once and *allocated* among its receivers, not
+    # sampled per receiver. That is what the pool's own arithmetic does -- one pass pays the
+    # catcher and the passer -- and independent per-receiver draws get it measurably wrong in
+    # both directions: they leave receivers positively correlated when real ones compete for
+    # a finite number of throws (observed -0.029, independent draws +0.051), and through that
+    # they overstate the quarterback-to-receiver link by about forty percent (observed +0.358,
+    # independent draws +0.502). The multinomial gives the substitution for free, from the
+    # mechanism, rather than as a correction bolted on afterwards.
+    for team, qb in enumerate(starter):
+        if qb < 0:
+            continue
+        catchers = np.flatnonzero((team_of == team) & (linked >= 0) & (recv > 0))
+        arm = params.throw_share * lam[qb]
+        weights = np.append(recv[catchers], max(0.0, arm - recv[catchers].sum()))
+        if weights.sum() <= 0:
+            continue
+        thrown = rng.poisson(weights.sum() * factor[game_of[qb]])
+        caught = rng.multinomial(thrown, weights / weights.sum())
+        values[qb] += thrown.astype(np.int32)  # every throw pays the passer
+        if catchers.size:
+            values[catchers] += caught[:, : catchers.size].T.astype(np.int32)
+
+    # A team with no quarterback in the pool still scores its own rate, and a backup keeps
+    # his whole arm independently: his team's receiving touchdowns were thrown once, and
+    # crediting two passers for them would invent touchdowns.
+    loose = np.flatnonzero((recv > 0) & (linked < 0) & ~is_qb)
+    values[loose] += rng.poisson(recv[loose][:, None] * spread[loose]).astype(np.int32)
+    backups = np.flatnonzero(is_qb & (np.arange(n) != starter[team_of]))
+    values[backups] += rng.poisson(
+        params.throw_share * lam[backups][:, None] * spread[backups]
+    ).astype(np.int32)
     return Draws(values, index, sims, rescaled)
 
 
