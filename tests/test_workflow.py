@@ -289,10 +289,15 @@ def test_score_partial_week_zero_inactive_and_unresolved(local):
     assert out.exit_code == 0 and "1 pending" in out.stdout and "(incomplete)" in out.stdout
     with conn:
         conn.execute("UPDATE my_picks SET game_id = NULL WHERE slot = 'FLEX'")
+    # g2 has no end-of-game marker, so week 1 is not final and we still do not know.
     assert (
         scoring.pick_results(conn, 2026).set_index("slot").loc["FLEX", "pending_reason"]
         == "game unresolved"
     )
+    # Once the week is final, a pick with no game is the pool's own zero, not a wait.
+    scoring.import_touchdowns(conn, 2026, pd.DataFrame([play(), end(), end("g2", 0, 0)]))
+    flex = scoring.pick_results(conn, 2026, recompute=True).set_index("slot").loc["FLEX"]
+    assert flex.pending_reason == "" and flex.tds == 0
 
 
 def test_score_local_only_recompute_corrections_and_preserve_on_missing_feed(local, monkeypatch):

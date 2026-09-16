@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pandas as pd
@@ -285,6 +286,77 @@ def require_complete(conn: sqlite3.Connection, season: int, weeks: list[int]) ->
         )
 
 
+@dataclass(frozen=True)
+class PickScore:
+    game_id: str | None
+    tds: int | None
+    pending: str
+    note: str = ""  # a final score that is worth explaining; never a reason to wait
+
+
+@dataclass(frozen=True)
+class ScoreBoard:
+    season: int
+    games: pd.DataFrame
+    credits: dict[tuple[str, str], int]
+
+
+def score_board(conn: sqlite3.Connection, season: int) -> ScoreBoard:
+    """Read coverage and credits once, in the same database snapshot."""
+    with db.transaction(conn):
+        games = coverage(conn, season).set_index("game_id")
+        credits = touchdown_totals(conn, season)
+    return ScoreBoard(season, games, credits.set_index(["game_id", "player_id"]).pool_td.to_dict())
+
+
+def resolve_pick_game(
+    conn: sqlite3.Connection, season: int, week: int, player_id: str, recorded: str | None = None
+) -> str | None:
+    """Prefer this week's actual appearance to the game recorded with the pick."""
+    stat = conn.execute(
+        "SELECT game_id, team FROM player_weeks "
+        "WHERE season = ? AND week = ? AND player_id = ?",
+        (season, week, player_id),
+    ).fetchone()
+    gid = stat["game_id"] if stat else None
+    if stat and not gid:
+        actual_game = db.resolve_game(conn, season, week, stat["team"])
+        gid = actual_game["game_id"] if actual_game else None
+    return gid or recorded
+
+
+def score_pick(board: ScoreBoard, week: int, player_id: str, game_id: str | None) -> PickScore:
+    """A final zero is a score; absent or incomplete coverage is not.
+
+    A pick with no game at all is the pool's own zero once that week has finished: the
+    player did not play, so he scored nothing, and the pool treats a pick on a player who
+    is not playing as worth nothing rather than as unfinished business. Waiting instead
+    left one such pick holding the whole season at provisional forever.
+
+    The zero waits for the week's games to be final, because before that "no game found"
+    and "no game yet" are the same silence. It also carries a note, because the other way
+    to reach it is a team abbreviation the schedule does not know -- which would otherwise
+    zero every pick on that team without a word.
+    """
+    if game_id not in board.games.index or int(board.games.loc[game_id, "week"]) != week:
+        played = board.games[board.games.week == week]
+        if len(played) and played.complete.all():
+            return PickScore(game_id, 0, "", "no game that week; scored zero")
+        return PickScore(game_id, None, "game unresolved")
+    reason = "" if board.games.loc[game_id, "complete"] else board.games.loc[game_id, "reason"]
+    value = None if reason else int(board.credits.get((game_id, player_id), 0))
+    return PickScore(game_id, value, reason)
+
+
+def resolved_through(conn: sqlite3.Connection, season: int) -> int | None:
+    """Last complete week in the unbroken prefix starting at week one."""
+    complete = set(complete_weeks(conn, season))
+    week = 0
+    while week + 1 in complete:
+        week += 1
+    return week or None
+
+
 def pick_results(
     conn: sqlite3.Connection,
     season: int,
@@ -297,27 +369,15 @@ def pick_results(
     picks = state.picks(conn, season)
     if week is not None:
         picks = picks[picks.week == week].copy()
-    cov = coverage(conn, season).set_index("game_id")
-    total_map = touchdown_totals(conn, season).set_index(["game_id", "player_id"]).pool_td.to_dict()
+    board = score_board(conn, season)
     updates, reasons, scores = [], [], []
     for row in picks.itertuples():
         state.validate_week(conn, season, int(row.week))
-        stat = conn.execute(
-            "SELECT game_id, team FROM player_weeks "
-            "WHERE season = ? AND week = ? AND player_id = ?",
-            (season, row.week, row.player_id),
-        ).fetchone()
-        gid = stat["game_id"] if stat else None
-        if stat and not gid:
-            actual_game = db.resolve_game(conn, season, row.week, stat["team"])
-            gid = actual_game["game_id"] if actual_game else None
-        gid = gid or row.game_id
-        if gid not in cov.index or int(cov.loc[gid, "week"]) != row.week:
-            reason = "game unresolved"
-        else:
-            reason = "" if cov.loc[gid, "complete"] else cov.loc[gid, "reason"]
+        gid = resolve_pick_game(conn, season, row.week, row.player_id, row.game_id)
+        result = score_pick(board, row.week, row.player_id, gid)
+        reason = result.pending
         value = row.tds
-        fresh_value = int(total_map.get((gid, row.player_id), 0))
+        fresh_value = result.tds
         if not reason and recompute and not (preserve_existing and pd.notna(value)):
             value = fresh_value
             updates.append((value, gid, season, row.week, row.slot))

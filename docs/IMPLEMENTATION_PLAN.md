@@ -291,7 +291,8 @@ opponent modeling and win-probability optimization belong to later work, not Pha
 
 ## Phase 4 — Opponents, standings and winning
 
-**Stage 1 implemented 2026-09-11; stages 2 and 3 remain planned.** The full plan is in
+**Stage 1 implemented 2026-09-11; stage 2 implemented 2026-09-15; stage 3 planned.**
+The full plan is in
 [PHASE4_PLAN.md](PHASE4_PLAN.md). Three stages in the order their dependencies force:
 opponent-pick ingestion, then standings, then deciding by the chance of finishing first
 rather than by expected touchdowns.
@@ -304,8 +305,19 @@ and `pool standings` support re-imports, unresolved names, roster-change acknowl
 `--me` comparison, and `--check` dry runs that archive and write nothing. The initial CSV
 fixture is provisional until the delivery format is confirmed. Tests cover failure
 durability, rollback, provenance, identity checks, and exclusion from decision
-capture/replay. Reported standings compute no scores; the stage 2 scoring comparison and
-remaining-pool queries are still unbuilt.
+capture/replay.
+
+[Stage 2](PHASE4_STAGE2_PLAN.md) extracts shared, cache-free scoring in `scoring.py` and
+adds computed standings beside reported columns. Rankings use the unbroken complete-week
+prefix; pending games, unresolved names, and missing reports keep totals incomplete.
+Competition ranks preserve ties, and leader shares represent equal pot splits. Later picks
+appear in progress, including personal records before a report arrives. Independent used
+pools cover all imports, identify unknown usage and repeats, and support remaining counts
+by slot. No migration or entrant score cache was added. The acceptance test is personal /
+entrant score parity through the shared function; the organizer's totals use the same
+upstream data and are not an independent comparison. The isolated scoring refactor moved
+the decision fingerprint once; existing 2026 captures verify only with the explicit drift
+override. Stage 3 is unchanged.
 
 The first two are ordinary feature work. The third changes what the tool optimises and
 cannot be validated the way the first two can: a season is one Bernoulli trial, and

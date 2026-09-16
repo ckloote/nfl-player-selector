@@ -570,7 +570,8 @@ def test_cli_import_list_and_reported_standings(report_cli, report_db, tmp_path)
     assert standings.exit_code == 0 and "as of week 1" in standings.output
     assert "Reported total TDs" in standings.output and "Quarter One" in standings.output
     assert "Chris K." in standings.output and "Pat" in standings.output
-    assert "computed" not in standings.output.lower()
+    assert "Computed standings" in standings.output
+    assert "Week TDs" in standings.output and "Season TDs" in standings.output
     frame = entrants.parse_csv(REFERENCE.read_bytes()).assign(week=2)
     frame.loc[frame.entrant.eq("Pat"), "reported_total"] = "12"
     frame.loc[frame.entrant.eq("Chris K."), "reported_total"] = "13"
@@ -578,7 +579,8 @@ def test_cli_import_list_and_reported_standings(report_cli, report_db, tmp_path)
     path.write_text(frame.to_csv(index=False))
     imported = report_cli("report", "import", str(path))
     assert imported.exit_code == 0 and "games complete" in imported.output
-    assert "as of week 2" in report_cli("standings").output
+    assert "week 2 picks" in report_cli("standings").output
+    assert "ranked on season totals through week 1" in report_cli("standings").output
     assert "as of week 1" in report_cli("standings", "--week", "1").output
     assert len(entrants.reported_totals(report_db, 2026)) == 4
 

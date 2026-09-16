@@ -4,7 +4,11 @@
 
 **Stage 1 implemented:** 2026-09-11, following the refined
 [stage 1 plan](PHASE4_STAGE1_PLAN.md): three tables, raw bytes committed before parsing,
-and separate parse metadata. Stages 2 and 3 remain planned.
+and separate parse metadata.
+
+**Stage 2 implemented:** 2026-09-15, following the refined
+[stage 2 plan](PHASE4_STAGE2_PLAN.md): shared scoring, computed standings, ties,
+and independent used pools. Stage 3 remains planned.
 
 **Corrected:** 2026-09-13. Reports do not wait for a week to resolve. The person running
 the pool sends them by hand: sometimes before a week's games have finished, and always
@@ -113,9 +117,14 @@ not lose:
   conversions do not. That is what `scoring` already credits, so entrants and `my_picks`
   share one definition, and totals are displayed and labelled as TDs.
 
-**Done when** `pool leaderboard` reproduces the pool's own standings for a scored week. If
-it disagrees with the official table, the ingestion or the scoring is wrong and that is
-worth knowing before anything is built on top.
+**Done when** `pool standings` and `pool picks` report the same TD count for my matching
+picks after `pool score`, because both delegate to the same scoring function. Implemented
+with cache-free entrant scores and tested parity; a stale personal cache prompts `pool score`.
+The organizer uses the same nflverse data, so comparing computed totals to the reported
+columns would not be independent validation. Those columns remain passthrough, with no
+comparison. `pool standings` is the single command; no `pool leaderboard` was added.
+The ranking cutoff is the unbroken prefix of complete weeks, while used pools include all
+imported weeks, including games still in progress.
 
 ## Stage 3 — Win Probability
 
