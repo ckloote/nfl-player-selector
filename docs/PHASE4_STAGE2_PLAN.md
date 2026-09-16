@@ -286,6 +286,12 @@ stage has.
 `config.SLOTS`. Counts only: listing or ranking what an opponent has left needs projections, and
 that is stage 3's job.
 
+**Corrected 2026-09-15**, after review. It first subtracted every imported week while scoping
+the pool to `week`, so "what could they pick in week N" answered differently once week N's own
+report landed — and reports routinely land before the week is played. Spending is counted
+through `week - 1`. This had no caller yet, which is the only reason it was cheap to fix; the
+test that pinned the old answer was pinning the leak.
+
 ## CLI
 
 No new command. The phase plan named `pool leaderboard` because it was drafted before

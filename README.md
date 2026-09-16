@@ -346,8 +346,9 @@ Used players include every imported week, even one still being played. Each entr
 independent set, unresolved names add an unknown count, missing reports leave it incomplete,
 and repeated players are counted once with their weeks reported. The Python API
 `standings.remaining_counts(conn, season, week, entrant_id)` counts known remaining players
-by slot from `state.historical_pool`; callers should inspect `used_pools` for unknown usage
-and missing weeks. Opponent projections and pick recommendations remain stage 3 work.
+by slot from `state.historical_pool`, spending only what was used **before** that week, so a
+report that has already arrived for the week itself cannot shrink its own answer; callers
+should inspect `used_pools` for unknown usage and missing weeks. Opponent projections and pick recommendations remain stage 3 work.
 
 Entrant scores are computed without a cache or a migration. Your own `my_picks.tds` cache
 still updates only with `pool score`; standings prompts for that command when it is empty

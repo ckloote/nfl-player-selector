@@ -188,9 +188,16 @@ def used_pools(
 def remaining_counts(
     conn: sqlite3.Connection, season: int, week: int, entrant_id: str
 ) -> dict[str, int]:
-    """Count known remaining identities by slot; consult used_pools for unknown usage."""
+    """Count what was still available going into `week`, by slot.
+
+    Spending is counted through `week - 1`, not through every imported week. A report can
+    arrive before that week's games finish, so counting it here would answer "what could
+    they pick in week N" differently depending on whether week N's report had landed --
+    which is exactly the leak the reporting cadence makes easy. Consult `used_pools` for
+    names that never resolved, which are spent by somebody this count cannot exclude.
+    """
     with db.transaction(conn):
-        used = used_pools(conn, season)[entrant_id]
+        used = used_pools(conn, season, through=week - 1)[entrant_id]
         pool = state.historical_pool(conn, season, week)
     remaining = pool[~pool.player_id.isin(used.player_ids)]
     return {

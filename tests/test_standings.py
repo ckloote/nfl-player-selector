@@ -139,7 +139,9 @@ def test_final_ties_reported_passthrough_and_independent_used_pools(pool):
     assert used["chris"].player_ids == {"q1", "r1", "f1"}
     assert used["pat"].player_ids == {"q1", "f2"}
     assert all(u.complete for u in used.values())
-    assert standings.remaining_counts(conn, 2026, 1, "pat") == {"QB": 1, "RB": 1, "FLEX": 1}
+    # Week 1's own report is excluded: Pat's q1 and f2 were spent in week 1, not before it.
+    assert standings.remaining_counts(conn, 2026, 1, "pat") == {"QB": 2, "RB": 1, "FLEX": 2}
+    assert standings.remaining_counts(conn, 2026, 2, "pat") == {"QB": 1, "RB": 1, "FLEX": 1}
     no_pick = next(
         p for p in standings.entrant_scores(conn, 2026) if p.entrant_id == "pat" and p.slot == "RB"
     )
