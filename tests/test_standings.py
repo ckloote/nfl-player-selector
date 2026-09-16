@@ -403,3 +403,24 @@ def test_cli_no_completed_week_and_no_imports(pool, invoke):
         conn.execute("DELETE FROM pool_entrants")
     shown = invoke("standings")
     assert "No imported pool standings" in shown and "Run pool report import" in shown
+
+
+def test_standings_refuses_a_week_outside_the_season_rather_than_inventing_one(pool):
+    """A table for a week that cannot exist reads as evidence that its report is missing.
+
+    Every other week-taking command validates first, and stage 1's standings said plainly
+    that there was nothing imported. Synthesizing three missing slots per entrant for
+    week 99 invents the very gap the operator would then go looking for.
+    """
+    from typer.testing import CliRunner
+
+    from pool.cli import app
+
+    _, path = pool
+    for week in ("99", "0", "-3"):
+        result = CliRunner().invoke(
+            app, ["standings", "--week", week, "--season", "2026", "--db", str(path)]
+        )
+        assert result.exit_code == 1, result.output
+        assert "outside the 2026 season" in result.output
+        assert "missing" not in result.output

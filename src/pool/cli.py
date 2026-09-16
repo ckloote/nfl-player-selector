@@ -292,6 +292,11 @@ def standings(
     """Show computed season standings beside the pool's reported weekly picks and totals."""
     conn = _conn(db_path)
     try:
+        # Every other week-taking command validates first. Without this a typo renders a
+        # full table for a week that cannot exist, reporting each entrant's three slots as
+        # a missing report rather than saying there is no such week.
+        if week is not None:
+            _week(conn, season, week)
         result = st.board(conn, season, week=week)
     finally:
         conn.close()
