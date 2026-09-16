@@ -54,6 +54,21 @@ class RivalState:
 
 
 @dataclass(frozen=True)
+class PoolState:
+    """Where the pool stands, as the policy needs it: everyone else, and what I have banked.
+
+    Assembled by the caller from `standings`, never read from the database here. That is
+    the seam that keeps a report parser out of the enforced decision closure.
+    """
+
+    rivals: tuple[RivalState, ...] = ()
+    my_tds: int = 0
+
+    def __bool__(self) -> bool:
+        return bool(self.rivals)
+
+
+@dataclass(frozen=True)
 class Ranked:
     player_id: str
     player_name: str
@@ -130,6 +145,41 @@ def predict_optimizer(proj, slot, week, state: RivalState, *, top_n: int = TOP_N
         lams[int(row)] = plan.lam(int(row), week)
     order = rows[np.argsort(-totals[rows], kind="stable")]
     return _ranked(plan.players, order, totals, lams, top_n)
+
+
+def remaining_matrix(proj, slot: str, week: int, weeks, used_ids):
+    """The candidate grid a rival still has, built once and walked many times.
+
+    Rolling a season out scenario by scenario would otherwise rebuild this matrix for every
+    draw; it is the expensive part and it does not change between them.
+    """
+    players, values, _ = build_matrix(proj, slot, list(weeks), week, set(used_ids))
+    return players, values
+
+
+def rollout(players, values, weeks, *, rng, top_n: int = 1) -> dict[int, str]:
+    """One plausible path of a rival's remaining picks: greedy, with noise, no reuse.
+
+    `top_n` above 1 is where uncertainty about what an opponent does enters. A perfectly
+    predictable rival would let the policy block them exactly, which is the more dangerous
+    error -- it would claim an edge that depends on knowing something unknowable.
+    """
+    if not len(players):
+        return {}
+    taken: list[int] = []
+    picks: dict[int, str] = {}
+    for col, week in enumerate(weeks):
+        column = values[:, col].copy()
+        if taken:
+            column[taken] = FORBIDDEN
+        playable = np.flatnonzero(column > FORBIDDEN / 2)
+        if not playable.size:
+            continue
+        best = playable[np.argsort(-column[playable], kind="stable")][:top_n]
+        row = int(best[0]) if best.size == 1 else int(rng.choice(best))
+        taken.append(row)
+        picks[int(week)] = str(players.iloc[row].player_id)
+    return picks
 
 
 PREDICTORS = {

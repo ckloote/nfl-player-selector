@@ -393,8 +393,13 @@ Measured in the model, two-horse race, one contested slot, `lam` equal on both s
 | 4 | −2 | +0.014 |
 | 8 | −2 | +0.006 |
 
-Three things follow, and the CLI should reflect all three. The sign flips exactly at level,
-which is the sanity check. The magnitude decays fast in weeks remaining — with 17 weeks left
+Three things follow, and the CLI should reflect all three. The sign flips exactly at level
+**when the rival's pick is independent of mine**, which is the sanity check. It is not the
+general case: if every rival is about to take the player I would take, mirroring them buys a
+guaranteed k-way split and differentiating buys a chance at the whole pot, so differentiation
+wins even from level. `docs/DESIGN.md` says the two objectives agree early, when everyone is
+level. That is true only when my candidates are equally unrelated to what rivals hold, and
+the implementation measured it at 0.25 against 0.44 in the case where they are not. The magnitude decays fast in weeks remaining — with 17 weeks left
 one contested slot is swamped by everything else, so **early in the season the two objectives
 genuinely agree and the tool should say so rather than manufacture a difference**. And
 mirroring only pays against a *single* live threat: with four rivals still in range,
@@ -450,7 +455,8 @@ scenarios run inside the simulator, with the standings set by hand:
 | Behind by 4, 2 weeks left, one leader | differentiate — refuse the leader's likely pick at equal `lam` |
 | Ahead by 4, 2 weeks left, one live chaser | mirror — prefer the chaser's likely pick at equal `lam` |
 | Ahead, but three rivals still in range | *not* mirror; the single-threat condition fails |
-| Level in week 1 | converge on the expected-TD pick, and say the two agree |
+| Level, and no rival would hold either candidate | converge on the expected-TD pick |
+| Level, but every rival is about to take the same player I would | **differentiate anyway** |
 
 Fixed seed, deterministic, and they fail loudly if the policy stops behaving as described.
 
@@ -556,7 +562,11 @@ The claims this document makes that would be silent if wrong:
 
 **The policy**
 
-14. Level standings in week 1: the win-probability pick is the expected-TD pick.
+14. Level standings, with my candidates disjoint from anything a rival would hold: the
+    two objectives agree, and no divergence is reported.
+14b. Level standings where every rival converges on the player I would take: the policy
+    **differentiates anyway**. Mirroring buys a guaranteed k-way split; differentiating
+    buys a chance at the whole pot. Being level does not by itself make them agree.
 15. Behind late against one leader: at equal `lam`, the policy prefers the candidate the
     leader is *unlikely* to take, and the EV ranking is indifferent between them.
 16. Ahead late against one chaser: at equal `lam`, the preference reverses. With three

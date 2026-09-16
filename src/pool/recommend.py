@@ -1,14 +1,26 @@
-"""Turn slot plans into this week's advice: pick, alternatives, hold-or-commit."""
+"""Turn slot plans into this week's advice: pick, alternatives, hold-or-commit.
+
+Two objectives, side by side, never one replacing the other. Expected touchdowns is what
+the assignment solver maximises and what this module has always given. Expected share of
+the pot is the second opinion: a tie for first splits the winnings, so a pot share counts a
+win as 1 and a k-way tie as 1/k, and that is a function of the joint distribution of five
+season totals rather than a separable sum any matrix can express.
+
+They mostly agree early, when everyone is level, and diverge late, when chasing or
+protecting a lead is what actually decides the pool. Their disagreement is the interesting
+output, which is why both are shown and neither is silently swapped for the other.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+import numpy as np
 import pandas as pd
 
-from . import config, state
-from .optimizer import SlotPlan, forced_total, plan_slot
+from . import config, rivals, simulate, state
+from .optimizer import SlotPlan, forced_plan, plan_slot
 
 
 @dataclass
@@ -33,6 +45,27 @@ class Candidate:
     early: bool  # kicks off before the main (Sunday) slate
     report_status: str | None
     planned_week: int | None  # where the optimal plan would otherwise use them
+    # Which player each remaining week gets if this candidate is spent now. Carried rather
+    # than recomputed because spending a player changes the whole rest of the season, and
+    # a pot share is a function of the season, not of one week.
+    future: dict[int, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PotShare:
+    """One candidate's simulated expected share of the pot, against the expected-TD pick."""
+
+    player_id: str
+    player_name: str
+    share: float
+    se: float
+    delta: float  # minus the expected-TD recommendation's share, on shared draws
+    delta_se: float
+
+    @property
+    def tied(self) -> bool:
+        """Inside simulation noise of the expected-TD pick, so not ordered against it."""
+        return abs(self.delta) <= config.WINPROB_SIGNIFICANCE * self.delta_se
 
 
 @dataclass
@@ -45,6 +78,23 @@ class SlotAdvice:
     hold: bool  # True if the recommended pick is early and the edge is too small
     hold_alternative: Candidate | None
     plan: SlotPlan
+    shares: list[PotShare] = field(default_factory=list)
+    sims: int = 0
+
+    @property
+    def best_share(self) -> PotShare | None:
+        return self.shares[0] if self.shares else None
+
+    @property
+    def divergent(self) -> bool:
+        """The two objectives name different players, and the difference clears the noise."""
+        best = self.best_share
+        return bool(
+            best
+            and self.recommended
+            and best.player_id != self.recommended.player_id
+            and not best.tied
+        )
 
 
 def main_slate_start(proj: pd.DataFrame, week: int) -> datetime | None:
@@ -68,7 +118,7 @@ def _candidate(
     p = plan.players.iloc[row]
     info = proj_week[proj_week.player_id == p.player_id].iloc[0]
     kickoff = datetime.fromisoformat(info.kickoff)
-    total = forced_total(plan, row, week)
+    total, future = forced_plan(plan, row, week)
     planned = next((w for w, r in plan.assignment.items() if r == row), None)
     return Candidate(
         player_id=p.player_id,
@@ -87,6 +137,7 @@ def _candidate(
         early=bool(slate_start is not None and kickoff < slate_start),
         report_status=info.report_status if isinstance(info.report_status, str) else None,
         planned_week=planned,
+        future=future,
     )
 
 
@@ -154,15 +205,159 @@ def advise_slot(
     return SlotAdvice(slot, week, None, recommended, alternatives, hold, hold_alt, plan)
 
 
+def _locked_picks(locked_by_slot, week) -> list[tuple[int, str]]:
+    """Picks already recorded for this week or later. They score, whatever I choose now."""
+    return [
+        (int(w), str(pid))
+        for locks in locked_by_slot.values()
+        for w, pid in locks.items()
+        if w >= week
+    ]
+
+
+def _baseline(advice: list[SlotAdvice]) -> dict[str, list[tuple[int, str]]]:
+    """Each slot's remaining-season plan as (week, player) pairs, before anything is forced."""
+    return {
+        a.slot: [
+            (int(w), str(a.plan.players.iloc[r].player_id)) for w, r in a.plan.assignment.items()
+        ]
+        for a in advice
+    }
+
+
+def _rival_totals(proj, week, weeks, pool, draws, sims, seed) -> np.ndarray:
+    """Each rival's simulated season total, as (sims, rivals).
+
+    Their pick paths do not depend on what I choose -- this pool lets two entrants hold the
+    same player, so nothing I take is denied to them -- which is what lets these be drawn
+    once and reused across every candidate I am weighing.
+
+    Uncertainty about their choices enters as a finite set of scenarios rather than one path
+    per simulation, because a path costs a greedy rollout and an outcome costs a lookup.
+    """
+    rng = np.random.default_rng(seed)
+    totals = np.zeros((sims, len(pool.rivals)))
+    edges = np.linspace(0, sims, config.RIVAL_SCENARIOS + 1).astype(int)
+    for index, rival in enumerate(pool.rivals):
+        grids = {
+            slot: rivals.remaining_matrix(proj, slot, week, weeks, rival.used_ids)
+            for slot in config.SLOTS
+        }
+        column = np.full(sims, float(rival.season_tds))
+        for scenario in range(config.RIVAL_SCENARIOS):
+            picks: list[tuple[int, str]] = []
+            for players, values in grids.values():
+                path = rivals.rollout(
+                    players, values, weeks, rng=rng, top_n=config.RIVAL_NOISE_TOP_N
+                )
+                picks += list(path.items())
+            low, high = edges[scenario], edges[scenario + 1]
+            column[low:high] += draws.totals(picks)[low:high]
+        totals[:, index] = column
+    return totals
+
+
+def pot_shares(
+    proj: pd.DataFrame,
+    week: int,
+    advice: list[SlotAdvice],
+    pool: rivals.PoolState,
+    locked_by_slot: dict[str, dict[int, str]],
+    *,
+    sims: int | None = None,
+    seed: int | None = None,
+) -> None:
+    """Score every candidate by its simulated expected share of the pot, in place.
+
+    A one-step lookahead, and it should be called nothing grander: hold the expected-TD plan
+    for the rest of the season, vary only this week's pick, and simulate. The search space
+    over whole seasons is far too large to enumerate and this does not pretend to.
+
+    Every candidate is evaluated on the *same* draws and the same rival paths, so the
+    difference between two of them is estimated far more precisely than either level. That
+    is the quantity the decision turns on, and `PotShare.tied` refuses to order two
+    candidates whose difference does not clear it.
+    """
+    sims = config.WINPROB_SIMS if sims is None else sims
+    seed = config.WINPROB_SEED if seed is None else seed
+    weeks = sorted({int(w) for w in proj.week.unique() if w >= week})
+    if not weeks or not pool.rivals:
+        return
+    keep = {pid for a in advice for pid in a.plan.players.player_id}
+    keep |= {pid for _, pid in _locked_picks(locked_by_slot, week)}
+    for slot in config.SLOTS:
+        for rival in pool.rivals:
+            players, _ = rivals.remaining_matrix(proj, slot, week, weeks, rival.used_ids)
+            keep |= set(players.player_id)
+    sub = proj[proj.player_id.isin(keep) & proj.week.isin(weeks)]
+    draws = simulate.sample(sub, weeks, sims=sims, seed=seed)
+    opposition = _rival_totals(proj, week, weeks, pool, draws, sims, seed)
+
+    locked = _locked_picks(locked_by_slot, week)
+    baseline = _baseline(advice)
+    for slot_advice in advice:
+        if not slot_advice.recommended:
+            continue
+        others = [
+            pick
+            for slot, picks in baseline.items()
+            if slot != slot_advice.slot
+            for pick in picks
+        ]
+        evaluated = {}
+        for candidate in [slot_advice.recommended, *slot_advice.alternatives]:
+            mine = (
+                locked
+                + others
+                + [
+                    (int(w), str(slot_advice.plan.players.iloc[r].player_id))
+                    for w, r in candidate.future.items()
+                ]
+            )
+            total = pool.my_tds + draws.totals(mine)
+            evaluated[candidate.player_id] = (candidate, simulate.shares(total, opposition))
+        reference = evaluated[slot_advice.recommended.player_id][1]
+        shares = []
+        for candidate, drawn in evaluated.values():
+            delta, delta_se = simulate.paired(drawn, reference)
+            shares.append(
+                PotShare(
+                    candidate.player_id,
+                    candidate.player_name,
+                    float(drawn.mean()),
+                    float(drawn.std(ddof=1) / np.sqrt(sims)),
+                    delta,
+                    delta_se,
+                )
+            )
+        # The expected-TD pick keeps precedence at equal share, for the reason it keeps it
+        # at equal cost: a candidate that ties it describes an equally good plan, not a
+        # better one.
+        shares.sort(
+            key=lambda s: (-s.share, s.player_id != slot_advice.recommended.player_id, s.player_id)
+        )
+        slot_advice.shares = shares
+        slot_advice.sims = sims
+
+
 def advise_week(
     proj: pd.DataFrame,
     week: int,
     used_ids: set[str],
     locked_by_slot: dict[str, dict[int, str]],
     now: datetime | None = None,
+    pool: rivals.PoolState | None = None,
 ) -> list[SlotAdvice]:
+    """Expected-TD advice, plus the win-probability view when the pool's state is known.
+
+    With no `pool` this returns exactly what it always has, candidate for candidate. The
+    second objective is additive; it never edits the first.
+    """
     now = state.eastern_now(now)
-    return [
+    advice = [
         advise_slot(proj, slot, week, used_ids, locked_by_slot.get(slot, {}), now=now)
         for slot in config.SLOTS
     ]
+    if pool:
+        pot_shares(proj, week, advice, pool, locked_by_slot)
+    return advice
