@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -22,6 +22,7 @@ from . import (
     freshness,
     ingest,
     models,
+    predictions,
     projections,
     prospective,
     scoring,
@@ -38,6 +39,11 @@ report_app = typer.Typer(
     help="Archive and read official weekly pool reports.", no_args_is_help=True
 )
 app.add_typer(report_app, name="report")
+predict_app = typer.Typer(
+    help="Predict rival picks before a week can be seen, and score the record.",
+    no_args_is_help=True,
+)
+app.add_typer(predict_app, name="predict")
 console = Console()
 
 SeasonOpt = typer.Option(config.DEFAULT_SEASON, "--season", "-s", help="Season year")
@@ -281,6 +287,128 @@ def report_list(season: int = SeasonOpt, db_path: Path | None = DbOpt):
             row.source,
         )
     console.print(table)
+
+
+def _used_cell(block: dict) -> str:
+    unknown = block["unknown"]
+    return str(len(block["used"])) + (f" + {unknown} unknown" if unknown else "")
+
+
+@predict_app.command("record")
+def predict_record(
+    week: int | None = WeekOpt,
+    season: int = SeasonOpt,
+    db_path: Path | None = DbOpt,
+    write: bool = typer.Option(True, "--record/--dry-run", help="Archive it, or only show it"),
+):
+    """Predict every rival's picks for a week and archive it before the week can be seen.
+
+    Exits non-zero when the prediction will not be scorable -- the archive still happens,
+    because a record that cannot be scored is still evidence, but a scripted run has to be
+    told that this week's observation was lost.
+    """
+    conn = _conn(db_path)
+    try:
+        wk = _week(conn, season, week)
+        now = datetime.now(UTC)
+        kickoff = predictions.first_kickoff(conn, season, wk)
+        arrivals, _ = predictions.report_arrivals(conn, season)
+        arrival = arrivals.get(wk)
+        late = []
+        if kickoff is None:
+            late.append(f"week {wk} has no confirmed kickoff")
+        elif now >= kickoff:
+            late.append(f"week {wk} kicked off at {kickoff.isoformat(timespec='minutes')}")
+        if arrival is not None:
+            late.append(f"week {wk}'s report already arrived at {arrival}")
+        payload = predictions.predict(conn, season, wk, _projections(conn, season, wk))
+        if not payload["rivals"]:
+            console.print(
+                f"No rivals to predict for {season}. Run pool report import first."
+            )
+            raise typer.Exit(1)
+        observation = predictions.archive(conn, season, wk, payload) if write else None
+    finally:
+        conn.close()
+    table = Table(
+        "Rival", "Slot", *predictions.rivals.PREDICTORS, "Remaining", "Used",
+        title=f"Predicted rival picks \u2014 {season}, week {wk}",
+    )
+    for block in payload["rivals"].values():
+        for slot, byname in block["slots"].items():
+            table.add_row(
+                block["display_name"], slot,
+                *(byname[name][0]["player_name"] if byname.get(name) else "\u2014"
+                  for name in predictions.rivals.PREDICTORS),
+                str(block["remaining"].get(slot, "\u2014")),
+                _used_cell(block),
+            )
+    console.print(table)
+    console.print(
+        f"Top {payload['top_n']} kept per predictor; the full rankings are in the archive, "
+        "not in this table."
+    )
+    if observation is not None:
+        console.print(f"Archived prediction as observation {observation}.")
+    else:
+        console.print("[yellow]Dry run: nothing archived.[/yellow]")
+    if late:
+        console.print(
+            "[red]This prediction will not be scorable: " + "; ".join(late) + ".[/red]"
+        )
+        console.print(
+            "A prediction counts only if it was archived before the week's first kickoff "
+            "and before its report. Both deadlines are checked against the archive."
+        )
+        raise typer.Exit(1)
+
+
+def _rate_table(frame, title: str, first: str) -> Table:
+    table = Table(first, "Predictor", "Scored", "Hits", "Hit rate", "In top N", title=title)
+    for row in frame.itertuples():
+        table.add_row(
+            str(getattr(row, first.lower().replace(" ", "_"), "")), row.predictor,
+            str(int(row.n)), str(int(row.hits)), f"{row.hit_rate:.0%}", f"{row.in_top_n:.0%}",
+        )
+    return table
+
+
+@predict_app.command("score")
+def predict_score(season: int = SeasonOpt, db_path: Path | None = DbOpt):
+    """Score archived predictions against the picks entrants actually made."""
+    conn = _conn(db_path)
+    try:
+        scored, notes = predictions.score(conn, season)
+    finally:
+        conn.close()
+    if scored.empty:
+        console.print(f"No scorable predictions for {season}.")
+    else:
+        overall = predictions.hit_rates(scored)
+        table = Table("Predictor", "Scored", "Hits", "Hit rate", "In top N",
+                      title=f"Rival-pick prediction accuracy \u2014 {season}")
+        for row in overall.itertuples():
+            table.add_row(row.predictor, str(int(row.n)), str(int(row.hits)),
+                          f"{row.hit_rate:.0%}", f"{row.in_top_n:.0%}")
+        console.print(table)
+        console.print(_rate_table(predictions.hit_rates(scored, "slot"), "By slot", "Slot"))
+        console.print(
+            _rate_table(predictions.hit_rates(scored, "display_name"), "By rival", "Display name")
+        )
+        ranks = Table("Predictor", "Rank of the actual pick", "Count",
+                      title="Where the actual pick landed")
+        for (name, rank), n in scored.groupby(
+            ["predictor", scored["rank"].astype("Int64")], dropna=False
+        ).size().items():
+            ranks.add_row(name, "outside top N" if pd.isna(rank) else str(int(rank)), str(int(n)))
+        console.print(ranks)
+        console.print(
+            "Hit rate is the share of rival slot-weeks whose actual pick the predictor "
+            "ranked first. Totals are picks, not touchdowns."
+        )
+    for note in notes:
+        where = "" if note["week"] is None else f"Week {note['week']}: "
+        console.print(f"[yellow]{where}{note['reason']}[/yellow]", markup=False)
 
 
 @app.command()
