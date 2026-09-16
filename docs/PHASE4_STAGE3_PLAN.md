@@ -630,6 +630,35 @@ still worth having, and the log is the only part that expires.
    `docs/PHASE4_PLAN.md`, whose stage 3 section is marked implemented;
    `docs/IMPLEMENTATION_PLAN.md` stage status.
 
+## Verification Record, Before The Fingerprint Move
+
+Run on 2026-09-16, immediately before the commit that makes `recommend.py` import `rivals`
+and `simulate`, so the last verification under the stage-2 fingerprint is on the record.
+This is stage 2's procedure, followed for the third move of the season.
+
+```
+$ pool verify-capture --season 2026 --allow-code-drift
+
+decision      week  surface           reconstructed  replay  note
+ea7b0ff08ff6  1     thursday_deadline yes            yes     fingerprint moved; accepted by override
+6e71a2be2ae2  1     sunday_slate      yes            yes     fingerprint moved; accepted by override
+55134df98e15  1     sunday_slate      yes            yes     fingerprint moved; accepted by override
+155e11a74ea3  1     sunday_slate      yes            yes     fingerprint moved; accepted by override
+071a5bc55c96  2     thursday_deadline yes            yes     fingerprint moved; accepted by override
+
+5 passed only because the fingerprint check was overridden. The source these
+checks enforce had moved and they were accepted anyway.
+All 5 captured decisions reconstruct and match replay.
+```
+
+All five reconstruct and match replay. They already required `--allow-code-drift` after
+stage 2's move through `scoring.py`, so this move does not change what is needed to verify
+them; it changes only how many named causes stand between them and a clean check.
+
+Unlike the previous two moves this one is not an accounting cost. A decision made under a
+different opponent model or a different simulator **is** a different decision, so a
+fingerprint that refuses to certify the old ones is the fingerprint working.
+
 ## Out Of Scope, And Deliberately Deferred
 
 - **Any change to `projections.lam`.** Phase 3B's no-promotion outcome stands. The
