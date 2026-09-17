@@ -226,6 +226,87 @@ def test_a_pot_share_is_a_share_not_a_win_probability():
     assert simulate.shares(pd.array([5]).to_numpy(), pd.DataFrame([[5, 5]]).to_numpy())[0] == 1 / 3
 
 
+# --- correlating with my own quarterback, and when it is worth it ---------------------
+
+
+def pairing_frame(weeks=(1,)):
+    """My quarterback, a receiver who shares his credit, and one who shares nothing.
+
+    `fa` is on `qa`'s team and in his game, so a passing touchdown can pay them both; `fb`
+    is unrelated to everything I hold. They project identically, so expected touchdowns is
+    exactly indifferent between them and the only thing left is correlation. The rival's
+    three players project identically to mine and share no game with them, so the standings
+    are the single asymmetry in the whole frame.
+    """
+    rows = []
+    for week in weeks:
+        rows += [
+            cell("qa", "QB", 4.0, "A", f"g{week}a", week=week),
+            cell("fa", "FLEX", 0.8, "A", f"g{week}a", week=week),
+            cell("fb", "FLEX", 0.8, "C", f"g{week}c", week=week),
+            cell("ra", "RB", 0.5, "D", f"g{week}d", week=week),
+            cell("qz", "QB", 4.0, "E", f"g{week}e", week=week),
+            cell("fz", "FLEX", 0.8, "F", f"g{week}f", week=week),
+            cell("rz", "RB", 0.5, "G", f"g{week}g", week=week),
+        ]
+    return pd.DataFrame(rows)
+
+
+def pairing(deficit, weeks=(1,), sims=20000):
+    """FLEX shares with me `deficit` touchdowns behind one rival who holds nothing of mine."""
+    mine, theirs = max(0, -deficit), max(0, deficit)
+    state = rivals.RivalState("r1", "Rival", frozenset(("qa", "fa", "fb", "ra")), 0, theirs)
+    pool = rivals.PoolState((state,), mine)
+    with config.override(WINPROB_SIMS=sims, RIVAL_NOISE_TOP_N=1):
+        advice = advise_week(pairing_frame(weeks), 1, set(), {}, now=NOW, pool=pool)
+    flex = next(a for a in advice if a.slot == "FLEX")
+    shares = {s.player_id: s for s in flex.shares}
+    return shares["fa"], shares["fb"]
+
+
+def test_behind_the_policy_correlates_with_its_own_quarterback():
+    """Shared credit reaching the decision, not just the simulator.
+
+    At equal expected touchdowns the only difference between these two receivers is that
+    one is paid by the same passing touchdowns my quarterback is. Behind, that correlation
+    is worth having: it fattens the tail I need to reach.
+    """
+    pair, split = pairing(+6)
+    assert pair.share > split.share and not split.tied
+    assert split.delta < 0, "the unrelated receiver is the worse pick when behind"
+
+
+def test_ahead_the_policy_decorrelates_instead():
+    pair, split = pairing(-3)
+    assert split.share > pair.share and not split.tied
+
+
+def test_level_sits_on_the_decorrelating_side_rather_than_at_the_pivot():
+    """Corrects this document's claim 16b, which had the preference reversing around level.
+
+    It does not. At level, with my total more variable than the rival's and both counts
+    skewed, more variance costs me: a count distribution stretched to the right puts more
+    mass below its own mean, so `P(mine > theirs)` falls. The pivot is strictly on the
+    behind side of level, and level belongs with ahead.
+    """
+    pair, split = pairing(0)
+    assert split.share > pair.share and not split.tied
+
+
+def test_behind_is_measured_against_what_is_left_to_play_not_the_scoreboard():
+    """The same deficit, and the opposite answer, because the schedule changed.
+
+    Three touchdowns down with one week to play is behind. Three down with three weeks to
+    play is not: there is room to win on the mean, and buying variance only widens a
+    distribution that is already on the right side. A rule keyed to the scoreboard alone
+    would get one of these two wrong.
+    """
+    near_pair, near_split = pairing(+3, weeks=(1,))
+    assert near_pair.share > near_split.share, "one week left: behind enough to correlate"
+    far_pair, far_split = pairing(+3, weeks=(1, 2, 3))
+    assert far_split.share > far_pair.share, "three weeks left: the same deficit is not behind"
+
+
 # --- the explanation describes the distribution the policy drew from -------------------
 
 
@@ -261,6 +342,57 @@ def test_a_rival_whose_week_never_arrived_is_not_a_complete_pool():
     assert not rivals.RivalState("a", "A", frozenset({"qa"}), 1, 3).pool_complete
     gap = rivals.RivalState("a", "A", frozenset({"qa"}), 0, 3, missing_weeks=(2,))
     assert not gap.pool_complete
+
+
+# --- a pick already on record is not a pick to predict ---------------------------------
+
+
+def test_a_reported_pick_is_used_instead_of_a_prediction_of_it():
+    """Claim 20. The rollout would otherwise guess at a week it has been told the answer to.
+
+    `qz` is the best quarterback this rival has left, so greedy predicts him with certainty.
+    Their report says they took `q6`, the worst. The simulated rival must score `q6`.
+    """
+    proj = frame()
+    reported = rivals.RivalState(
+        "r1", "Rival", frozenset(("qa", "qb")), 0, 0, known=(("QB", 1, "q6"),)
+    )
+    players, values = rivals.remaining_matrix(proj, "QB", 1, [1], reported.used_ids)
+    guessed = rivals.rollout(players, values, [1], rng=np.random.default_rng(0), top_n=1)
+    # `qz` and `qy` are exchangeable at 0.90; which of the two it lands on is a tie-break,
+    # and the point is only that it reaches for the top of their list.
+    assert guessed[1] in ("qz", "qy"), "left to itself the rollout takes one of the best"
+    pinned = rivals.rollout(
+        players, values, [1], rng=np.random.default_rng(0), top_n=1,
+        known=reported.pinned("QB", [1]),
+    )
+    assert pinned[1] == "q6", "told the answer, it uses the answer"
+
+
+def test_a_pinned_player_cannot_be_spent_again_later():
+    """A reported pick depletes the pool it came from, or the rival gets him twice."""
+    proj = frame(weeks=(1, 2))
+    state = rivals.RivalState("r1", "Rival", frozenset(), 0, 0, known=(("QB", 1, "qz"),))
+    players, values = rivals.remaining_matrix(proj, "QB", 1, [1, 2], state.used_ids)
+    path = rivals.rollout(
+        players, values, [1, 2], rng=np.random.default_rng(0), top_n=1,
+        known=state.pinned("QB", [1, 2]),
+    )
+    assert path[1] == "qz" and path[2] != "qz"
+
+
+def test_a_reported_pick_enters_the_explanation_at_certainty():
+    """It is the strongest form of "this rival holds this player", so the divergence
+    sentence has to read it as such rather than as one of three things they might do."""
+    proj = frame()
+    pool = rivals.PoolState(
+        (rivals.RivalState("r1", "Rival", frozenset(), 0, 0, known=(("QB", 1, "qa"),)),), 0
+    )
+    with config.override(WINPROB_SIMS=200, RIVAL_NOISE_TOP_N=3):
+        advice = advise_week(proj, 1, set(), {}, now=NOW, pool=pool)
+    qb = next(a for a in advice if a.slot == "QB")
+    assert qb.contested["qa"] == (("Rival", 1.0),)
+    assert list(qb.contested) == ["qa"], "and nothing else is a candidate for that slot"
 
 
 # --- how it ships ---------------------------------------------------------------------
@@ -476,3 +608,91 @@ def test_a_week_nobody_has_played_is_not_a_week_nobody_reported(seeded):
     after = predictions.pool_state(conn, 2026, 3, at=kickoff + timedelta(hours=1))
     assert all(r.missing_weeks == (2,) for r in after.rivals), "played and never reported"
     assert all(not r.pool_complete for r in after.rivals)
+
+
+def test_the_policy_reads_a_report_that_arrived_before_the_decision_and_not_one_after(seeded):
+    """The mid-week report, which the pool's own cadence makes normal.
+
+    Week 2's report can land before week 2 locks. From that moment the policy knows what
+    every rival holds this week and should stop guessing -- but only from that moment. A
+    decision made an hour earlier must reconstruct against what it actually had, or a
+    capture replays with intelligence the decision never saw.
+    """
+    from datetime import timedelta
+
+    from pool import predictions
+    from tests import test_predictions as log
+
+    conn, _ = seeded
+    arrival = datetime.fromisoformat(log.REPORT_AT)
+    log._report(conn, 2, log.WEEK2, log.REPORT_AT)
+    before = predictions.pool_state(conn, 2026, 2, at=arrival - timedelta(hours=1))
+    assert all(not r.known for r in before.rivals), "not yet in hand"
+    after = predictions.pool_state(conn, 2026, 2, at=arrival + timedelta(hours=1))
+    assert after.rivals and all(r.known for r in after.rivals)
+    pat = next(r for r in after.rivals if r.display_name == "Pat")
+    assert pat.pinned("QB", [2]) == {2: "q2"}, "Pat's reported week-2 quarterback"
+    assert all(week >= 2 for _slot, week, _pid in pat.known), "week 1 is spending, not a pick"
+
+
+# --- does the answer need the numbers we had to fit? ----------------------------------
+
+
+def _sweep(proj, pool, week=1, sims=1500):
+    from pool.cli import _sensitivity
+
+    with config.override(WINPROB_SIMS=sims, RIVAL_NOISE_TOP_N=1):
+        advice = advise_week(proj, week, set(), {}, now=NOW, pool=pool)
+        return _sensitivity(proj, week, advice, pool, {})
+
+
+def test_the_sweep_finds_the_knob_the_divergence_actually_rests_on():
+    """The sweep earning its cost, on the case the suite already pins.
+
+    `k_game` turns out not to matter here: at every value, the policy still declines the
+    player the whole field is about to take. The rival-noise parameter does matter, and it
+    is the one declared provisional in `config` -- with a deterministic opponent the
+    divergence is sharp, and with a noisy one it falls inside the band. Never, at any
+    setting, does the expected-TD pick come back as the best share. That is the shape worth
+    reporting: the direction is settled, the strength is not.
+    """
+    proj = frame()
+    pool = rivals.PoolState((rival("one", 0), rival("two", 0), rival("three", 0)), 0)
+    sweep = _sweep(proj, pool)
+    qb = sweep[sweep.slot.eq("QB")]
+    assert len(qb) == len(config.SENSITIVITY_K_GAME) * len(config.SENSITIVITY_NOISE)
+    assert "qa" not in set(qb.player_id), "the expected-TD pick never wins on share"
+    sharp = qb[~qb.tied]
+    assert set(sharp.player_id) == {"qb"}, "where it separates it always names the same one"
+    assert set(qb[qb.noise.eq(1)].player_id) == {"qb"} and not qb[qb.noise.eq(1)].tied.any()
+    assert qb.tied.any(), "and with a noisier opponent it stops separating"
+
+
+def test_a_slot_where_nothing_separates_reports_as_tied_not_as_knob_sensitive():
+    """The distinction the first version of this table got wrong.
+
+    When every candidate is inside the noise band, the argmax wanders between settings --
+    but what is moving is the coin, not the knob. Reading the raw winner would report such
+    a slot as wildly parameter-sensitive and send the reader looking for a calibration
+    problem that is not there.
+    """
+    proj = frame()
+    pool = rivals.PoolState((rival("one", 0, used=("qz", "qy", "q5", "q6")),), 0)
+    sweep = _sweep(proj, pool)
+    flex = sweep[sweep.slot.eq("FLEX")]
+    assert len(flex) and flex.tied.all(), "nothing in FLEX separates at any setting"
+
+
+def test_the_sweep_does_not_touch_the_advice_it_was_given():
+    """It is a diagnostic. If it mutated the advice, the printed pick would depend on
+    whether the flag was passed."""
+    from pool.cli import _sensitivity
+
+    proj = frame()
+    pool = rivals.PoolState((rival("one", 0), rival("two", 0), rival("three", 0)), 0)
+    with config.override(WINPROB_SIMS=1500, RIVAL_NOISE_TOP_N=1):
+        advice = advise_week(proj, 1, set(), {}, now=NOW, pool=pool)
+        before = [(a.slot, [s.player_id for s in a.shares], a.sims) for a in advice]
+        _sensitivity(proj, 1, advice, pool, {})
+        after = [(a.slot, [s.player_id for s in a.shares], a.sims) for a in advice]
+    assert before == after

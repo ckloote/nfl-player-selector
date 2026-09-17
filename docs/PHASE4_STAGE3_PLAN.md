@@ -596,8 +596,15 @@ The claims this document makes that would be silent if wrong:
     leader is *unlikely* to take, and the EV ranking is indifferent between them.
 16. Ahead late against one chaser: at equal `lam`, the preference reverses. With three
     rivals still in range it does not reverse — mirroring needs a single threat.
-16b. With both a QB and a FLEX slot open and me behind, the policy prefers the same-team
-    pair over two unrelated players of equal total `lam`; ahead, it prefers them split.
+16b. With a QB held and two receivers of equal `lam` to choose between, the policy prefers
+    the one who shares my quarterback's credit when I am behind, and the unrelated one when
+    I am ahead. **Level belongs with ahead, not at the pivot** — measured, correcting this
+    claim's first form, which had the preference reversing around level. It does not: my
+    paired total is the more variable of the two and both are skewed counts, so at level the
+    extra variance costs share rather than being neutral. And **behind means behind relative
+    to what is left to play**: three down with one week to go prefers the pair, three down
+    with three weeks to go still prefers the split, because there is room to win on the mean.
+    A rule keyed to the scoreboard alone gets one of those two wrong.
 17. Differentiation is real — with the leader highly likely to take a player, my
     identical pick scores lower pot share than an equivalent-EV alternative.
 18. Two candidates within the paired Monte Carlo standard error are reported as tied
@@ -633,8 +640,24 @@ The claims this document makes that would be silent if wrong:
 
 Claim 22 is the acceptance test for "alongside, not instead of". It is what fails if the
 win-probability work ever starts quietly changing the expected-TD advice.
+**The prospective checks**
+
+30. The PIT payload holds a seed, a size and a content hash and no numbers, and rebuilding
+    from it twice gives the identical distribution. A later re-forecast cannot move it.
+31. The two claims sharing the `pool_prediction` feed are told apart by `kind`, and neither
+    scorer reads the other's rows.
+32. A week with an unscored slot produces no PIT draw rather than a low one, and scoring the
+    same week twice gives the same answer — the randomisation is seeded by content, not by
+    `hash()`, which is salted per interpreter.
+33. The sensitivity sweep reads the noise band rather than the raw argmax, so a slot whose
+    candidates are all tied reports as tied and not as knob-sensitive; it reports a
+    consistent-but-weak divergence separately from a contradictory one; and it does not
+    mutate the advice it was handed.
+
 Claim 26 is the acceptance test for the capture: a second objective that cannot be
 reconstructed is a second objective that was never really recorded.
+Claim 33 exists because the first version of that table failed it: reading the argmax
+reported every statistically tied slot as wildly parameter-sensitive.
 Claim 24 is the acceptance test for the closure argument, and claim 4 for the storage one.
 
 `tests/test_phase3a.py`'s `outside` set gains `predictions`. `rivals` and `simulate` are
@@ -667,7 +690,10 @@ still worth having, and the log is the only part that expires.
 5. **The CLI.** The pot-share column, the divergence sentence, the noise guard, the
    degenerate-case sentences, the missing-prediction nudge, and `capture.record_decision`
    storing the new view.
-6. **The behaviour scenarios and the prospective checks.** The scripted standings
+6. **The behaviour scenarios and the prospective checks.** Also claim 20, which is
+   behaviour rather than a check and was never implemented: a rival's reported pick, where
+   the report arrived before the decision, is used instead of a prediction of it. The
+   scripted standings
    positions as tests; the weekly PIT array archived alongside the prediction log under the
    same `pool_prediction` feed, since it is the same kind of claim — what the model said
    before it could see the answer; and the `k_game` / rival-noise sensitivity sweep behind

@@ -108,6 +108,15 @@ RIVAL_NOISE_TOP_N = 3
 # every week and the simulation count quietly becomes a decision input.
 WINPROB_SIGNIFICANCE = 2.0
 
+# Stress range for `pool recommend --sensitivity`. A **declared range, not a fitted
+# interval**: the calibration reports a point estimate for `k_game` and no uncertainty on
+# it, so quoting one here would invent evidence. These bracket it by roughly a factor of
+# two either way -- the game factor mattering twice as much as fitted, and half as much --
+# which is generous enough that a pick surviving all of it does not depend on the number.
+SENSITIVITY_K_GAME = (7.0, 14.302, 30.0)
+# 1 is a perfectly predictable opponent, 5 is one barely worth modelling.
+SENSITIVITY_NOISE = (1, 3, 5)
+
 # --- Role source ------------------------------------------------------------
 # Where the role multiplier comes from: the depth-chart snapshot ("depth"),
 # usage share to date ("usage"), or nothing at all ("none"). Live picks use the

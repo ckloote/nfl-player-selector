@@ -46,6 +46,19 @@ class RivalState:
     # kicked off does not belong here: nobody has spent anything in it, and the caller is
     # simply looking further ahead than the pool has been played.
     missing_weeks: tuple[int, ...] = ()
+    # (slot, week, player_id) for picks from this week on that are already on record. A
+    # pick that has been reported is not a pick to predict, and simulating a guess at one
+    # I have been told is strictly worse than using it.
+    known: tuple[tuple[str, int, str], ...] = ()
+
+    def pinned(self, slot: str, weeks) -> dict[int, str]:
+        """This rival's already-reported picks for one slot, within `weeks`."""
+        allowed = {int(w) for w in weeks}
+        return {
+            int(week): str(pid)
+            for name, week, pid in self.known
+            if name == slot and int(week) in allowed
+        }
 
     @property
     def pool_complete(self) -> bool:
@@ -183,18 +196,27 @@ def options(values, col: int, taken=(), *, top_n: int = 1) -> list[int]:
     return [int(r) for r in playable[np.argsort(-column[playable], kind="stable")][:top_n]]
 
 
-def rollout(players, values, weeks, *, rng, top_n: int = 1) -> dict[int, str]:
+def rollout(players, values, weeks, *, rng, top_n: int = 1, known=None) -> dict[int, str]:
     """One plausible path of a rival's remaining picks: greedy, with noise, no reuse.
 
     `top_n` above 1 is where uncertainty about what an opponent does enters. A perfectly
     predictable rival would let the policy block them exactly, which is the more dangerous
     error -- it would claim an edge that depends on knowing something unknowable.
+
+    `known` pins weeks whose pick has already been reported. Those weeks are not predicted
+    and the players are spent, so the rest of the path cannot spend them again. A pinned
+    player who is not in this matrix -- capped out of the candidate pool, or ineligible --
+    still holds his week; he simply contributes whatever his cell is worth, which is the
+    honest answer for a player the forecast does not rate.
     """
     if not len(players):
         return {}
-    taken: list[int] = []
-    picks: dict[int, str] = {}
+    rows = {str(pid): row for row, pid in enumerate(players.player_id)}
+    picks: dict[int, str] = {int(w): str(p) for w, p in (known or {}).items()}
+    taken: list[int] = [rows[pid] for pid in picks.values() if pid in rows]
     for col, week in enumerate(weeks):
+        if int(week) in picks:
+            continue
         best = options(values, col, taken, top_n=top_n)
         if not best:
             continue

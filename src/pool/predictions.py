@@ -73,7 +73,7 @@ def report_arrivals(conn: sqlite3.Connection, season: int) -> tuple[dict[int, st
     return arrivals, int(len(reports) - len(known))
 
 
-def _standing(row, spent, played: set[int]) -> rivals.RivalState:
+def _standing(row, spent, played: set[int], known=None) -> rivals.RivalState:
     pool = spent[row.entrant_id]
     return rivals.RivalState(
         row.entrant_id,
@@ -82,7 +82,49 @@ def _standing(row, spent, played: set[int]) -> rivals.RivalState:
         pool.unknown,
         row.season_total.tds,
         tuple(w for w in pool.missing_weeks if w in played),
+        (known or {}).get(row.entrant_id, ()),
     )
+
+
+def known_picks(
+    conn: sqlite3.Connection, season: int, week: int, at: datetime
+) -> dict[str, tuple[tuple[str, int, str], ...]]:
+    """Each entrant's picks from `week` on that were already on record at `at`.
+
+    Not the leak `_as_of` guards against, and worth being clear about the difference. That
+    one is about *spending*: counting a week's report as depletion before that week is
+    decided shrinks the pool a prediction of that same week is made against, and makes the
+    prediction look better than it was. This is the opposite operation -- using a reported
+    pick as itself, in the week it belongs to. It replaces a guess with the answer.
+
+    `at` is what keeps it honest. A report that landed after the decision was made is not
+    something the decision could have used, and including it would let a captured decision
+    reconstruct against intelligence it never had.
+
+    The latest observation of a cell wins, so a corrected report supersedes the one it
+    corrects rather than contributing a second pick for the same slot.
+    """
+    rows = entrants.entrant_picks(conn, season)
+    if rows.empty:
+        return {}
+    rows = rows[rows.week.ge(week) & rows.player_id.notna()]
+    if rows.empty:
+        return {}
+    # Compared as instants, not as text, for the reason `_eligible` is: the two writers
+    # agree on a format today and nothing enforces that they keep agreeing.
+    arrived = [datetime.fromisoformat(value) <= at for value in rows.observed_at]
+    rows = rows[pd.Series(arrived, index=rows.index)]
+    if rows.empty:
+        return {}
+    rows = rows.sort_values("observed_at").drop_duplicates(
+        ["entrant_id", "week", "slot"], keep="last"
+    )
+    out: dict[str, list[tuple[str, int, str]]] = {}
+    for row in rows.itertuples():
+        out.setdefault(row.entrant_id, []).append(
+            (str(row.slot), int(row.week), str(row.player_id))
+        )
+    return {entrant: tuple(sorted(picks)) for entrant, picks in out.items()}
 
 
 def played_weeks(conn: sqlite3.Connection, season: int, through: int, at: datetime) -> set[int]:
@@ -117,6 +159,7 @@ def _as_of(conn, season, week, at):
             standings.board(conn, season),
             standings.used_pools(conn, season, through=week - 1),
             played_weeks(conn, season, week - 1, at),
+            known_picks(conn, season, week, at),
         )
 
 
@@ -125,7 +168,10 @@ def rival_states(
 ) -> list[rivals.RivalState]:
     """Every entrant but me, with what they had spent going into `week`."""
     at = at or datetime.now(UTC)
-    board, spent, played = _as_of(conn, season, week, at)
+    board, spent, played, _known = _as_of(conn, season, week, at)
+    # Deliberately without `known`: this builds the state a *prediction* is made from, and
+    # handing it the answer would make every hit rate meaningless. `pool_state` takes it,
+    # because the policy is entitled to intelligence the prediction log is not.
     return [_standing(row, spent, played) for row in board.rows if not row.is_me]
 
 
@@ -142,10 +188,10 @@ def pool_state(
     fixed its own clock does not acquire a second one here.
     """
     at = at or datetime.now(UTC)
-    board, spent, played = _as_of(conn, season, week, at)
+    board, spent, played, known = _as_of(conn, season, week, at)
     mine = next((row for row in board.rows if row.is_me), None)
     return rivals.PoolState(
-        tuple(_standing(row, spent, played) for row in board.rows if not row.is_me),
+        tuple(_standing(row, spent, played, known) for row in board.rows if not row.is_me),
         mine.season_total.tds if mine else 0,
     )
 
@@ -191,8 +237,15 @@ def archive(
     payload: dict,
     *,
     observed_at: str | datetime | None = None,
+    kind: str = "picks",
 ) -> int:
-    """Commit the prediction. Mirrors `entrants.archive_report`, for the same reasons."""
+    """Commit the prediction. Mirrors `entrants.archive_report`, for the same reasons.
+
+    `kind` separates the claims sharing this feed -- predicted rival picks, and the PIT
+    commitment in `pit.py`. Both are statements made before the week could be seen, which
+    is why they belong to one feed; neither scorer has any business reading the other's
+    rows, which is why they are labelled.
+    """
     if conn.in_transaction:
         raise ValueError("Archiving a prediction requires a connection with no open transaction")
     stamp = _utc(observed_at or datetime.now(UTC))
@@ -213,7 +266,8 @@ def archive(
                 stamp,
                 digest,
                 json.dumps(
-                    dict(week=week, rivals=sorted(payload["rivals"])), sort_keys=True
+                    dict(kind=kind, week=week, rivals=sorted(payload.get("rivals", {}))),
+                    sort_keys=True,
                 ),
                 SCHEMA_VERSION,
             ),
@@ -221,23 +275,32 @@ def archive(
     return int(cursor.lastrowid)
 
 
-def archived(conn: sqlite3.Connection, season: int) -> list[dict]:
-    """Every archived prediction in observation order, payload decoded."""
+def archived(conn: sqlite3.Connection, season: int, kind: str = "picks") -> list[dict]:
+    """Every archived claim of one kind, in observation order, payload decoded.
+
+    Rows written before the feed carried two kinds have no label and are rival-pick
+    predictions, which is what the default reads them as.
+    """
     rows = conn.execute(
         "SELECT o.observation_id, o.observed_at, o.coverage, p.payload "
         "FROM input_observations o JOIN input_payloads p ON p.content_hash = o.content_hash "
         "WHERE o.season = ? AND o.feed = ? ORDER BY o.observation_id",
         (season, FEED),
     ).fetchall()
-    return [
-        dict(
-            observation_id=int(row["observation_id"]),
-            observed_at=row["observed_at"],
-            week=json.loads(row["coverage"])["week"],
-            payload=json.loads(zlib.decompress(row["payload"]).decode()),
+    out = []
+    for row in rows:
+        coverage = json.loads(row["coverage"])
+        if coverage.get("kind", "picks") != kind:
+            continue
+        out.append(
+            dict(
+                observation_id=int(row["observation_id"]),
+                observed_at=row["observed_at"],
+                week=coverage["week"],
+                payload=json.loads(zlib.decompress(row["payload"]).decode()),
+            )
         )
-        for row in rows
-    ]
+    return out
 
 
 def _eligible(records, kickoff, arrival):

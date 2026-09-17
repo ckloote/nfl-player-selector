@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,17 +23,19 @@ from . import (
     freshness,
     ingest,
     models,
+    pit,
     predictions,
     projections,
     prospective,
     scoring,
+    simulate,
     snapshots,
     state,
 )
 from . import evaluate as ev
 from . import standings as st
 from .optimizer import plan_slot
-from .recommend import Candidate, SlotAdvice, advise_week
+from .recommend import Candidate, SlotAdvice, advise_week, pot_shares
 
 app = typer.Typer(help="NFL touchdown pool decision support.", no_args_is_help=True)
 report_app = typer.Typer(
@@ -321,13 +324,18 @@ def predict_record(
             late.append(f"week {wk} kicked off at {kickoff.isoformat(timespec='minutes')}")
         if arrival is not None:
             late.append(f"week {wk}'s report already arrived at {arrival}")
-        payload = predictions.predict(conn, season, wk, _projections(conn, season, wk))
+        proj = _projections(conn, season, wk)
+        payload = predictions.predict(conn, season, wk, proj)
         if not payload["rivals"]:
             console.print(
                 f"No rivals to predict for {season}. Run pool report import first."
             )
             raise typer.Exit(1)
         observation = predictions.archive(conn, season, wk, payload) if write else None
+        # The same act: what the model says before the week can be seen. The picks are one
+        # claim about these five people, the distribution behind their totals is another,
+        # and both expire at the same kickoff.
+        committed = pit.commit(conn, season, wk, proj) if write else None
     finally:
         conn.close()
     table = Table(
@@ -350,6 +358,10 @@ def predict_record(
     )
     if observation is not None:
         console.print(f"Archived prediction as observation {observation}.")
+        console.print(
+            f"Committed week {wk}'s implied distribution as observation {committed} "
+            f"({config.WINPROB_SIMS} draws, seed {config.WINPROB_SEED})."
+        )
     else:
         console.print("[yellow]Dry run: nothing archived.[/yellow]")
     if late:
@@ -409,6 +421,39 @@ def predict_score(season: int = SeasonOpt, db_path: Path | None = DbOpt):
     for note in notes:
         where = "" if note["week"] is None else f"Week {note['week']}: "
         console.print(f"[yellow]{where}{note['reason']}[/yellow]", markup=False)
+    _print_pit(conn_path=db_path, season=season)
+
+
+def _print_pit(conn_path, season: int) -> None:
+    """The other claim on the same feed: where realised weekly totals fell in the model.
+
+    Reported without a verdict. Eighty-five draws over a full season is not enough to test
+    uniformity with any power, so a pass/fail printed off a part-season would be a coin
+    flip wearing a conclusion. The lean is the readable part: mass at the top means the
+    model is under-predicting the players these five actually pick.
+    """
+    conn = _conn(conn_path)
+    try:
+        scored, notes = pit.score(conn, season)
+    finally:
+        conn.close()
+    if scored.empty:
+        console.print(f"[dim]No scorable weekly distributions for {season} yet.[/dim]")
+    else:
+        table = Table(
+            "Bin", "Count", "Expected if flat",
+            title=f"Where realised weekly totals fell — {season} ({len(scored)} draws)",
+        )
+        for row in pit.uniformity(scored).itertuples():
+            table.add_row(f"{row.low:.1f}-{row.high:.1f}", str(row.count), f"{row.expected:.1f}")
+        console.print(table)
+        console.print(
+            "Committed before each kickoff as a seed and a frame hash, so the distribution "
+            "could not have been chosen to fit. No pass or fail: a season is too few draws "
+            "to test uniformity, and the lean is what is worth reading."
+        )
+    for note in notes:
+        console.print(f"[dim]Week {note['week']}: {note['reason']}[/dim]", markup=False)
 
 
 @app.command()
@@ -593,6 +638,9 @@ def recommend(
     capture_decision: bool = typer.Option(
         True, "--capture/--no-capture", help="Record this decision's inputs, surface and advice"
     ),
+    sensitivity: bool = typer.Option(
+        False, "--sensitivity", help="Re-rank across the stress range of the fitted knobs"
+    ),
 ):
     """Recommend picks for every open slot this week."""
     conn = _conn(db_path)
@@ -626,6 +674,9 @@ def recommend(
         freshness_rows, freshness_warnings = freshness.report(conn, season, wk, now)
         recorded_names = state.picks(conn, season).set_index("player_id").player_name.to_dict()
         nudge = _prediction_nudge(conn, season, wk, decided)
+        # Inside the snapshot, on the same frame the advice was derived from. A sweep run
+        # against a later forecast would describe the stability of a different decision.
+        sweep = _sensitivity(proj, wk, advice, pool, locked) if sensitivity and pool else None
     console.print(f"[bold]Week {wk} — {season}[/bold]")
     _print_freshness(freshness_rows, freshness_warnings)
     _print_pool(pool, season, nudge)
@@ -638,6 +689,8 @@ def recommend(
         if a.locked_player in recorded_names:
             a.locked_player = recorded_names[a.locked_player]
         _render_slot(a, pool)
+    if sweep is not None:
+        _print_sensitivity(sweep)
 
 
 def _render_slot(a: SlotAdvice, pool=None) -> None:
@@ -698,6 +751,86 @@ def _render_slot(a: SlotAdvice, pool=None) -> None:
         t.add_row(*cells)
     console.print(t)
     _share_notes(a, pool)
+
+
+def _sensitivity(proj, wk: int, advice, pool, locked) -> pd.DataFrame:
+    """Re-rank this week's candidates across the stress range of the two fitted knobs.
+
+    `k_game` sets how much one game moves both its teams together and was fitted on a
+    cross-team covariance; the rival-noise parameter is frankly provisional and says so
+    where it is defined. Neither is measured well enough to be load-bearing, so the useful
+    question is not what they are but whether the answer needs them.
+
+    Only the pot-share view is re-run. The expected-TD advice does not read either knob, so
+    re-deriving it would cost the same again to produce the same table.
+    """
+    rows = []
+    for k in config.SENSITIVITY_K_GAME:
+        for noise in config.SENSITIVITY_NOISE:
+            trial = [copy.copy(a) for a in advice]
+            with config.override(RIVAL_NOISE_TOP_N=noise):
+                pot_shares(proj, wk, trial, pool, locked, params=simulate.Params(k_game=k))
+            for a in trial:
+                best = a.best_share
+                if best is None:
+                    continue
+                rows.append(
+                    dict(
+                        slot=a.slot,
+                        k_game=k,
+                        noise=noise,
+                        player_id=best.player_id,
+                        player_name=best.player_name,
+                        share=best.share,
+                        tied=best.tied,
+                    )
+                )
+    return pd.DataFrame(rows)
+
+
+def _print_sensitivity(frame: pd.DataFrame) -> None:
+    if frame.empty:
+        console.print("[dim]Nothing to sweep: no pot-share view for this week.[/dim]")
+        return
+    table = Table(
+        "Slot", "Where the two objectives part", "Cells", "Verdict",
+        title="Sensitivity to k_game and rival noise",
+    )
+    for slot, block in frame.groupby("slot", sort=False):
+        # Only a cell where the pot share *clears the noise band* is a cell where the two
+        # objectives actually disagree. Reading the raw argmax instead would report a slot
+        # whose candidates are all statistically tied as wildly parameter-sensitive, when
+        # what is moving between settings is the coin, not the knob.
+        parting = block[~block.tied]
+        winners = sorted(set(parting.player_name))
+        if parting.empty:
+            where, verdict = "nowhere", "[green]agrees with expected TDs at every setting[/green]"
+        elif len(winners) > 1:
+            # Different settings name different players. Nothing here picks between them,
+            # and quoting whichever the fitted cell happened to give would present a choice
+            # of constant as a finding.
+            where = ", ".join(winners)
+            verdict = "[yellow]undetermined: follow expected TDs[/yellow]"
+        elif len(parting) == len(block):
+            where, verdict = winners[0], "[green]stable: separates at every setting[/green]"
+        else:
+            # One name wherever it separates, inside the noise band elsewhere. That is a
+            # consistent answer of uncertain strength, which is not the same thing as a
+            # contradictory one, and collapsing the two would lose the distinction that
+            # matters: whether to act, or which way.
+            where = winners[0]
+            verdict = (
+                f"[cyan]consistent, weak: separates in {len(parting)} of {len(block)} "
+                "settings and never the other way[/cyan]"
+            )
+        table.add_row(slot, where, str(len(block)), verdict)
+    console.print(table)
+    console.print(
+        f"k_game over {list(config.SENSITIVITY_K_GAME)} and rival noise over "
+        f"{list(config.SENSITIVITY_NOISE)}. A declared stress range, not a fitted interval: "
+        "the calibration gives k_game a point estimate and no uncertainty, so this brackets "
+        "it rather than quoting one."
+    )
 
 
 def _share_cells(s) -> list[str]:

@@ -255,7 +255,14 @@ def _rival_totals(proj, week, weeks, pool, draws, sims, seed):
             slot: rivals.remaining_matrix(proj, slot, week, weeks, rival.used_ids)
             for slot in config.SLOTS
         }
+        pinned = {slot: rival.pinned(slot, weeks) for slot in config.SLOTS}
         for slot, (players, values) in grids.items():
+            # A reported pick is not a guess at this week, so it enters the explanation at
+            # certainty rather than as one of three things they might do.
+            reported = pinned[slot].get(week)
+            if reported is not None:
+                contested[slot].setdefault(reported, []).append((rival.display_name, 1.0))
+                continue
             rows = rivals.options(values, 0, top_n=config.RIVAL_NOISE_TOP_N)
             for row in rows:
                 pid = str(players.iloc[row].player_id)
@@ -263,9 +270,14 @@ def _rival_totals(proj, week, weeks, pool, draws, sims, seed):
         column = np.full(sims, float(rival.season_tds))
         for scenario in range(config.RIVAL_SCENARIOS):
             picks: list[tuple[int, str]] = []
-            for players, values in grids.values():
+            for slot, (players, values) in grids.items():
                 path = rivals.rollout(
-                    players, values, weeks, rng=rng, top_n=config.RIVAL_NOISE_TOP_N
+                    players,
+                    values,
+                    weeks,
+                    rng=rng,
+                    top_n=config.RIVAL_NOISE_TOP_N,
+                    known=pinned[slot],
                 )
                 picks += list(path.items())
             low, high = edges[scenario], edges[scenario + 1]
@@ -290,6 +302,7 @@ def pot_shares(
     *,
     sims: int | None = None,
     seed: int | None = None,
+    params: simulate.Params | None = None,
 ) -> None:
     """Score every candidate by its simulated expected share of the pot, in place.
 
@@ -309,12 +322,16 @@ def pot_shares(
         return
     keep = {pid for a in advice for pid in a.plan.players.player_id}
     keep |= {pid for _, pid in _locked_picks(locked_by_slot, week)}
+    # A reported pick has to be sampled even when the candidate matrix never kept him.
+    # `Draws.totals` scores an absent cell as zero, so omitting one here would credit a
+    # rival with nothing for a week they have already told us they filled.
+    keep |= {pid for rival in pool.rivals for _, _, pid in rival.known}
     for slot in config.SLOTS:
         for rival in pool.rivals:
             players, _ = rivals.remaining_matrix(proj, slot, week, weeks, rival.used_ids)
             keep |= set(players.player_id)
     sub = proj[proj.player_id.isin(keep) & proj.week.isin(weeks)]
-    draws = simulate.sample(sub, weeks, sims=sims, seed=seed)
+    draws = simulate.sample(sub, weeks, sims=sims, seed=seed, params=params)
     opposition, contested = _rival_totals(proj, week, weeks, pool, draws, sims, seed)
 
     locked = _locked_picks(locked_by_slot, week)
