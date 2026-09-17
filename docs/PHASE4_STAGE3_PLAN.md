@@ -5,6 +5,14 @@
 every entrant's picks are archived and attributable, every entrant is scored by the
 function that scores mine, and each rival's used pool is tracked independently.
 
+**Implemented:** 2026-09-17, in the eight commits of the [order of work](#order-of-work).
+This document was edited in place as each one landed, so the claims below are the ones that
+survived building them; where a claim did not survive, the correction is written beside it
+rather than over it. Four of them were wrong: claim 16b in two ways, the "agree when level"
+rule that the module docstring and `docs/DESIGN.md` both carried, the seam's "widening the
+signature is free", and claim 20, which was written down and then not built until commit 6.
+See the [verification record](#implementation-verification--2026-09-17) at the end.
+
 Stages 1 and 2 were ordinary feature work. This one is not. It changes what the tool is
 *for* — from expected season touchdowns to expected share of the pot — and the phase plan
 is explicit that the change cannot be judged the way the first two were. Most of what
@@ -760,6 +768,54 @@ them; it changes only how many named causes stand between them and a clean check
 Unlike the previous two moves this one is not an accounting cost. A decision made under a
 different opponent model or a different simulator **is** a different decision, so a
 fingerprint that refuses to certify the old ones is the fingerprint working.
+
+## Implementation Verification — 2026-09-17
+
+Run after the eighth commit, against the live `data/pool.db`.
+
+The strict command exits 1. All five decisions captured before the policy landed report
+decision-path drift: they were taken under fingerprint `fc80de7a…` or `204f5c2d…` and the
+tree now runs `c9c8d02f…`. That is this stage's own move — `recommend.py` importing
+`rivals` and `simulate` — on top of stage 2's two, and it is the fingerprint working rather
+than failing. A decision made under a different opponent model *is* a different decision.
+
+```
+$ pool verify-capture --season 2026 --allow-code-drift
+
+decision      week  event             reconstructs  parity  detail
+ea7b0ff08ff6  1     thursday_deadline yes           yes     decision path fingerprint moved; accepted by override
+6e71a2be2ae2  1     sunday_slate      yes           yes     decision path fingerprint moved; accepted by override
+55134df98e15  1     sunday_slate      yes           yes     decision path fingerprint moved; accepted by override
+155e11a74ea3  1     sunday_slate      yes           yes     decision path fingerprint moved; accepted by override
+071a5bc55c96  2     thursday_deadline yes           yes     decision path fingerprint moved; accepted by override
+cf9cc9e5d64d  3     thursday_deadline yes           no      archive cannot be resolved at the decision: Incomplete
+                                                            touchdown coverage for 2026 weeks [2]
+
+5 passed only because the fingerprint check was overridden. The source these
+checks enforce had moved and they were accepted anyway.
+1 of 6 captured decisions did not verify.
+```
+
+**Every decision reconstructs from its own record, including the new view.** That is the
+claim that matters here: a second objective that cannot be re-derived from what was written
+down is a second objective that was never really recorded. The five older captures also
+match replay.
+
+The sixth is week 3's, taken on 2026-09-17 under the new policy. It reconstructs and cannot
+reach parity, for a reason that is not a defect: parity rebuilds the decision from the
+archived feeds, which needs complete touchdown coverage through the prior week, and week 2
+has not been played. It will verify once week 2 is scored. This is the ordinary state of the
+current week's capture and it is why the strict count reads 1 of 6 rather than 0 of 6.
+
+Adding `shares` to the captured advice detail initially failed **all five** older captures,
+which had been recorded before the field existed. The fix was to narrow the comparison to
+the keys the record itself wrote down: a capture is checked against what it claimed, not
+against everything a later version of the tool would have claimed. A record that could be
+invalidated by adding a column to the format is not an archive.
+
+Final state: 645 tests pass, `ruff check src tests experiments` clean, and
+`benchmark.decision_modules()` holds thirteen entries — `rivals.py` and `simulate.py` in,
+`predictions.py`, `standings.py`, `entrants.py`, `pit.py` and `backtest.py` out.
 
 ## Out Of Scope, And Deliberately Deferred
 

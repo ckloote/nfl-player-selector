@@ -91,12 +91,13 @@ def test_an_empty_pool_produces_no_second_view_rather_than_failing():
 def test_level_standings_still_favour_differentiation_when_rivals_converge():
     """Corrects a claim this repo made before it was measured.
 
-    `docs/DESIGN.md` says win probability and expected touchdowns agree early, when everyone
-    is level. That is only true when my candidates are equally unrelated to what rivals hold.
-    When every rival is about to take the same player I would take, mirroring them buys a
-    guaranteed four-way split and differentiating buys a chance of the whole pot -- 0.25
-    against 0.44 here, which is not a rounding difference. Level standings do not by
-    themselves make the objectives agree.
+    `docs/DESIGN.md` said the two objectives agree early, when everyone is level, and
+    `docs/PHASE4_PLAN.md` said it twice. Both are struck: it is only true when my candidates
+    are equally unrelated to what rivals hold. When every rival is about to take the same
+    player I would take, mirroring them buys a guaranteed four-way split and differentiating
+    buys a chance of the whole pot -- 0.25 against 0.44 here, which is not a rounding
+    difference. Level standings do not by themselves make the objectives agree, and this
+    test is what keeps the corrected wording honest.
     """
     proj = frame()
     pool = rivals.PoolState((rival("one", 0), rival("two", 0), rival("three", 0)), 0)
