@@ -470,16 +470,41 @@ decision rule that is understood with one that cannot be validated, and hide the
 Alternative          Matchup      xTD   Season cost   Pot share   vs EV   Deadline   Note
 ```
 
+A difference inside the noise band prints in `vs EV` as `tied` rather than as a signed
+number. Printing ±0.1% there invites reading an ordering into it, and the paired draws
+exist precisely to know when there is not one.
+
 Below the table, when the two disagree, one sentence naming the reason in the terms the
-policy actually used — behind and buying variance, ahead and buying floor, or blocking a
-specific rival's specific likely pick. A divergence with no statable reason is a bug
-report, not advice.
+policy actually used. Those terms are **overlap first, standing second**: differentiating
+from a player rivals are likely to hold, mirroring one they are likely to hold, or — when
+neither candidate is on anybody's list — the standing alone. That ordering corrects this
+section, which said "behind and buying variance, ahead and buying floor" and had the
+mechanism backwards. Being behind does not by itself prefer one candidate over another;
+what prefers one is whose season it is correlated with. The sentence names rivals out of
+the same first-week sampling sets the rollouts drew from — `rivals.options` is shared with
+`rivals.rollout` for exactly this reason — so the explanation cannot drift away from the
+simulation it explains. A divergence with no statable reason is a bug report, not advice,
+and prints as one.
 
 Degenerate cases get a sentence rather than a column of zeroes:
 
 - **No reports imported.** No rivals, no view. Points at `pool report import`.
-- **Everyone level, early season.** The two objectives agree; say that, rather than
-  printing a spuriously precise share.
+- **Nothing separates.** When every alternative sits inside the noise band of the
+  expected-TD pick, say so with the band and the draw count, rather than printing a
+  spuriously precise share. This replaces the "everyone level, early season" case, whose
+  premise the suite disproved: levelness is not what makes the objectives agree. It is the
+  measured form of the same sentence, and it can be wrong in a way the asserted one could
+  not.
+- **A week that was played and never reported.** Three more players are spent per such
+  week and none of them can be named, so every rival's remaining pool is overstated and so
+  is what the simulation lets them score. The same defect as an unresolved name, arriving
+  through a different door: `RivalState` carries `missing_weeks` beside `unknown`, and
+  `pool_complete` fails on either. **Played** is load-bearing. Advice for week N counts
+  spending through week N-1, so asking one week ahead of the schedule brings in a week that
+  has not kicked off, in which nobody has picked and no report can exist. Counting that as
+  missing evidence invents three spent players per rival out of a week that has not
+  happened, which is what the first version of this did. Kickoff is the line here for the
+  same reason it is the line for a prediction: before it, absence says nothing.
 - **Season decided.** Share is 0 or 1 and nothing is left to optimise.
 
 `pool predict record` and `pool predict score` are the new commands, shaped as a Typer
@@ -594,8 +619,22 @@ The claims this document makes that would be silent if wrong:
 25. `backtest.STRATEGIES["winprob"]` replays a season, and its output is labelled as run
     against invented rivals.
 
+**The shipping surface**
+
+26. A decision captured with rival state reconstructs from its own record, shares and all;
+    the same decision captured without it reports itself as differing from itself. Both
+    directions, because the first alone would pass on a capture that stored nothing.
+27. The rivals named in a divergence sentence come from the same first-week sampling sets
+    the rollouts drew from, not from a second computation that agrees with them today.
+28. A rival whose week's report never arrived is not a complete pool, and `recommend` says
+    so before printing shares computed against an opposition with too many players left.
+29. A divergence the policy cannot attribute to overlap or to standing prints as a defect
+    rather than as advice.
+
 Claim 22 is the acceptance test for "alongside, not instead of". It is what fails if the
 win-probability work ever starts quietly changing the expected-TD advice.
+Claim 26 is the acceptance test for the capture: a second objective that cannot be
+reconstructed is a second objective that was never really recorded.
 Claim 24 is the acceptance test for the closure argument, and claim 4 for the storage one.
 
 `tests/test_phase3a.py`'s `outside` set gains `predictions`. `rivals` and `simulate` are

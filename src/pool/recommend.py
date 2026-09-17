@@ -6,9 +6,12 @@ the pot is the second opinion: a tie for first splits the winnings, so a pot sha
 win as 1 and a k-way tie as 1/k, and that is a function of the joint distribution of five
 season totals rather than a separable sum any matrix can express.
 
-They mostly agree early, when everyone is level, and diverge late, when chasing or
-protecting a lead is what actually decides the pool. Their disagreement is the interesting
-output, which is why both are shown and neither is silently swapped for the other.
+They agree when my candidates are equally unrelated to what rivals hold -- not, as this
+module used to say, when everyone is level. Levelness is neither necessary nor sufficient:
+with the standings dead level and every rival about to take the player I would take,
+mirroring them buys a guaranteed k-way split of the pot and differentiating buys a chance
+at all of it. Their disagreement is the interesting output, which is why both are shown and
+neither is silently swapped for the other.
 """
 
 from __future__ import annotations
@@ -80,6 +83,11 @@ class SlotAdvice:
     plan: SlotPlan
     shares: list[PotShare] = field(default_factory=list)
     sims: int = 0
+    # player_id -> ((rival display name, probability they take them this week), ...). Taken
+    # from the same sampling sets the rollouts drew from, so a printed explanation of a
+    # divergence describes the distribution the policy actually used rather than a second
+    # guess at it. Empty when no pool state was supplied.
+    contested: dict[str, tuple[tuple[str, float], ...]] = field(default_factory=dict)
 
     @property
     def best_share(self) -> PotShare | None:
@@ -225,8 +233,8 @@ def _baseline(advice: list[SlotAdvice]) -> dict[str, list[tuple[int, str]]]:
     }
 
 
-def _rival_totals(proj, week, weeks, pool, draws, sims, seed) -> np.ndarray:
-    """Each rival's simulated season total, as (sims, rivals).
+def _rival_totals(proj, week, weeks, pool, draws, sims, seed):
+    """Each rival's simulated season total as (sims, rivals), and who they may take now.
 
     Their pick paths do not depend on what I choose -- this pool lets two entrants hold the
     same player, so nothing I take is denied to them -- which is what lets these be drawn
@@ -234,15 +242,24 @@ def _rival_totals(proj, week, weeks, pool, draws, sims, seed) -> np.ndarray:
 
     Uncertainty about their choices enters as a finite set of scenarios rather than one path
     per simulation, because a path costs a greedy rollout and an outcome costs a lookup.
+
+    The second return value is this week's sampling set per slot, read off the same grids
+    the rollouts walk. It explains a divergence; it never changes one.
     """
     rng = np.random.default_rng(seed)
     totals = np.zeros((sims, len(pool.rivals)))
+    contested: dict[str, dict[str, list[tuple[str, float]]]] = {slot: {} for slot in config.SLOTS}
     edges = np.linspace(0, sims, config.RIVAL_SCENARIOS + 1).astype(int)
     for index, rival in enumerate(pool.rivals):
         grids = {
             slot: rivals.remaining_matrix(proj, slot, week, weeks, rival.used_ids)
             for slot in config.SLOTS
         }
+        for slot, (players, values) in grids.items():
+            rows = rivals.options(values, 0, top_n=config.RIVAL_NOISE_TOP_N)
+            for row in rows:
+                pid = str(players.iloc[row].player_id)
+                contested[slot].setdefault(pid, []).append((rival.display_name, 1 / len(rows)))
         column = np.full(sims, float(rival.season_tds))
         for scenario in range(config.RIVAL_SCENARIOS):
             picks: list[tuple[int, str]] = []
@@ -254,7 +271,14 @@ def _rival_totals(proj, week, weeks, pool, draws, sims, seed) -> np.ndarray:
             low, high = edges[scenario], edges[scenario + 1]
             column[low:high] += draws.totals(picks)[low:high]
         totals[:, index] = column
-    return totals
+    frozen = {
+        slot: {
+            pid: tuple(sorted(who, key=lambda pair: (-pair[1], pair[0])))
+            for pid, who in by_player.items()
+        }
+        for slot, by_player in contested.items()
+    }
+    return totals, frozen
 
 
 def pot_shares(
@@ -291,7 +315,7 @@ def pot_shares(
             keep |= set(players.player_id)
     sub = proj[proj.player_id.isin(keep) & proj.week.isin(weeks)]
     draws = simulate.sample(sub, weeks, sims=sims, seed=seed)
-    opposition = _rival_totals(proj, week, weeks, pool, draws, sims, seed)
+    opposition, contested = _rival_totals(proj, week, weeks, pool, draws, sims, seed)
 
     locked = _locked_picks(locked_by_slot, week)
     baseline = _baseline(advice)
@@ -338,6 +362,7 @@ def pot_shares(
         )
         slot_advice.shares = shares
         slot_advice.sims = sims
+        slot_advice.contested = contested.get(slot_advice.slot, {})
 
 
 def advise_week(

@@ -73,8 +73,39 @@ def report_arrivals(conn: sqlite3.Connection, season: int) -> tuple[dict[int, st
     return arrivals, int(len(reports) - len(known))
 
 
-def rival_states(conn: sqlite3.Connection, season: int, week: int) -> list[rivals.RivalState]:
-    """Every entrant but me, with what they had spent *going into* `week`.
+def _standing(row, spent, played: set[int]) -> rivals.RivalState:
+    pool = spent[row.entrant_id]
+    return rivals.RivalState(
+        row.entrant_id,
+        row.display_name,
+        pool.player_ids,
+        pool.unknown,
+        row.season_total.tds,
+        tuple(w for w in pool.missing_weeks if w in played),
+    )
+
+
+def played_weeks(conn: sqlite3.Connection, season: int, through: int, at: datetime) -> set[int]:
+    """Weeks at or before `through` that have kicked off by `at`.
+
+    A week nobody has played is not a week nobody reported. Picks for it may not have been
+    made yet, so an absent report is the expected state rather than missing evidence.
+    Without this, asking the tool to look one week ahead invents three spent players per
+    rival out of a week that has not happened.
+
+    Kickoff is the line for the same reason it is elsewhere in this module: it is when the
+    week stops being unobservable. Before it, absence says nothing.
+    """
+    rows = conn.execute(
+        "SELECT week, MIN(kickoff) AS first FROM games WHERE season = ? AND game_type = 'REG' "
+        "AND kickoff_known = 1 AND week <= ? GROUP BY week",
+        (season, through),
+    ).fetchall()
+    return {int(row["week"]) for row in rows if _kickoff_utc(row["first"]) <= at}
+
+
+def _as_of(conn, season, week, at):
+    """The board, every entrant's pool going into `week`, and which of those weeks was played.
 
     Spending is counted through `week - 1`, never through every imported week. A report can
     arrive before its own week is played, so counting it here would let a prediction for
@@ -82,19 +113,41 @@ def rival_states(conn: sqlite3.Connection, season: int, week: int) -> list[rival
     in `standings.remaining_counts`, arriving here through a different door.
     """
     with db.transaction(conn):
-        board = standings.board(conn, season)
-        spent = standings.used_pools(conn, season, through=week - 1)
-    return [
-        rivals.RivalState(
-            row.entrant_id,
-            row.display_name,
-            spent[row.entrant_id].player_ids,
-            spent[row.entrant_id].unknown,
-            row.season_total.tds,
+        return (
+            standings.board(conn, season),
+            standings.used_pools(conn, season, through=week - 1),
+            played_weeks(conn, season, week - 1, at),
         )
-        for row in board.rows
-        if not row.is_me
-    ]
+
+
+def rival_states(
+    conn: sqlite3.Connection, season: int, week: int, *, at: datetime | None = None
+) -> list[rivals.RivalState]:
+    """Every entrant but me, with what they had spent going into `week`."""
+    at = at or datetime.now(UTC)
+    board, spent, played = _as_of(conn, season, week, at)
+    return [_standing(row, spent, played) for row in board.rows if not row.is_me]
+
+
+def pool_state(
+    conn: sqlite3.Connection, season: int, week: int, *, at: datetime | None = None
+) -> rivals.PoolState:
+    """Where the pool stands going into `week`, in the form the policy takes it.
+
+    This is the seam `rivals.PoolState` describes. The database is read here, on this side
+    of the enforced decision closure, and what crosses into it is a frozen dataclass of
+    names, identifiers and integers -- never a connection and never a report parser.
+
+    `at` is the caller's decision instant where it has one, so a command that has already
+    fixed its own clock does not acquire a second one here.
+    """
+    at = at or datetime.now(UTC)
+    board, spent, played = _as_of(conn, season, week, at)
+    mine = next((row for row in board.rows if row.is_me), None)
+    return rivals.PoolState(
+        tuple(_standing(row, spent, played) for row in board.rows if not row.is_me),
+        mine.season_total.tds if mine else 0,
+    )
 
 
 def predict(conn: sqlite3.Connection, season: int, week: int, proj: pd.DataFrame) -> dict:

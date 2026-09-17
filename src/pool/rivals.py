@@ -39,18 +39,26 @@ class RivalState:
     used_ids: frozenset[str] = frozenset()
     unknown: int = 0
     season_tds: int = 0
+    # Weeks before this one that were *played* and never reported. Three more players are
+    # spent per such week and none of them can be named, which overstates the remaining
+    # pool the same way `unknown` does -- the same defect through a different door, and the
+    # reason this is a second field rather than folded into that count. A week that has not
+    # kicked off does not belong here: nobody has spent anything in it, and the caller is
+    # simply looking further ahead than the pool has been played.
+    missing_weeks: tuple[int, ...] = ()
 
     @property
     def pool_complete(self) -> bool:
-        """False when a name their report carried never resolved to a player.
+        """False when anything they have spent cannot be named.
 
-        That player is spent and cannot be named, so `used_ids` is short by an unknown
-        amount and every prediction below is made against a pool that is slightly too
-        large. Recorded rather than hidden: a prediction made under an incomplete pool is
-        weaker evidence than one made under a known one, and the difference has to be
-        visible when the hit rate is read, not buried in it.
+        Either a name their report carried never resolved to a player, or a week's report
+        never arrived at all. Either way `used_ids` is short by an unknown amount, every
+        prediction below is made against a pool that is too large, and the simulated rival
+        is free to spend a player they have in fact already used. Recorded rather than
+        hidden: a prediction made under an incomplete pool is weaker evidence than one made
+        under a known one, and the difference has to be visible when the hit rate is read.
         """
-        return not self.unknown
+        return not self.unknown and not self.missing_weeks
 
 
 @dataclass(frozen=True)
@@ -157,6 +165,24 @@ def remaining_matrix(proj, slot: str, week: int, weeks, used_ids):
     return players, values
 
 
+def options(values, col: int, taken=(), *, top_n: int = 1) -> list[int]:
+    """The rows `rollout` may take in one week: the best `top_n` still playable.
+
+    Shared with `rollout` rather than written out again beside it. Telling somebody which
+    rivals might take a player is only worth saying if it names the same distribution the
+    simulation drew from, and two copies of this rule would drift apart silently.
+    """
+    if not values.shape[0] or col >= values.shape[1]:
+        return []
+    column = values[:, col].copy()
+    if len(taken):
+        column[list(taken)] = FORBIDDEN
+    playable = np.flatnonzero(column > FORBIDDEN / 2)
+    if not playable.size:
+        return []
+    return [int(r) for r in playable[np.argsort(-column[playable], kind="stable")][:top_n]]
+
+
 def rollout(players, values, weeks, *, rng, top_n: int = 1) -> dict[int, str]:
     """One plausible path of a rival's remaining picks: greedy, with noise, no reuse.
 
@@ -169,14 +195,10 @@ def rollout(players, values, weeks, *, rng, top_n: int = 1) -> dict[int, str]:
     taken: list[int] = []
     picks: dict[int, str] = {}
     for col, week in enumerate(weeks):
-        column = values[:, col].copy()
-        if taken:
-            column[taken] = FORBIDDEN
-        playable = np.flatnonzero(column > FORBIDDEN / 2)
-        if not playable.size:
+        best = options(values, col, taken, top_n=top_n)
+        if not best:
             continue
-        best = playable[np.argsort(-column[playable], kind="stable")][:top_n]
-        row = int(best[0]) if best.size == 1 else int(rng.choice(best))
+        row = best[0] if len(best) == 1 else int(rng.choice(best))
         taken.append(row)
         picks[int(week)] = str(players.iloc[row].player_id)
     return picks

@@ -30,7 +30,7 @@ from uuid import uuid4
 import numpy as np
 import pandas as pd
 
-from . import config, db, snapshots, state
+from . import config, db, rivals, snapshots, state
 from .recommend import SlotAdvice, advise_week
 
 SCHEMA_VERSION = 1
@@ -225,6 +225,65 @@ def load_surface(conn: sqlite3.Connection, content_hash: str) -> pd.DataFrame:
     return pd.read_parquet(io.BytesIO(raw))
 
 
+def _pool_detail(pool: rivals.PoolState | None) -> dict | None:
+    """The pool's state and the settings the win-probability view ran under.
+
+    Stored on the surface event, because that is what it is: something the decision looked
+    at, like `used` and `locked`. A decision that recorded the shares but not the rival
+    state behind them could be read and never re-derived, and `reconstruct` would report
+    every such decision as differing from itself.
+    """
+    if not pool:
+        return None
+    state_of = [
+        dict(
+            entrant_id=r.entrant_id,
+            display_name=r.display_name,
+            used=sorted(r.used_ids),
+            unknown=int(r.unknown),
+            season_tds=int(r.season_tds),
+            missing_weeks=[int(w) for w in r.missing_weeks],
+        )
+        for r in pool.rivals
+    ]
+    observed = dict(my_tds=int(pool.my_tds), rivals=state_of)
+    return dict(
+        observed,
+        # Hashed separately from the decision's own identity: two weeks apart with the same
+        # standings and the same spent pools are the same opposition, and that is worth
+        # being able to see at a glance in a log of many decisions.
+        state_hash=hashlib.sha256(_json(observed).encode()).hexdigest(),
+        sims=config.WINPROB_SIMS,
+        seed=config.WINPROB_SEED,
+        scenarios=config.RIVAL_SCENARIOS,
+        noise_top_n=config.RIVAL_NOISE_TOP_N,
+        significance=config.WINPROB_SIGNIFICANCE,
+        # Named rather than implied. `rivals.PREDICTORS` holds three hypotheses about these
+        # people and the prediction log exists to find out which one describes them, so a
+        # capture made before that answer arrives has to say which it assumed.
+        predictor="greedy",
+    )
+
+
+def _pool_from_detail(detail: dict | None) -> rivals.PoolState | None:
+    if not detail:
+        return None
+    return rivals.PoolState(
+        tuple(
+            rivals.RivalState(
+                r["entrant_id"],
+                r["display_name"],
+                frozenset(r["used"]),
+                int(r["unknown"]),
+                int(r["season_tds"]),
+                tuple(int(w) for w in r.get("missing_weeks", ())),
+            )
+            for r in detail["rivals"]
+        ),
+        int(detail["my_tds"]),
+    )
+
+
 def _advice_detail(a: SlotAdvice) -> dict:
     def candidate(c):
         if c is None:
@@ -249,6 +308,23 @@ def _advice_detail(a: SlotAdvice) -> dict:
         hold_alternative=candidate(a.hold_alternative),
         plan_total=float(a.plan.total),
         plan={int(w): str(a.plan.players.iloc[r].player_id) for w, r in a.plan.assignment.items()},
+        sims=int(a.sims),
+        shares=[
+            dict(
+                player_id=s.player_id,
+                player_name=s.player_name,
+                share=float(s.share),
+                se=float(s.se),
+                delta=float(s.delta),
+                delta_se=float(s.delta_se),
+                # Stored, not recomputed on read. `tied` divides by the significance
+                # threshold in force at access time, so a record that kept only the
+                # numbers would re-decide old verdicts every time the threshold moved.
+                tied=bool(s.tied),
+            )
+            for s in a.shares
+        ],
+        contested={pid: [list(pair) for pair in who] for pid, who in a.contested.items()},
     )
 
 
@@ -291,6 +367,7 @@ def record_decision(
     calibrator: str = "identity",
     artifact_hash: str | None = None,
     original_lam: pd.Series | None = None,
+    pool: rivals.PoolState | None = None,
 ) -> str:
     """Write one decision: its surface, its advice, and what it was looking at.
 
@@ -327,6 +404,7 @@ def record_decision(
                         slot: {int(w): pid for w, pid in locked_by_slot.get(slot, {}).items()}
                         for slot in config.SLOTS
                     },
+                    pool=_pool_detail(pool),
                 ),
                 surface_hash,
             )
@@ -610,6 +688,11 @@ def reconstruct(conn: sqlite3.Connection, decision_id: str, *, allow_code_drift:
                 for slot, cells in detail["locked"].items()
             },
             now=datetime.fromisoformat(head["decision_at"]),
+            # Restored, not re-read. Rebuilding the opposition from today's standings
+            # would re-derive a January decision against a pool that has since spent
+            # another ten weeks, and report the difference as a capture that was
+            # insufficient rather than as a question asked of the wrong season.
+            pool=_pool_from_detail(detail.get("pool")),
         )
     recorded = {r["slot"]: json.loads(r["detail"]) for r in rows if r["kind"] == "advice"}
     return frame, advice, recorded, drift
