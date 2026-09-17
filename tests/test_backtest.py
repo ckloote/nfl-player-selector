@@ -416,3 +416,174 @@ def test_a_player_traded_off_a_bye_team_appears_once():
     snapshot = P.active_snapshot(rosters).set_index("player_id")
     assert sorted(snapshot.index) == ["p1", "p2"]
     assert snapshot.loc["p1", "team"] == "AAA"
+
+
+# --- the win-probability seam -----------------------------------------------
+@pytest.fixture
+def replayed(seeded):
+    """Frozen frames and finished results for the shared fixture season."""
+    return B.weekly_projections(seeded, SEASON, WEEKS), B.actual_tds(seeded, SEASON)
+
+
+def _run(frames, actuals, field):
+    """Walk a field through the season on its own, so its picks can be inspected."""
+    run = field.start()
+    for week in WEEKS:
+        run.advance(frames[week], week, actuals)
+    return run
+
+
+def test_winprob_replays_a_season_without_spending_a_player_twice(replayed):
+    frames, actuals = replayed
+    out = B.replay(frames, actuals, SEASON, "winprob", weeks=WEEKS, against=B.Field(count=4))
+    assert len(out.picks) == len(WEEKS) * len(config.SLOTS)
+    assert out.empty_slots == 0
+    assert out.players_used == len(out.picks)  # the once-per-season rule
+
+
+def test_a_winprob_replay_is_labelled_as_run_against_invented_rivals(replayed):
+    """Claim 25. The label travels on the `Replay` and on the `Summary` built from it,
+    because the row is what ends up in a message to somebody."""
+    frames, actuals = replayed
+    out = B.replay(frames, actuals, SEASON, "winprob", weeks=WEEKS, against=B.Field(count=4))
+    assert "4 invented rivals" in out.against
+    assert "not of the idea" in B.INVENTED
+    assert B.Summary.of(out).against == out.against
+    assert B.Summary.of(out).finish == out.finish
+
+
+def test_a_replay_against_nobody_claims_no_opposition(replayed):
+    """The absence has to be legible too: an ordinary replay is played against nothing,
+    and a blank `against` is what stops the caveat printing where it would be false."""
+    frames, actuals = replayed
+    out = B.replay(frames, actuals, SEASON, "greedy", weeks=WEEKS)
+    assert out.against is None and out.standing == () and out.finish is None
+
+
+def test_winprob_refuses_to_run_against_nobody(replayed):
+    frames, actuals = replayed
+    with pytest.raises(ValueError, match="invented rivals"):
+        B.replay(frames, actuals, SEASON, "winprob", weeks=WEEKS)
+
+
+def test_run_season_refuses_winprob_before_it_builds_a_single_frame(seeded, monkeypatch):
+    """Named at the top rather than raised from three slots inside the week loop, after
+    the expensive part has already been paid for."""
+    monkeypatch.setattr(
+        B, "weekly_projections", lambda *a, **kw: pytest.fail("built projections anyway")
+    )
+    with pytest.raises(ValueError, match="winprob"):
+        B.run_season(seeded, SEASON, ["greedy", "winprob"], weeks=WEEKS)
+
+
+def test_the_invented_field_plays_the_same_season_under_every_strategy(replayed):
+    """They never see my picks -- this pool lets two entrants hold the same player -- so
+    one specification gives every strategy the identical opposition, and the finishes in
+    a single table are comparable rather than three separate seasons."""
+    frames, actuals = replayed
+    field = B.Field(count=4, seed=7)
+    runs = [
+        B.replay(frames, actuals, SEASON, name, weeks=WEEKS, against=field)
+        for name in ("winprob", "optimizer", "greedy")
+    ]
+    assert len({r.standing for r in runs}) == 1
+    assert all(r.standing for r in runs)
+
+
+@pytest.mark.parametrize("behaviour", ["greedy", "naive", "optimizer"])
+def test_invented_rivals_obey_the_one_player_per_season_rule(replayed, behaviour):
+    """`naive` ignores it when it ranks, which is the whole of that hypothesis. The rule
+    is still the pool's: a rival submitting a spent player would simply be rejected, so
+    the invented one takes his next choice and cannot score the same man twice."""
+    frames, actuals = replayed
+    run = _run(frames, actuals, B.Field(count=2, behaviour=behaviour))
+    for opponent in run.entrants:
+        taken = [pid for _, _, pid in opponent.picks if pid]
+        assert len(taken) == len(set(taken))
+        assert len(opponent.picks) == len(WEEKS) * len(config.SLOTS)
+
+
+def test_a_field_is_reproducible_from_its_seed_and_moves_with_it(replayed):
+    frames, actuals = replayed
+
+    def picks(seed):
+        return [o.picks for o in _run(frames, actuals, B.Field(count=4, seed=seed)).entrants]
+
+    assert picks(3) == picks(3)
+    assert picks(3) != picks(4)
+
+
+def test_an_unknown_rival_behaviour_is_refused_where_it_is_named(replayed):
+    with pytest.raises(ValueError, match="telepathic"):
+        B.Field(behaviour="telepathic")
+    with pytest.raises(ValueError, match="at least one"):
+        B.Field(count=0)
+
+
+def test_the_week_is_decided_once_and_served_to_every_slot(replayed, monkeypatch):
+    """A pot share is a property of a season and not of a slot: `recommend.pot_shares`
+    values a candidate by re-solving the other two slots around it. Three independent
+    slot decisions would be a different policy from the one that ships."""
+    frames, actuals = replayed
+    seen = []
+    real = B.recommend.advise_week
+
+    def spy(proj, week, *a, **kw):
+        seen.append(week)
+        return real(proj, week, *a, **kw)
+
+    monkeypatch.setattr(B.recommend, "advise_week", spy)
+    B.replay(frames, actuals, SEASON, "winprob", weeks=WEEKS, against=B.Field(count=2))
+    assert seen == list(WEEKS)
+
+
+def test_the_replay_clock_forbids_nothing_the_other_strategies_kept(replayed):
+    """`advise_slot` needs a clock and the other strategies have none -- they go through
+    `build_matrix`, which consults none. A live reading would drop every candidate whose
+    game had kicked off, and the gap between two strategies would stop being a gap
+    between two decision rules."""
+    from pool import state
+
+    frames, _ = replayed
+    for week in WEEKS:
+        assert not state.unavailable_cells(frames[week], week, B.decision_time(frames[week], week))
+
+
+def test_a_shared_first_place_is_reported_as_shared_and_not_as_a_win():
+    """A tie at the top splits the pot. A finish that called it a win would be the same
+    mistake `simulate.shares` exists to avoid, printed instead of simulated."""
+    mine = [B.Pick(1, "QB", "x", "X", "AAA", 0.0, 7.0)]
+    assert B.Replay(SEASON, "winprob", mine, standing=(("A", 9.0), ("B", 3.0))).finish == "2nd of 3"
+    shared = B.Replay(SEASON, "winprob", mine, standing=(("A", 7.0), ("B", 3.0)))
+    assert shared.rank == 1 and shared.level == 1
+    assert shared.finish == "1st of 3, sharing with 1"
+
+
+@pytest.mark.parametrize(("delta", "deviates"), [(0.5, True), (0.0005, False)])
+def test_winprob_deviates_only_where_the_pot_share_separates(replayed, monkeypatch, delta,
+                                                             deviates):
+    """The deviation rule is `SlotAdvice.divergent` and not the raw pot-share argmax:
+    inside simulation noise it keeps the expected-TD pick. Asserted in both directions,
+    because the seam passing every other test here is also what a synonym for `optimizer`
+    would do."""
+    from pool.recommend import PotShare
+
+    frames, actuals = replayed
+    week = WEEKS[0]
+    real = B.recommend.advise_week
+
+    def separated(*a, **kw):
+        advice = real(*a, **kw)
+        for one in advice:
+            alt, best = one.alternatives[0], one.recommended
+            one.shares = [
+                PotShare(alt.player_id, alt.player_name, 0.9, 0.001, delta, 0.001),
+                PotShare(best.player_id, best.player_name, 0.9 - delta, 0.001, 0.0, 0.001),
+            ]
+        return advice
+
+    monkeypatch.setattr(B.recommend, "advise_week", separated)
+    out = B.replay(frames, actuals, SEASON, "winprob", weeks=[week], against=B.Field(count=2))
+    plain = B.replay(frames, actuals, SEASON, "optimizer", weeks=[week])
+    moved = [p.player_id for p in out.picks] != [p.player_id for p in plain.picks]
+    assert moved is deviates

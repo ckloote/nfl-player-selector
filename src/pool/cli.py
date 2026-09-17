@@ -1373,7 +1373,11 @@ def backtest(
         "optimizer,greedy,random,hindsight", "--strategy", help="Comma-separated strategies"
     ),
     trials: int = typer.Option(config.RANDOM_TRIALS, help="Trials for the random baseline"),
-    seed: int = typer.Option(0, help="Seed for the random baseline"),
+    seed: int = typer.Option(0, help="Seed for the random baseline and the invented rivals"),
+    rivals: int = typer.Option(4, help="Invented rivals the winprob strategy plays against"),
+    rival_behaviour: str = typer.Option(
+        "greedy", help="How the invented rivals pick: greedy, naive or optimizer"
+    ),
     discount: float | None = typer.Option(None, help="Override FUTURE_DISCOUNT"),
     prior_weight: float | None = typer.Option(None, help="Override PRIOR_WEIGHT_GAMES"),
     role_source: str | None = RoleSourceOpt,
@@ -1400,6 +1404,16 @@ def backtest(
         known = [*bt.STRATEGIES, "hindsight"]
         console.print(f"[red]Unknown strategy {unknown[0]!r}; choose from {known}.[/red]")
         raise typer.Exit(1)
+    # Built only when something asks for it, so an ordinary replay stays an ordinary
+    # replay: the invented rivals cost a greedy rollout a week and, more to the point,
+    # put a caveat under a table that does not need one.
+    field = None
+    if set(names) & bt.NEEDS_RIVALS:
+        try:
+            field = bt.Field(count=rivals, behaviour=rival_behaviour, seed=seed)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from None
 
     deltas: list[float] = []
     overrides = {} if prior_weight is None else {"PRIOR_WEIGHT_GAMES": prior_weight}
@@ -1419,6 +1433,7 @@ def backtest(
                 input_policy=input_policy,
                 decision_times=times,
                 builder=builder,
+                against=field,
             )
         _render_input_provenance(rows[0].input_provenance)
         by_name = {r.strategy: r for r in rows}
@@ -1442,7 +1457,8 @@ def backtest(
 
 
 def _render_backtest(season: int, weeks: list[int], rows, base: float | None, ceiling: float):
-    t = Table(
+    against = next((r.against for r in rows if r.against), None)
+    columns = [
         "Strategy",
         "TDs",
         "vs greedy",
@@ -1451,6 +1467,10 @@ def _render_backtest(season: int, weeks: list[int], rows, base: float | None, ce
         "Proj/act",
         "Zero picks",
         "% ceiling",
+    ]
+    t = Table(
+        *columns,
+        *(["Finish"] if against else []),
         title=f"Backtest {season} (weeks {weeks[0]}-{weeks[-1]})",
     )
     for r in rows:
@@ -1466,11 +1486,35 @@ def _render_backtest(season: int, weeks: list[int], rows, base: float | None, ce
             ratio,
             f"{r.zero_picks}/{len(r.picks)}",
             f"{100 * r.total / ceiling:.0f}%" if ceiling else "—",
+            *([r.finish or "—"] if against else []),
         )
     console.print(t)
+    if against:
+        _render_invented(rows, against)
+
+
+def _render_invented(rows, against: str) -> None:
+    """The caveat the finish column cannot be read without.
+
+    Printed under every table that has one, not once per session and not in the help
+    text, because the row is what gets copied into a message to somebody.
+    """
+    standing = next((r.standing for r in rows if r.standing), ())
+    console.print(f"[yellow]Against {against}. {bt.INVENTED}.[/yellow]")
+    console.print(
+        "  They finished " + ", ".join(f"{name} {tds:.0f}" for name, tds in standing) + "."
+    )
+    console.print(
+        "  Read [bold]winprob[/bold] on the finish column and not on TDs: giving up a "
+        "touchdown for a larger share of the pot is the whole of what it does, so it is "
+        "meant to lose the other one. And a season is a single trial — a finish here, "
+        "or fifteen of them, settles nothing about the policy either way."
+    )
 
 
 def _render_picks(summary) -> None:
+    if summary.against:
+        console.print(f"[yellow]Against {summary.against}.[/yellow]")
     t = Table(
         "Week",
         "Slot",

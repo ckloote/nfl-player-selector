@@ -447,6 +447,24 @@ opponent picks, so it would be measuring the policy against invented rivals: **a
 the machinery, not of the idea.** The CLI says so wherever it prints the row, and the
 phase plan's own sentence to that effect is quoted there.
 
+Two things this section had wrong, found in the building.
+
+**The signature is not free at the callee.** That is true of the keyword and beside the
+point. A pot share is a property of a season and not of a slot — `pot_shares` values a
+candidate by re-solving the other two slots around it — so a per-slot chooser cannot
+express the policy at all. `pick_winprob` decides the whole week once and serves each slot
+from that one decision, which is the shipped rule rather than three of them.
+
+**The invented rivals are worse than invented.** The default field picks greedily among its
+top three, which is the *same* hypothesis `pot_shares` assumes when it values a candidate:
+the policy is scored against an opponent model that is true by construction, which is its
+best case and not a neutral one. `Field.behaviour` is a key of `rivals.PREDICTORS` so the
+mis-specified case can be run too — under `naive` or `optimizer` the policy is exploiting a
+model that is wrong in a named way — and the gap between two such runs is the only reading
+here worth anything. The pool's one-player-per-season rule is enforced on the invented
+rivals whatever their behaviour: `naive` ignores it when it *ranks*, which is the whole of
+that hypothesis, but a rival submitting a spent player would simply be rejected.
+
 The check that does mean something is not a season replay at all. It is three scripted
 scenarios run inside the simulator, with the standings set by hand:
 
@@ -624,7 +642,13 @@ The claims this document makes that would be silent if wrong:
 24. `benchmark.decision_modules()` equals `DECISION_SOURCES` with `rivals.py` and
     `simulate.py` in it and `predictions.py`, `standings.py` and `entrants.py` out of it.
 25. `backtest.STRATEGIES["winprob"]` replays a season, and its output is labelled as run
-    against invented rivals.
+    against invented rivals. **The label is not enough on its own**, found in the
+    building: a `winprob` row in a table whose headline column is touchdowns will be read
+    as the policy losing, when giving up a touchdown for a larger share of the pot is the
+    whole of what it does. So the same invented field is played under *every* strategy in
+    the run — the rivals never see my picks, so one specification gives them all the
+    identical opposition — and the table gains a finish column, which is the axis
+    `winprob` is actually playing on. The caveat prints under every table that has one.
 
 **The shipping surface**
 
@@ -699,7 +723,10 @@ still worth having, and the log is the only part that expires.
    before it could see the answer; and the `k_game` / rival-noise sensitivity sweep behind
    `pool recommend --sensitivity`.
 7. **The seam.** `backtest.STRATEGIES["winprob"]` and rival state threaded through
-   `replay`, labelled where it prints.
+   `replay`, labelled where it prints. The state that threads through is the invented
+   field's, advanced a week behind the decision, and not a running tally of my own
+   simulated picks: the policy has to see what everyone had spent and banked *before* the
+   week, which is what it would see on a Tuesday.
 8. **Docs.** `README.md` status and the drifted 2026 captures; `docs/DESIGN.md` §3.4,
    which describes this module as later work, and §3.5 for the new commands;
    `docs/PHASE4_PLAN.md`, whose stage 3 section is marked implemented;
