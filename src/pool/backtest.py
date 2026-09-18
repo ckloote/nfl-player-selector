@@ -169,7 +169,7 @@ def _placing(total: float, standing) -> tuple[int | None, int]:
 
 
 def _finish(total: float, standing) -> str | None:
-    """"2nd of 5", or "1st of 5, sharing with 2", or None against nobody.
+    """ "2nd of 5", or "1st of 5, sharing with 2", or None against nobody.
 
     Never "won". A tie at the top splits the pot, and a line that called that a win would
     be the mistake `simulate.shares` exists to avoid, printed instead of simulated.
@@ -343,10 +343,7 @@ class Field:
         word that matters. `INVENTED` is the paragraph it travels with; the two are kept
         apart so a picks table can be headed without reprinting the argument under it."""
         among = "always their best" if self.noise < 2 else f"among their top {self.noise}"
-        return (
-            f"{self.count} invented rivals picking {self.behaviour}, {among} "
-            f"(seed {self.seed})"
-        )
+        return f"{self.count} invented rivals picking {self.behaviour}, {among} (seed {self.seed})"
 
     def start(self) -> Opponents:
         """A fresh run of this field, at week one of a season, having spent nothing."""
@@ -398,7 +395,8 @@ class Opponents:
                 # standalone predictor deliberately ignores depletion; a legal entrant cannot.
                 eligible = (
                     proj[~proj.player_id.isin(opponent.used)]
-                    if self.spec.behaviour == "naive" else proj
+                    if self.spec.behaviour == "naive"
+                    else proj
                 )
                 ranked = predict(eligible, slot, week, state, top_n=top_n)
                 if not ranked:

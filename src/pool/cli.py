@@ -330,9 +330,7 @@ def predict_record(
         proj = _projections(conn, season, wk)
         payload = predictions.predict(conn, season, wk, proj)
         if not payload["rivals"]:
-            console.print(
-                f"No rivals to predict for {season}. Run pool report import first."
-            )
+            console.print(f"No rivals to predict for {season}. Run pool report import first.")
             raise typer.Exit(1)
         observation = predictions.archive(conn, season, wk, payload) if write else None
         # The same act: what the model says before the week can be seen. The picks are one
@@ -342,15 +340,22 @@ def predict_record(
     finally:
         conn.close()
     table = Table(
-        "Rival", "Slot", *predictions.rivals.PREDICTORS, "Remaining", "Used",
+        "Rival",
+        "Slot",
+        *predictions.rivals.PREDICTORS,
+        "Remaining",
+        "Used",
         title=f"Predicted rival picks \u2014 {season}, week {wk}",
     )
     for block in payload["rivals"].values():
         for slot, byname in block["slots"].items():
             table.add_row(
-                block["display_name"], slot,
-                *(byname[name][0]["player_name"] if byname.get(name) else "\u2014"
-                  for name in predictions.rivals.PREDICTORS),
+                block["display_name"],
+                slot,
+                *(
+                    byname[name][0]["player_name"] if byname.get(name) else "\u2014"
+                    for name in predictions.rivals.PREDICTORS
+                ),
                 str(block["remaining"].get(slot, "\u2014")),
                 _used_cell(block),
             )
@@ -368,9 +373,7 @@ def predict_record(
     else:
         console.print("[yellow]Dry run: nothing archived.[/yellow]")
     if late:
-        console.print(
-            "[red]This prediction will not be scorable: " + "; ".join(late) + ".[/red]"
-        )
+        console.print("[red]This prediction will not be scorable: " + "; ".join(late) + ".[/red]")
         console.print(
             "A prediction counts only if it was archived before the week's first kickoff "
             "and before its report. Both deadlines are checked against the archive."
@@ -382,8 +385,12 @@ def _rate_table(frame, title: str, first: str) -> Table:
     table = Table(first, "Predictor", "Scored", "Hits", "Hit rate", "In top N", title=title)
     for row in frame.itertuples():
         table.add_row(
-            str(getattr(row, first.lower().replace(" ", "_"), "")), row.predictor,
-            str(int(row.n)), str(int(row.hits)), f"{row.hit_rate:.0%}", f"{row.in_top_n:.0%}",
+            str(getattr(row, first.lower().replace(" ", "_"), "")),
+            row.predictor,
+            str(int(row.n)),
+            str(int(row.hits)),
+            f"{row.hit_rate:.0%}",
+            f"{row.in_top_n:.0%}",
         )
     return table
 
@@ -400,21 +407,35 @@ def predict_score(season: int = SeasonOpt, db_path: Path | None = DbOpt):
         console.print(f"No scorable predictions for {season}.")
     else:
         overall = predictions.hit_rates(scored)
-        table = Table("Predictor", "Scored", "Hits", "Hit rate", "In top N",
-                      title=f"Rival-pick prediction accuracy \u2014 {season}")
+        table = Table(
+            "Predictor",
+            "Scored",
+            "Hits",
+            "Hit rate",
+            "In top N",
+            title=f"Rival-pick prediction accuracy \u2014 {season}",
+        )
         for row in overall.itertuples():
-            table.add_row(row.predictor, str(int(row.n)), str(int(row.hits)),
-                          f"{row.hit_rate:.0%}", f"{row.in_top_n:.0%}")
+            table.add_row(
+                row.predictor,
+                str(int(row.n)),
+                str(int(row.hits)),
+                f"{row.hit_rate:.0%}",
+                f"{row.in_top_n:.0%}",
+            )
         console.print(table)
         console.print(_rate_table(predictions.hit_rates(scored, "slot"), "By slot", "Slot"))
         console.print(
             _rate_table(predictions.hit_rates(scored, "display_name"), "By rival", "Display name")
         )
-        ranks = Table("Predictor", "Rank of the actual pick", "Count",
-                      title="Where the actual pick landed")
-        for (name, rank), n in scored.groupby(
-            ["predictor", scored["rank"].astype("Int64")], dropna=False
-        ).size().items():
+        ranks = Table(
+            "Predictor", "Rank of the actual pick", "Count", title="Where the actual pick landed"
+        )
+        for (name, rank), n in (
+            scored.groupby(["predictor", scored["rank"].astype("Int64")], dropna=False)
+            .size()
+            .items()
+        ):
             ranks.add_row(name, "outside top N" if pd.isna(rank) else str(int(rank)), str(int(n)))
         console.print(ranks)
         console.print(
@@ -446,7 +467,9 @@ def _print_pit(conn_path, season: int) -> None:
         console.print(f"[dim]No scorable weekly distributions for {season} yet.[/dim]")
     else:
         table = Table(
-            "Bin", "Count", "Expected if flat",
+            "Bin",
+            "Count",
+            "Expected if flat",
             title=f"Where realised weekly totals fell — {season} ({len(scored)} draws)",
         )
         for row in pit.uniformity(scored).itertuples():
@@ -492,8 +515,11 @@ def _standing_pick(pick: st.EntrantPick) -> str:
 
 def _standing_total(total: st.Total) -> str:
     issues = []
-    for count, label in ((total.pending, "pending"), (total.unresolved, "unresolved"),
-                         (total.missing, "missing")):
+    for count, label in (
+        (total.pending, "pending"),
+        (total.unresolved, "unresolved"),
+        (total.missing, "missing"),
+    ):
         if count:
             issues.append(f"{count} {label}")
     return str(total.tds) + (f" (incomplete; {', '.join(issues)})" if issues else "")
@@ -524,8 +550,9 @@ def _standing_lead(result: st.Board) -> str:
         # fully scored -- `final` is true after one clean week of eighteen, and the pot is
         # not shared until there are no weeks left to change it.
         if result.season_complete:
-            sentence += (" A tie for first splits the winnings: "
-                         f"each takes 1/{len(names)} of the pot.")
+            sentence += (
+                f" A tie for first splits the winnings: each takes 1/{len(names)} of the pot."
+            )
         else:
             sentence += f" A tie at the end splits the winnings 1/{len(names)} each."
     return sentence
@@ -533,15 +560,23 @@ def _standing_lead(result: st.Board) -> str:
 
 def _render_standings(result: st.Board) -> None:
     if not result.rows:
-        console.print(
-            f"No imported pool standings for {result.season}. Run pool report import."
-        )
+        console.print(f"No imported pool standings for {result.season}. Run pool report import.")
     else:
-        ranking = (f"ranked on season totals through week {result.as_of}"
-                   if result.as_of is not None else "season unranked")
+        ranking = (
+            f"ranked on season totals through week {result.as_of}"
+            if result.as_of is not None
+            else "season unranked"
+        )
         table = Table(
-            "Rank", "Entrant", *config.SLOTS, "Week TDs", "Season TDs", "Used",
-            "Reported week TDs", "Reported total TDs", "Reported rank",
+            "Rank",
+            "Entrant",
+            *config.SLOTS,
+            "Week TDs",
+            "Season TDs",
+            "Used",
+            "Reported week TDs",
+            "Reported total TDs",
+            "Reported rank",
             title=f"Computed standings — {result.season}, week {result.week} picks; {ranking}",
         )
         for row in result.rows:
@@ -556,7 +591,9 @@ def _render_standings(result: st.Board) -> None:
                 *(_standing_pick(p) for p in row.picks),
                 _standing_total(row.week_total),
                 _standing_total(row.season_total) if result.as_of is not None else "—",
-                used, _reported_number(row.reported_week), _reported_number(row.reported_total),
+                used,
+                _reported_number(row.reported_week),
+                _reported_number(row.reported_total),
                 _reported_number(row.reported_rank),
             )
         console.print(table)
@@ -575,33 +612,34 @@ def _render_standings(result: st.Board) -> None:
         if row.used.unknown:
             console.print(
                 f"{row.display_name}: {row.used.unknown} unresolved names in the used pool; "
-                "re-import with pool report import.", markup=False,
+                "re-import with pool report import.",
+                markup=False,
             )
         if row.used.missing_weeks:
             console.print(
                 f"{row.display_name}: used pool missing reports for weeks "
-                + ", ".join(map(str, row.used.missing_weeks)) + ".", markup=False,
+                + ", ".join(map(str, row.used.missing_weeks))
+                + ".",
+                markup=False,
             )
         for pid, weeks in row.used.repeats.items():
             console.print(
                 f"{row.display_name}: repeated player {pid} in weeks "
-                + ", ".join(map(str, weeks)) + "; counted once in Used.", markup=False,
+                + ", ".join(map(str, weeks))
+                + "; counted once in Used.",
+                markup=False,
             )
     if result.rows:
         console.print(
             f"Used includes all imported picks through week {result.used_through}. "
             f"Reported columns describe week {result.week}; — means not supplied."
         )
-    noted = [
-        (row, pick)
-        for row in result.rows
-        for pick in row.picks
-        if pick.note
-    ]
+    noted = [(row, pick) for row in result.rows for pick in row.picks if pick.note]
     for row, pick in noted:
         console.print(
             f"{row.display_name} {pick.slot}: {pick.player_name} had no week {pick.week} game; "
-            "scored 0. A bye or a team the schedule does not match.", markup=False,
+            "scored 0. A bye or a team the schedule does not match.",
+            markup=False,
         )
     if result.report_conflicts:
         console.print(
@@ -609,12 +647,25 @@ def _render_standings(result: st.Board) -> None:
             "use pool report import with --me to review the comparison."
         )
     if result.in_progress:
-        table = Table("Week", "Entrant", "Slot", "Player", "Source", "TDs / status",
-                      title="In progress — excluded from season ranks")
+        table = Table(
+            "Week",
+            "Entrant",
+            "Slot",
+            "Player",
+            "Source",
+            "TDs / status",
+            title="In progress — excluded from season ranks",
+        )
         for pick in result.in_progress:
             value = str(pick.tds) if pick.status == "final" else f"{pick.status}: {pick.pending}"
-            table.add_row(str(pick.week), pick.display_name, pick.slot, _standing_pick(pick),
-                          pick.source, value)
+            table.add_row(
+                str(pick.week),
+                pick.display_name,
+                pick.slot,
+                _standing_pick(pick),
+                pick.source,
+                value,
+            )
         console.print(table)
     console.print("Totals are touchdown counts, not points.")
     if result.cache_stale:
@@ -801,7 +852,10 @@ def _print_sensitivity(frame: pd.DataFrame) -> None:
         console.print("[dim]Nothing to sweep: no pot-share view for this week.[/dim]")
         return
     table = Table(
-        "Slot", "Where the two objectives part", "Cells", "Verdict",
+        "Slot",
+        "Where the two objectives part",
+        "Cells",
+        "Verdict",
         title="Sensitivity to k_game and rival noise",
     )
     for slot, block in frame.groupby("slot", sort=False):

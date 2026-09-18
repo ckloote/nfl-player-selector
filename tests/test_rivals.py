@@ -99,5 +99,12 @@ def test_rivals_reads_nothing_from_the_world():
     database it drags a CSV parser in with it, and a changed column header starts
     invalidating real captured decisions. The seam is the point, so it is asserted."""
     assert not _imports(rivals) & {
-        "sqlite3", "db", "entrants", "standings", "predictions", "os", "pathlib", "io"
+        "sqlite3",
+        "db",
+        "entrants",
+        "standings",
+        "predictions",
+        "os",
+        "pathlib",
+        "io",
     }

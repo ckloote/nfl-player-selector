@@ -66,14 +66,14 @@ def test_advice_without_pool_state_is_exactly_what_it_always_was():
     """What fails if the win-probability work ever starts quietly changing the EV advice."""
     proj = frame()
     plain = advise_slot(proj, "QB", 1, set(), {}, now=NOW)
-    withstate = advise_week(
-        proj, 1, set(), {}, now=NOW, pool=rivals.PoolState((rival("x", 0),), 0)
-    )
+    withstate = advise_week(proj, 1, set(), {}, now=NOW, pool=rivals.PoolState((rival("x", 0),), 0))
     qb = next(a for a in withstate if a.slot == "QB")
     assert qb.recommended.player_id == plain.recommended.player_id
     assert [c.player_id for c in qb.alternatives] == [c.player_id for c in plain.alternatives]
     assert (qb.hold, qb.recommended.cost, qb.recommended.lam) == (
-        plain.hold, plain.recommended.cost, plain.recommended.lam,
+        plain.hold,
+        plain.recommended.cost,
+        plain.recommended.lam,
     )
 
 
@@ -161,9 +161,9 @@ def test_mirroring_covers_one_threat_and_not_several():
     `qa`, so mirroring it does nothing about them."""
     proj = frame()
     alone = shares_for(proj, rivals.PoolState((rival("r", 0),), 3))[0]["QB"]
-    plus_other = shares_for(
-        proj, rivals.PoolState((rival("r", 0), rival("s", 0, ("qa",))), 3)
-    )[0]["QB"]
+    plus_other = shares_for(proj, rivals.PoolState((rival("r", 0), rival("s", 0, ("qa",))), 3))[0][
+        "QB"
+    ]
     assert (alone["qa"].share - alone["qb"].share) > (
         plus_other["qa"].share - plus_other["qb"].share
     )
@@ -364,7 +364,11 @@ def test_a_reported_pick_is_used_instead_of_a_prediction_of_it():
     # and the point is only that it reaches for the top of their list.
     assert guessed[1] in ("qz", "qy"), "left to itself the rollout takes one of the best"
     pinned = rivals.rollout(
-        players, values, [1], rng=np.random.default_rng(0), top_n=1,
+        players,
+        values,
+        [1],
+        rng=np.random.default_rng(0),
+        top_n=1,
         known=reported.pinned("QB", [1]),
     )
     assert pinned[1] == "q6", "told the answer, it uses the answer"
@@ -376,7 +380,11 @@ def test_a_pinned_player_cannot_be_spent_again_later():
     state = rivals.RivalState("r1", "Rival", frozenset(), 0, 0, known=(("QB", 1, "qz"),))
     players, values = rivals.remaining_matrix(proj, "QB", 1, [1, 2], state.used_ids)
     path = rivals.rollout(
-        players, values, [1, 2], rng=np.random.default_rng(0), top_n=1,
+        players,
+        values,
+        [1, 2],
+        rng=np.random.default_rng(0),
+        top_n=1,
         known=state.pinned("QB", [1, 2]),
     )
     assert path[1] == "qz" and path[2] != "qz"
@@ -393,7 +401,11 @@ def test_a_reported_no_pick_holds_its_week_empty_and_spends_nobody():
     guessed = rivals.rollout(players, values, [1, 2], rng=np.random.default_rng(0), top_n=1)
     assert guessed[1] == "qa", "left to itself it spends the best quarterback in week 1"
     held = rivals.rollout(
-        players, values, [1, 2], rng=np.random.default_rng(0), top_n=1,
+        players,
+        values,
+        [1, 2],
+        rng=np.random.default_rng(0),
+        top_n=1,
         known=state.pinned("QB", [1, 2]),
     )
     assert 1 not in held, "nothing is predicted into a slot the report says was empty"
@@ -491,9 +503,7 @@ def test_recommend_without_reports_says_so_rather_than_printing_zeroes(local, wi
     assert "Pot share" not in result.output, "no column of nothing"
 
 
-def test_recommend_without_an_identity_still_advises_and_says_what_turns_the_view_on(
-    local, wide
-):
+def test_recommend_without_an_identity_still_advises_and_says_what_turns_the_view_on(local, wide):
     """Imported without --me, the field would include me. The expected-TD advice needs no
     field and is printed as always; the pot share is withheld with the one step that fixes
     it, and no prediction reminder points at a command that would refuse."""
@@ -558,8 +568,15 @@ def test_a_decision_made_against_rivals_reconstructs_from_its_own_record(seeded)
         advice = advise_week(proj, 2, used, locked, now=now, pool=pool)
         assert any(a.shares for a in advice), "the view has to have run for this to prove it"
         decision_id = capture.record_decision(
-            conn, 2026, 2, proj, advice, used, locked,
-            decision_at=state.decision_instant(now), pool=pool,
+            conn,
+            2026,
+            2,
+            proj,
+            advice,
+            used,
+            locked,
+            decision_at=state.decision_instant(now),
+            pool=pool,
         )
         rebuilt = prospective.reconstruction(conn, decision_id)
     assert rebuilt["ok"], rebuilt
@@ -578,8 +595,15 @@ def test_a_capture_that_forgets_the_opposition_cannot_re_derive_its_own_shares(s
     with config.override(WINPROB_SIMS=200):
         advice = advise_week(proj, 2, used, locked, now=now, pool=pool)
         decision_id = capture.record_decision(
-            conn, 2026, 2, proj, advice, used, locked,
-            decision_at=state.decision_instant(now), pool=None,
+            conn,
+            2026,
+            2,
+            proj,
+            advice,
+            used,
+            locked,
+            decision_at=state.decision_instant(now),
+            pool=None,
         )
         rebuilt = prospective.reconstruction(conn, decision_id)
     assert not rebuilt["ok"] and rebuilt["reason"] == "re-derived advice differs"
@@ -764,9 +788,7 @@ def test_an_unfinished_past_score_withholds_the_share_rather_than_counting_zero(
     scoring.import_touchdowns(
         conn,
         2026,
-        pd.DataFrame(
-            [workflow.play(pid="q1"), workflow.end(), workflow.end("g2", 0, 0)]
-        ),
+        pd.DataFrame([workflow.play(pid="q1"), workflow.end(), workflow.end("g2", 0, 0)]),
     )
     ready = predictions.pool_state(conn, 2026, 2)
     assert ready.ready and not ready.withheld
@@ -875,8 +897,15 @@ def test_a_withheld_decision_is_captured_and_replays_without_a_share(seeded):
         advice = advise_week(proj, 2, used, locked, now=now, pool=pool)
         assert not any(a.shares for a in advice)
         decision_id = capture.record_decision(
-            conn, 2026, 2, proj, advice, used, locked,
-            decision_at=state.decision_instant(now), pool=pool,
+            conn,
+            2026,
+            2,
+            proj,
+            advice,
+            used,
+            locked,
+            decision_at=state.decision_instant(now),
+            pool=pool,
         )
         rebuilt = prospective.reconstruction(conn, decision_id)
     assert rebuilt["ok"], rebuilt

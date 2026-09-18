@@ -99,9 +99,7 @@ def commit(
     with db.transaction(conn):
         payload["surface_hash"] = capture._store_surface(conn, frame)
         payload["draws_hash"] = _store_draws(conn, draws)
-    return predictions.archive(
-        conn, season, week, payload, observed_at=observed_at, kind=KIND
-    )
+    return predictions.archive(conn, season, week, payload, observed_at=observed_at, kind=KIND)
 
 
 def archived(conn: sqlite3.Connection, season: int) -> list[dict]:
@@ -255,8 +253,13 @@ def score(conn: sqlite3.Connection, season: int) -> tuple[pd.DataFrame, list[dic
             continue
         superseded = len(records) - len(reasons) - 1
         if superseded:
-            notes.append(dict(week=week, reason=f"{superseded} earlier eligible commitment(s) "
-                              "superseded by the last eligible archive"))
+            notes.append(
+                dict(
+                    week=week,
+                    reason=f"{superseded} earlier eligible commitment(s) "
+                    "superseded by the last eligible archive",
+                )
+            )
         if arrival is None:
             notes.append(dict(week=week, reason="no report yet; commitment stands unscored"))
             continue
@@ -281,9 +284,7 @@ def score(conn: sqlite3.Connection, season: int) -> tuple[pd.DataFrame, list[dic
         for entrant_id, picks in sorted(by_entrant.items()):
             outcome = _realised(picks)
             if outcome is None:
-                notes.append(
-                    dict(week=week, entrant_id=entrant_id, reason="week not fully scored")
-                )
+                notes.append(dict(week=week, entrant_id=entrant_id, reason="week not fully scored"))
                 continue
             actual, cells = outcome
             sampled = draws.totals([(week, pid) for pid in cells])

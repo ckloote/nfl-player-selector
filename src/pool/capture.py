@@ -253,7 +253,8 @@ def _pool_detail(pool: rivals.PoolState | None) -> dict | None:
         for r in pool.rivals
     ]
     observed = dict(
-        my_tds=int(pool.my_tds), rivals=state_of,
+        my_tds=int(pool.my_tds),
+        rivals=state_of,
         finalized=[[int(w), str(pid), int(tds)] for w, pid, tds in pool.finalized],
     )
     if pool.withheld:
