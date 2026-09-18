@@ -22,7 +22,11 @@ dependencies = [
 pool = "pool.cli:app"
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.5"]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "time-machine>=3.5.1",
+]
 
 [tool.uv.build-backend]
 module-name = "pool"

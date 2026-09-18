@@ -1,7 +1,23 @@
+from datetime import UTC, datetime
+
 import pandas as pd
 import pytest
+import time_machine
 
 from pool import db
+
+# The fixtures are written as of week 2 of the 2026 season: a report in hand, week 2 not yet
+# kicked off. Commands that read the clock -- `recommend`, `predict record` -- were run on the
+# real one, so the suite passed until week 2 kicked off and failed every day after. It runs
+# as of this instant instead, whatever today is. Session-scoped so module-scoped fixtures are
+# covered too, and ticking so timestamps written one after another stay in order.
+SUITE_NOW = datetime(2026, 9, 18, 16, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def suite_clock():
+    with time_machine.travel(SUITE_NOW, tick=True):
+        yield
 
 
 def proj_row(
