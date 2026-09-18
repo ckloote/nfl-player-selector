@@ -1086,11 +1086,11 @@ def _print_next(d: Decided, season: int, views, reads: _WeekReads, db_path) -> N
             and d.now.date() < slate.date()
         ):
             console.print(f"Nothing needs submitting before {slate:%A}.")
-        # The first deadline, not a shared one: on a Sunday the slots due can close hours
-        # apart, and each keeps its own in the table above.
+        # The first deadline, not a shared one: the slots due together can close hours or a
+        # day apart -- Sunday's with Monday night's -- and each keeps its own above.
         console.print(
-            f"Due {first.deadline:%A}: {_slots(now_views)}, the first by "
-            f"{_short(first.deadline)[4:]}. When you submit, record with:"
+            f"Submit next: {_slots(now_views)} (first deadline {_short(first.deadline)}). "
+            "Once submitted, record with:"
         )
         command, notes = weekly.record_command(
             season,

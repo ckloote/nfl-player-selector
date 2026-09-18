@@ -307,7 +307,7 @@ def test_tuesday_prints_only_wednesday_s_pick_and_says_when_to_come_back(week_db
     assert "PICK Wednesday Passer" in output and "PICK Thursday Runner" in output
     assert "HOLD Friday Catcher" in output
     assert "Wait for injury news" in output and "Monday Catcher" in output
-    assert "Due Wednesday: QB" in output
+    assert "Submit next: QB (first deadline Wed 7:00PM)" in output
     words = pasted(output)
     assert "--qb" in words and "--rb" not in words and "--flex" not in words
     assert "Waiting: RB, FLEX. Run `" in output and " week` again before Thu 12:00PM" in output
@@ -323,7 +323,7 @@ def test_thursday_then_sunday(week_db):
 
     thursday = run_week(week_db, "2026-09-17T10:00")
     assert "locked Wednesday Passer · pending" in thursday
-    assert "Due Thursday: RB" in thursday
+    assert "Submit next: RB (first deadline Thu 12:00PM)" in thursday
     words = pasted(thursday)
     assert words[words.index("--rb") + 1] == "Thursday Runner" and "--flex" not in words
     assert "HOLD Friday Catcher" in thursday
