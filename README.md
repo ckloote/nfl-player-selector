@@ -652,12 +652,19 @@ re-run could not be reconstructed from its own capture.
 
 ```bash
 uv run pytest
-uv run ruff check src tests
+uv run ruff check .
 uv run ruff format --check src tests
 ```
 
-`pytest` and `ruff` live in the `dev` dependency group, which `uv sync` installs
-by default; `uv sync --no-dev` gives a runtime-only environment.
+CI runs exactly these three, after `uv sync --locked`, on every push to `main` and every
+pull request (`.github/workflows/ci.yml`). `--locked` fails when `uv.lock` does not match
+`pyproject.toml`, so a dependency change has to commit its updated lockfile.
+
+The suite runs as of 18 September 2026, week 2 of the season its fixtures describe, whatever
+today's date is: `tests/conftest.py` pins the clock with `time-machine`.
+
+`pytest`, `ruff` and `time-machine` live in the `dev` dependency group, which `uv sync`
+installs by default; `uv sync --no-dev` gives a runtime-only environment.
 
 Dependency changes go through uv so that `uv.lock` stays authoritative — it is
 committed, and it is what pins the exact versions everyone gets:

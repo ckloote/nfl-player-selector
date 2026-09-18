@@ -1,0 +1,27 @@
+# The three checks README's Development section documents, on every push to main and
+# every pull request. Nothing here that is not also run locally.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      # --locked fails if uv.lock is out of date with pyproject.toml, rather than quietly
+      # resolving something nobody committed. Python comes from .python-version.
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check src tests
+      - run: uv run pytest -q
