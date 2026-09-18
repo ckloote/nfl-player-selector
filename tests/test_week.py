@@ -1,5 +1,6 @@
 """`pool week`: what the weekly screen asks for, what it saves, and the line it has you paste."""
 
+import io
 import shlex
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -7,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pytest
 import time_machine
+from rich.console import Console
 from typer.testing import CliRunner
 
 from pool import cli, db, freshness, ingest, scoring, weekly
@@ -527,3 +529,36 @@ def test_nothing_is_predicted_without_an_identity(local):
     output = weekly_run(path, BEFORE_KICKOFF)
     assert predicted(path) == ([], [])
     assert "Rival predictions" not in output
+
+
+# --- recommend, the detailed view -----------------------------------------------------
+
+
+def test_recommend_keeps_names_whole_at_eighty_columns_even_with_the_pot_share(monkeypatch):
+    """The review's smoke check found "Alternati…" and "Jaxon Smith-Nji…" at 80 columns.
+    With the two pot-share columns there is the least room there will ever be."""
+    from pool import config, rivals
+    from tests import test_winprob as winprob
+
+    long = {
+        "qb": "Jaxon Smith-Njigba Junior",
+        "qz": "Jacory Croskey-Merritt",
+        "qy": "Amon-Ra St. Brown",
+        "q5": "Christian McCaffrey",
+    }
+    proj = winprob.frame(weeks=(1, 2))
+    proj["player_name"] = proj.player_id.map(long).fillna(proj.player_name)
+    pool = rivals.PoolState((winprob.rival("pat", 2, {"qa"}), winprob.rival("jo", 1)), 1)
+    with config.override(WINPROB_SIMS=300):
+        advice = advise_week(proj, 1, set(), {}, now=winprob.NOW, pool=pool)
+    qb = next(a for a in advice if a.slot == "QB")
+    assert qb.shares, "the widest form of the table"
+    # A console of its own: setting `width` on the shared one would pin it for every test
+    # after this, and those that widen it through COLUMNS would stop being able to.
+    narrow = Console(width=80, record=True, file=io.StringIO())
+    monkeypatch.setattr(cli, "console", narrow)
+    cli._render_slot(qb, pool)
+    output = narrow.export_text()
+    assert "…" not in output
+    for name in long.values():
+        assert name in output

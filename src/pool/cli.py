@@ -1150,28 +1150,42 @@ def _render_slot(a: SlotAdvice, pool=None) -> None:
                 f"  [cyan]COMMIT:[/cyan] plays early, but the edge over {h.player_name} "
                 f"({h.cost:.2f} TD) beats the information premium ({config.INFO_PREMIUM_TD:.2f})."
             )
-    columns = ["Alternative", "Matchup", "xTD", "Season cost"]
-    if a.shares:
-        columns += ["Pot share", "vs EV"]
-    columns += ["Plan uses in", "Deadline", "Note"]
-    t = Table(show_header=True, header_style="dim", box=None, padding=(0, 1))
-    for col in columns:
-        t.add_column(col)
+    # Two lines an alternative: the matchup under the name, any note under the deadline.
+    # Nine columns in a row do not fit 80 once the pot share is on, and whatever narrowed
+    # got cut -- a name, which is what you type into `record`, or a number. Widths are set
+    # here rather than left to Rich, whose collapse shrinks the name column first whatever
+    # its minimum: each column fits its longest entry, and the name column takes what is
+    # left, never less than the longest name, so only the matchup under it wraps.
+    rows = []
     for c in a.alternatives:
-        cells = [
-            f"{c.player_name} ({c.team})",
-            _matchup(c),
-            f"{c.lam:.2f}",
-            f"-{c.cost:.2f}",
-        ]
+        cells = [f"{c.lam:.2f}", f"-{c.cost:.2f}"]
         if a.shares:
             cells += _share_cells(shares.get(c.player_id))
-        cells += [
-            f"wk {c.planned_week}" if c.planned_week else "—",
-            _fmt_dt(c.deadline),
-            _note(c),
-        ]
-        t.add_row(*cells)
+        cells += [f"wk {c.planned_week}" if c.planned_week else "—"]
+        rows.append(
+            (f"{c.player_name} ({c.team})", _matchup(c), cells, _short(c.deadline), _note(c))
+        )
+    headers = ["xTD", "Season cost", *(["Pot share", "vs EV"] if a.shares else []), "Plan uses in"]
+    widths = [
+        max([len(w) for w in header.split()] + [len(Text.from_markup(r[2][i]).plain) for r in rows])
+        for i, header in enumerate(headers)
+    ]
+    deadline = max([len(r[3]) for r in rows] + [len(w) for r in rows for w in r[4].split()] + [8])
+    room = console.width - sum(widths) - deadline - 2 * (len(headers) + 2)
+    longest = max((len(r[0]) for r in rows), default=0)
+    name = max(longest, min(max((len(r[1]) for r in rows), default=0), room))
+    t = Table(show_header=True, header_style="dim", box=None, padding=(0, 1))
+    t.add_column("Alternative", width=name)
+    for header, width in zip(headers, widths, strict=True):
+        t.add_column(header, width=width)
+    t.add_column("Deadline", width=deadline)
+    for who, matchup, cells, when, note in rows:
+        label = Text(who)
+        label.append(f"\n{matchup}", style="dim")
+        stamp = Text(when)
+        if note:
+            stamp.append(f"\n{note}", style="dim")
+        t.add_row(label, *cells, stamp)
     console.print(t)
     _share_notes(a, pool)
 
