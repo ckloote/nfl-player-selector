@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 
 import pandas as pd
 
-from . import config, freshness, scoring, state
+from . import config, freshness, pit, predictions, scoring, state
 from .recommend import Candidate, SlotAdvice
 
 ALTERNATIVES = 3
@@ -236,3 +236,45 @@ def previous_advice(
             state.eastern_now(datetime.fromisoformat(event["decision_at"])),
         )
     return out
+
+
+def save_predictions(
+    conn: sqlite3.Connection, season: int, week: int, proj: pd.DataFrame, at: datetime
+) -> tuple[str, datetime] | None:
+    """Archive this week's rival prediction while it can still count, once per change.
+
+    A prediction is scored only if it was archived before the week's first kickoff and
+    before its report, so it is worth making on every run until then and worthless after.
+    Saving again only when it changed keeps a run that learned nothing from adding a record
+    that says nothing; the scorer reads the last one that beat both deadlines, so a changed
+    prediction supersedes the earlier one. The PIT commitment is the same claim about the
+    same week and goes with it.
+
+    Returns what happened -- saved, unchanged, on record, or missed -- with the week's first
+    kickoff, or None when there is nothing to say: not the current week, no rivals, no
+    kickoff yet, or no identity, whose fix the withheld pot share already names.
+
+    Needs a connection with no open transaction, like the archive it writes.
+    """
+    if week != state.current_week(conn, season, at) or not predictions.identified(conn, season):
+        return None
+    kickoff = predictions.first_kickoff(conn, season, week)
+    if kickoff is None:
+        return None
+    if at >= kickoff or predictions.report_arrivals(conn, season)[0].get(week):
+        found = predictions.scorable(conn, season, week)
+        return ("on record" if found else "missed"), kickoff
+    payload = predictions.predict(conn, season, week, proj)
+    if not payload["rivals"]:
+        return None
+    earlier = [r for r in predictions.archived(conn, season) if r["week"] == week]
+    same = bool(earlier) and json.dumps(earlier[-1]["payload"], sort_keys=True) == json.dumps(
+        payload, sort_keys=True
+    )
+    committed = any(r["week"] == week for r in pit.archived(conn, season))
+    if same and committed:
+        return "unchanged", kickoff
+    if not same:
+        predictions.archive(conn, season, week, payload)
+    pit.commit(conn, season, week, proj)
+    return "saved", kickoff

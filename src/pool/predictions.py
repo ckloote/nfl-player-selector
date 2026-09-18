@@ -477,6 +477,14 @@ def _eligible(records, kickoff, arrival):
     return (survivors[-1] if survivors else None), reasons
 
 
+def scorable(conn: sqlite3.Connection, season: int, week: int) -> dict | None:
+    """The archived prediction `score` would read for `week`: the last one that beat both
+    its first kickoff and its report. None when none did."""
+    records = [r for r in archived(conn, season) if r["week"] == week]
+    arrival = report_arrivals(conn, season)[0].get(week)
+    return _eligible(records, first_kickoff(conn, season, week), arrival)[0]
+
+
 SCORED_COLUMNS = [
     "week",
     "entrant_id",

@@ -430,3 +430,100 @@ def test_without_an_identity_the_share_is_withheld_with_its_fix(local, monkeypat
     assert "Pot share (experimental) withheld" in result.output
     assert '--me "Your Name"' in result.output
     assert "PICK " in result.output, "the expected-TD advice is unaffected"
+
+
+# --- rival predictions ----------------------------------------------------------------
+
+# g3, week 2's only game, kicks off Sunday 2026-09-20 13:00 Eastern.
+BEFORE_KICKOFF = "2026-09-19T12:00"
+AFTER_KICKOFF = "2026-09-20T14:00"
+
+
+def predicted(path):
+    from pool import pit, predictions
+
+    conn = db.connect(path)
+    try:
+        return (
+            [r["week"] for r in predictions.archived(conn, 2026)],
+            [r["week"] for r in pit.archived(conn, 2026)],
+        )
+    finally:
+        conn.close()
+
+
+def weekly_run(path, when, *args):
+    from pool import config
+
+    with config.override(WINPROB_SIMS=200):
+        return run_week(path, when, *args)
+
+
+def test_a_prediction_is_saved_before_kickoff_and_not_again_until_it_changes(seeded):
+    conn, path = seeded
+    conn.close()
+    first = weekly_run(path, BEFORE_KICKOFF)
+    assert predicted(path) == ([2], [2])
+    assert "Rival predictions for week 2 saved; they count until first kickoff" in first
+    assert "Sun 1:00PM" in first
+    again = weekly_run(path, "2026-09-19T12:30")
+    assert predicted(path) == ([2], [2]), "the same prediction is not archived twice"
+    assert "unchanged since the last save" in again
+
+
+def test_a_changed_prediction_supersedes_the_earlier_one(seeded):
+    from pool import predictions
+
+    conn, path = seeded
+    weekly_run(path, BEFORE_KICKOFF)
+    # Pat's week-1 report is corrected, which changes what Pat has left to spend.
+    from tests import test_predictions as log
+
+    corrected = dict(log.WEEK1, Pat=("Quarter Two", "", "Flex Two"))
+    log._report(conn, 1, corrected, "2026-09-19T16:10:00+00:00")
+    conn.close()
+    weekly_run(path, "2026-09-19T12:30")
+    assert predicted(path) == ([2, 2], [2, 2])
+    conn = db.connect(path)
+    with time_machine.travel(at(AFTER_KICKOFF), tick=False):
+        chosen = predictions.scorable(conn, 2026, 2)
+    assert chosen["observation_id"] == predictions.archived(conn, 2026)[-1]["observation_id"]
+    conn.close()
+
+
+def test_after_kickoff_a_week_with_no_prediction_says_it_will_not_be_scored(seeded):
+    conn, path = seeded
+    conn.close()
+    missed = weekly_run(path, AFTER_KICKOFF)
+    assert predicted(path) == ([], [])
+    assert "No rival prediction was saved for week 2 before it could be seen" in missed
+
+
+def test_after_kickoff_a_saved_prediction_is_reported_and_not_added_to(seeded):
+    conn, path = seeded
+    conn.close()
+    weekly_run(path, BEFORE_KICKOFF)
+    kept = weekly_run(path, AFTER_KICKOFF)
+    assert predicted(path) == ([2], [2])
+    assert "on record from before the week could be seen" in kept
+
+
+def test_nothing_is_predicted_for_a_week_that_is_not_current(seeded):
+    conn, path = seeded
+    conn.close()
+    output = weekly_run(path, BEFORE_KICKOFF, "--week", "1")
+    assert predicted(path) == ([], [])
+    assert "Rival predictions" not in output
+
+
+def test_nothing_is_predicted_without_an_identity(local):
+    from tests import test_predictions as log
+
+    conn, path = local
+    scoring.import_touchdowns(conn, 2026, pd.DataFrame([play(), end(), end("g2", 0, 0)]))
+    log._history(conn)
+    log._report(conn, 1, log.WEEK1, "2026-09-14T00:00:00+00:00", me=None)
+    conn.close()
+    output = weekly_run(path, BEFORE_KICKOFF)
+    assert predicted(path) == ([], [])
+    assert "Rival predictions" not in output

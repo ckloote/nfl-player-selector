@@ -855,7 +855,10 @@ def week_command(
         )
 
     d = _decide(conn, season, week, capture_when="open", also=reads)
-    _render_week(d, season, refreshed, db_path)
+    # After the snapshot closes: the archive refuses to write inside a transaction, and
+    # the prediction is made on the very frame the advice above was derived from.
+    predicted = weekly.save_predictions(conn, season, d.week, d.proj, d.decided)
+    _render_week(d, season, refreshed, db_path, predicted)
 
 
 def _short(dt: datetime) -> str:
@@ -883,7 +886,7 @@ def _slots(views) -> str:
     return ", ".join(v.slot for v in views)
 
 
-def _render_week(d: Decided, season: int, refreshed, db_path) -> None:
+def _render_week(d: Decided, season: int, refreshed, db_path, predicted=None) -> None:
     reads: _WeekReads = d.extra
     pool, wk = d.pool, d.week
     views = weekly.slot_views(d.advice, reads.results, reads.previous)
@@ -902,6 +905,32 @@ def _render_week(d: Decided, season: int, refreshed, db_path) -> None:
     _print_week_slots(d.advice, views, pool)
     console.print()
     _print_next(d, season, views, reads, db_path)
+    if predicted:
+        _print_predicted(d.week, *predicted)
+    console.print(
+        f"Full detail: {weekly.program()} recommend --week {d.week}"
+        + (f" --season {season}" if season != config.DEFAULT_SEASON else ""),
+        style="dim",
+    )
+
+
+def _print_predicted(wk: int, what: str, kickoff: datetime) -> None:
+    """One line on the rival prediction, which only counts if saved before first kickoff."""
+    when = _short(state.eastern_now(kickoff))
+    console.print(
+        {
+            "saved": f"Rival predictions for week {wk} saved; they count until first "
+            f"kickoff, {when}.",
+            "unchanged": f"Rival predictions for week {wk} unchanged since the last save; "
+            f"they count until first kickoff, {when}.",
+            "on record": f"Rival predictions for week {wk} are on record from before the "
+            "week could be seen.",
+            "missed": f"No rival prediction was saved for week {wk} before it could be seen, "
+            "so this week will not be scored.",
+        }[what],
+        style="yellow" if what == "missed" else "dim",
+        markup=False,
+    )
 
 
 def _week_rows(a: SlotAdvice, view, pool, shares: bool):
@@ -1085,7 +1114,6 @@ def _print_next(d: Decided, season: int, views, reads: _WeekReads, db_path) -> N
             f"Waiting: {_slots(waiting)}. Run `{prog} week` again before {_short(until)}.",
             markup=False,
         )
-    console.print(f"Full detail: {prog} recommend --week {wk}{season_arg}", style="dim")
 
 
 def _render_slot(a: SlotAdvice, pool=None) -> None:
