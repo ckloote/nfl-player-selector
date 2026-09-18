@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 
 from . import config, db, rivals, snapshots, state
+from . import identity as package_identity
 from .recommend import SlotAdvice, advise_week
 
 SCHEMA_VERSION = 1
@@ -53,33 +54,31 @@ def _json(value: Any) -> str:
 
 @cache
 def _code_identity() -> tuple[str, str, str | None, bool | None]:
-    """Fingerprint the source tree once per process, whole and decision-scoped.
+    """Fingerprint the running package once per process, whole and decision-scoped.
 
-    Hashing it shells out to git three times, and a command that records three picks
-    should not do that nine. Source cannot change under a running process in any way
-    this tool would survive. Constants *can* -- `config.override` exists and the sweep
-    uses it -- so they are deliberately outside this cache and read on every call.
+    Read from the installed package rather than from a checkout, so recording a pick
+    works wherever the tool is installed; `revision` and `dirty` are None outside one.
+    Constants can change under a running process -- `config.override` exists and the
+    sweep uses it -- so they are deliberately outside this cache and read on every call.
     Caching them here once recorded one premium for decisions made under two.
 
     Both hashes are recorded and only the decision-scoped one is enforced. A decision is
-    a function of the modules its advice and its surface are derived from; a leaderboard
-    or an ingestion command is not among them, and refusing to reconstruct because one
-    was added would fail a capture that nothing had touched.
+    a function of the modules its advice and its surface are derived from, and of the
+    dependency versions those ran on; a leaderboard or an ingestion command is not among
+    them, and refusing to reconstruct because one was added would fail a capture that
+    nothing had touched.
     """
-    from . import benchmark  # imports the feed layer; not needed to read a capture
-
-    code = benchmark.code_identity()
-    return code["code_hash"], code["decision_hash"], code.get("revision"), code.get("dirty")
+    code = package_identity.runtime()
+    return code["code_hash"], code["decision_hash"], code["revision"], code["dirty"]
 
 
 def current_constants() -> dict:
-    from . import benchmark
-
-    return benchmark.constants()
+    return package_identity.constants()
 
 
 def _identity_payload(model: str, calibrator: str, artifact_hash: str | None) -> tuple[str, str]:
     code_hash, decision_hash, revision, dirty = _code_identity()
+    runtime = package_identity.runtime()
     raw = _json(
         {
             "model": model,
@@ -89,6 +88,9 @@ def _identity_payload(model: str, calibrator: str, artifact_hash: str | None) ->
             "decision_hash": decision_hash,
             "revision": revision,
             "dirty": dirty,
+            # Recorded so a moved fingerprint can be explained, not only detected.
+            "dependencies": runtime["dependencies"],
+            "python": runtime["python"],
             "constants": current_constants(),
         }
     )
