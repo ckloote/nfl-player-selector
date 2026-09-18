@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -36,6 +37,7 @@ from . import evaluate as ev
 from . import standings as st
 from .optimizer import plan_slot
 from .recommend import Candidate, SlotAdvice, advise_week, pot_shares
+from .rivals import PoolState
 
 app = typer.Typer(help="NFL touchdown pool decision support.", no_args_is_help=True)
 report_app = typer.Typer(
@@ -687,20 +689,33 @@ def refresh(season: int = SeasonOpt, db_path: Path | None = DbOpt):
         raise typer.Exit(1)
 
 
-@app.command()
-def recommend(
-    week: int | None = WeekOpt,
-    season: int = SeasonOpt,
-    db_path: Path | None = DbOpt,
-    capture_decision: bool = typer.Option(
-        True, "--capture/--no-capture", help="Record this decision's inputs, surface and advice"
-    ),
-    sensitivity: bool = typer.Option(
-        False, "--sensitivity", help="Re-rank across the stress range of the fitted knobs"
-    ),
-):
-    """Recommend picks for every open slot this week."""
-    conn = _conn(db_path)
+@dataclass
+class Decided:
+    """One decision and everything printed about it, all read from a single snapshot."""
+
+    week: int
+    now: datetime
+    decided: datetime
+    proj: pd.DataFrame
+    advice: list[SlotAdvice]
+    locked: dict[str, dict[int, str]]
+    pool: PoolState
+    decision_id: str | None
+    freshness_rows: list
+    freshness_warnings: list
+    picks: pd.DataFrame
+    nudge: str | None
+    uncertain: list
+
+    @property
+    def recorded_names(self) -> dict[str, str]:
+        return self.picks.set_index("player_id").player_name.to_dict()
+
+
+def _decide(conn, season: int, week: int | None, *, capture_when: str) -> Decided:
+    """Advise every open slot, and capture the decision `always`, `never`, or only while a
+    slot is still `open`. Shared by `recommend` and `week`, so the two cannot disagree
+    about what was decided or when."""
     # One snapshot over the whole decision, taken before the clock. The forecast reads
     # mutable feed tables and the capture then names the observations behind them by
     # asking for everything at or before this instant; a refresh landing between the
@@ -722,29 +737,65 @@ def recommend(
         pool = predictions.pool_state(conn, season, wk, at=decided)
         advice = advise_week(proj, wk, used, locked, now=now, pool=pool)
         decision_id = None
-        if capture_decision:
+        if capture_when == "always" or (
+            capture_when == "open" and any(a.locked_player is None for a in advice)
+        ):
             decision_id = capture.record_decision(
                 conn, season, wk, proj, advice, used, locked, decision_at=decided, pool=pool
             )
         # Read inside the snapshot too: a data-age line or a pick name drawn from a
         # feed the advice never saw would describe a decision that was not made.
         freshness_rows, freshness_warnings = freshness.report(conn, season, wk, now)
-        recorded_names = state.picks(conn, season).set_index("player_id").player_name.to_dict()
+        picks = state.picks(conn, season)
         # Only with rivals to predict. Without them the command it names would refuse.
         nudge = _prediction_nudge(conn, season, wk, decided) if pool.rivals else None
         uncertain = predictions.unresolved_ahead(conn, season, wk, decided) if pool.ready else []
-        # Inside the snapshot, on the same frame the advice was derived from. A sweep run
-        # against a later forecast would describe the stability of a different decision.
-        sweep = _sensitivity(proj, wk, advice, pool, locked) if sensitivity and pool else None
+    return Decided(
+        wk,
+        now,
+        decided,
+        proj,
+        advice,
+        locked,
+        pool,
+        decision_id,
+        freshness_rows,
+        freshness_warnings,
+        picks,
+        nudge,
+        uncertain,
+    )
+
+
+@app.command()
+def recommend(
+    week: int | None = WeekOpt,
+    season: int = SeasonOpt,
+    db_path: Path | None = DbOpt,
+    capture_decision: bool = typer.Option(
+        True, "--capture/--no-capture", help="Record this decision's inputs, surface and advice"
+    ),
+    sensitivity: bool = typer.Option(
+        False, "--sensitivity", help="Re-rank across the stress range of the fitted knobs"
+    ),
+):
+    """Recommend picks for every open slot this week, in full detail."""
+    conn = _conn(db_path)
+    d = _decide(conn, season, week, capture_when="always" if capture_decision else "never")
+    wk, pool = d.week, d.pool
+    # On the same frame the advice was derived from, which the sweep reads in memory: it
+    # touches no table, so it describes the stability of this decision and no later one.
+    sweep = _sensitivity(d.proj, wk, d.advice, pool, d.locked) if sensitivity and pool else None
     console.print(f"[bold]Week {wk} — {season}[/bold]")
-    _print_freshness(freshness_rows, freshness_warnings)
-    _print_pool(pool, season, nudge, uncertain)
-    if decision_id:
+    _print_freshness(d.freshness_rows, d.freshness_warnings)
+    _print_pool(pool, season, d.nudge, d.uncertain)
+    if d.decision_id:
         # Printed so the submission can name it. With two decisions in a week the
         # fallback link -- the most recent advice for the slot -- is whichever happened
         # last, which is not the same thing as the one the pick came from.
-        console.print(f"[dim]Captured decision {decision_id}[/dim]")
-    for a in advice:
+        console.print(f"[dim]Captured decision {d.decision_id}[/dim]")
+    recorded_names = d.recorded_names
+    for a in d.advice:
         if a.locked_player in recorded_names:
             a.locked_player = recorded_names[a.locked_player]
         _render_slot(a, pool)
