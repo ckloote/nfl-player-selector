@@ -262,6 +262,19 @@ def test_an_unresolved_reported_name_is_unscorable_rather_than_a_miss(pool):
     assert predictions.hit_rates(scored).set_index("predictor").loc["greedy", "n"] == 5
 
 
+def test_a_reported_no_pick_is_not_called_an_unresolved_name(pool):
+    """Neither is scorable, for different reasons: a no-pick is an answer no predictor
+    offered, and an unresolved name is an answer nobody can read yet."""
+    conn, _ = pool
+    _record(conn)
+    _report(conn, 2, dict(WEEK2, Pat=("Quarter Two", "", "Flex One")), REPORT_AT)
+    scored, notes = predictions.score(conn, 2026)
+    assert not len(scored[scored.entrant_id.eq("pat") & scored.slot.eq("RB")])
+    reasons = [note["reason"] for note in notes]
+    assert "pat RB: no pick reported; nothing to score" in reasons
+    assert not any("never resolved" in reason for reason in reasons)
+
+
 def test_a_week_with_no_report_yet_is_reported_as_standing_unscored(pool):
     conn, _ = pool
     _record(conn)

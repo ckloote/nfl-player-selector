@@ -678,12 +678,13 @@ def recommend(
         recorded_names = state.picks(conn, season).set_index("player_id").player_name.to_dict()
         # Only with rivals to predict. Without them the command it names would refuse.
         nudge = _prediction_nudge(conn, season, wk, decided) if pool.rivals else None
+        uncertain = predictions.unresolved_ahead(conn, season, wk, decided) if pool.ready else []
         # Inside the snapshot, on the same frame the advice was derived from. A sweep run
         # against a later forecast would describe the stability of a different decision.
         sweep = _sensitivity(proj, wk, advice, pool, locked) if sensitivity and pool else None
     console.print(f"[bold]Week {wk} — {season}[/bold]")
     _print_freshness(freshness_rows, freshness_warnings)
-    _print_pool(pool, season, nudge)
+    _print_pool(pool, season, nudge, uncertain)
     if decision_id:
         # Printed so the submission can name it. With two decisions in a week the
         # fallback link -- the most recent advice for the slot -- is whichever happened
@@ -876,7 +877,7 @@ def _prediction_nudge(conn, season: int, wk: int, at: datetime) -> str | None:
     )
 
 
-def _print_pool(pool, season: int, nudge: str | None) -> None:
+def _print_pool(pool, season: int, nudge: str | None, uncertain=()) -> None:
     if pool.withheld:
         console.print(
             "[yellow]Pot share withheld; the expected-TD advice below is unaffected.[/yellow]"
@@ -913,6 +914,14 @@ def _print_pool(pool, season: int, nudge: str | None) -> None:
                 f"[yellow]Unresolved names in {', '.join(unresolved)}'s reports: their "
                 "remaining pool is overstated, and so is what this expects them to "
                 "score.[/yellow]"
+            )
+        # Reported, but unreadable: simulated as though the report had not arrived.
+        for name, week, slot, reported in uncertain:
+            console.print(
+                f"Simulated as unknown: {name} {slot} week {week} ({reported!r} did not "
+                "resolve). Re-import that report once it resolves to use the pick.",
+                style="yellow",
+                markup=False,
             )
     if nudge:
         console.print(f"[yellow]{nudge}[/yellow]")

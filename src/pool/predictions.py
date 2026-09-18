@@ -100,7 +100,7 @@ def _standing(row, spent, played: set[int], known=None) -> rivals.RivalState:
 
 def known_picks(
     conn: sqlite3.Connection, season: int, week: int, at: datetime
-) -> dict[str, tuple[tuple[str, int, str], ...]]:
+) -> dict[str, tuple[tuple[str, int, str | None], ...]]:
     """Each entrant's picks from `week` on that were already on record at `at`.
 
     Not the leak `_as_of` guards against, and worth being clear about the difference. That
@@ -115,28 +115,48 @@ def known_picks(
 
     The latest observation of a cell wins, so a corrected report supersedes the one it
     corrects rather than contributing a second pick for the same slot.
+
+    A reported no-pick is kept, as None: the slot is held empty rather than predicted. A
+    name that never resolved is not -- who they took is unknown, so the week stays a
+    prediction, and `unresolved_ahead` says so.
     """
+    rows = _reported_ahead(conn, season, week, at)
+    rows = rows[rows.player_id.notna() | rows.player_name.isna()]
+    out: dict[str, list[tuple[str, int, str | None]]] = {}
+    for row in rows.itertuples():
+        pid = None if pd.isna(row.player_id) else str(row.player_id)
+        out.setdefault(row.entrant_id, []).append((str(row.slot), int(row.week), pid))
+    return {entrant: tuple(sorted(picks)) for entrant, picks in out.items()}
+
+
+def unresolved_ahead(
+    conn: sqlite3.Connection, season: int, week: int, at: datetime
+) -> list[tuple[str, int, str, str]]:
+    """Reported picks from `week` on whose names never resolved: (entrant, week, slot, name).
+
+    The pot share simulates these as unknown choices, which is no worse than the week
+    before its report arrives -- but it is a guess where the report gave an answer, and has
+    to be visible as one.
+    """
+    rows = _reported_ahead(conn, season, week, at)
+    rows = rows[rows.player_id.isna() & rows.player_name.notna()]
+    return [
+        (str(row.display_name), int(row.week), str(row.slot), str(row.player_name))
+        for row in rows.itertuples()
+    ]
+
+
+def _reported_ahead(conn, season, week, at) -> pd.DataFrame:
+    """Every reported cell from `week` on that was on record at `at`, latest observation."""
     rows = entrants.entrant_picks(conn, season)
-    if rows.empty:
-        return {}
-    rows = rows[rows.week.ge(week) & rows.player_id.notna()]
-    if rows.empty:
-        return {}
+    rows = rows[rows.week.ge(week)]
     # Compared as instants, not as text, for the reason `_eligible` is: the two writers
     # agree on a format today and nothing enforces that they keep agreeing.
     arrived = [datetime.fromisoformat(value) <= at for value in rows.observed_at]
-    rows = rows[pd.Series(arrived, index=rows.index)]
-    if rows.empty:
-        return {}
-    rows = rows.sort_values("observed_at").drop_duplicates(
+    rows = rows[pd.Series(arrived, index=rows.index, dtype=bool)]
+    return rows.sort_values(["observed_at", "week", "entrant_id", "slot"]).drop_duplicates(
         ["entrant_id", "week", "slot"], keep="last"
     )
-    out: dict[str, list[tuple[str, int, str]]] = {}
-    for row in rows.itertuples():
-        out.setdefault(row.entrant_id, []).append(
-            (str(row.slot), int(row.week), str(row.player_id))
-        )
-    return {entrant: tuple(sorted(picks)) for entrant, picks in out.items()}
 
 
 def played_weeks(conn: sqlite3.Connection, season: int, through: int, at: datetime) -> set[int]:
@@ -432,12 +452,14 @@ def score(conn: sqlite3.Connection, season: int) -> tuple[pd.DataFrame, list[dic
                 pick = found.iloc[0]
                 pid = None if pd.isna(pick.player_id) else str(pick.player_id)
                 if pid is None:
-                    notes.append(
-                        dict(
-                            week=week,
-                            reason=f"{entrant_id} {slot}: reported name never resolved; unscorable",
-                        )
+                    # Two different facts. A no-pick is an answer no predictor offered, and
+                    # an unresolved name is an answer nobody can read yet.
+                    what = (
+                        "no pick reported; nothing to score"
+                        if pd.isna(pick.player_name)
+                        else "reported name never resolved; unscorable"
                     )
+                    notes.append(dict(week=week, reason=f"{entrant_id} {slot}: {what}"))
                     continue
                 for name, ranked in predictors.items():
                     rank = rivals.rank_of([rivals.Ranked(**c) for c in ranked], pid)

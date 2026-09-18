@@ -266,10 +266,12 @@ def _rival_totals(proj, week, weeks, pool, draws, sims, seed):
         pinned = {slot: rival.pinned(slot, weeks) for slot in config.SLOTS}
         for slot, (players, values) in grids.items():
             # A reported pick is not a guess at this week, so it enters the explanation at
-            # certainty rather than as one of three things they might do.
-            reported = pinned[slot].get(week)
-            if reported is not None:
-                contested[slot].setdefault(reported, []).append((rival.display_name, 1.0))
+            # certainty rather than as one of three things they might do. A reported no-pick
+            # is not a guess either, and holds nobody.
+            if week in pinned[slot]:
+                reported = pinned[slot][week]
+                if reported is not None:
+                    contested[slot].setdefault(reported, []).append((rival.display_name, 1.0))
                 continue
             rows = rivals.options(values, 0, top_n=config.RIVAL_NOISE_TOP_N)
             for row in rows:

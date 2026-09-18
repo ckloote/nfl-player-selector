@@ -243,7 +243,10 @@ def _pool_detail(pool: rivals.PoolState | None) -> dict | None:
             unknown=int(r.unknown),
             season_tds=int(r.season_tds),
             missing_weeks=[int(w) for w in r.missing_weeks],
-            known=[[str(slot), int(week), str(pid)] for slot, week, pid in r.known],
+            known=[
+                [str(slot), int(week), None if pid is None else str(pid)]
+                for slot, week, pid in r.known
+            ],
         )
         for r in pool.rivals
     ]
@@ -281,7 +284,10 @@ def _pool_from_detail(detail: dict | None) -> rivals.PoolState | None:
                 int(r["unknown"]),
                 int(r["season_tds"]),
                 tuple(int(w) for w in r.get("missing_weeks", ())),
-                tuple((str(s), int(w), str(p)) for s, w, p in r.get("known", ())),
+                tuple(
+                    (str(s), int(w), None if p is None else str(p))
+                    for s, w, p in r.get("known", ())
+                ),
             )
             for r in detail["rivals"]
         ),

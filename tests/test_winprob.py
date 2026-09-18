@@ -382,6 +382,38 @@ def test_a_pinned_player_cannot_be_spent_again_later():
     assert path[1] == "qz" and path[2] != "qz"
 
 
+def test_a_reported_no_pick_holds_its_week_empty_and_spends_nobody():
+    """Finding 3 of the 2026-09-17 review. A report saying a rival picked nobody is an
+    answer, not a gap: the rollout must not fill that week with a guess, and the player it
+    would have guessed there is still theirs to spend the week after."""
+    proj = frame(weeks=(1, 2))
+    state = rivals.RivalState("r1", "Rival", frozenset(), 0, 0, known=(("QB", 1, None),))
+    assert state.pinned("QB", [1, 2]) == {1: None}
+    players, values = rivals.remaining_matrix(proj, "QB", 1, [1, 2], state.used_ids)
+    guessed = rivals.rollout(players, values, [1, 2], rng=np.random.default_rng(0), top_n=1)
+    assert guessed[1] == "qa", "left to itself it spends the best quarterback in week 1"
+    held = rivals.rollout(
+        players, values, [1, 2], rng=np.random.default_rng(0), top_n=1,
+        known=state.pinned("QB", [1, 2]),
+    )
+    assert 1 not in held, "nothing is predicted into a slot the report says was empty"
+    assert held[2] == "qa", "and he is still unspent a week later"
+
+
+def test_a_reported_no_pick_is_no_claim_on_any_player():
+    """The explanation reads the same sampling sets. A rival who picked nobody this week is
+    not a rival who "may take" anybody."""
+    proj = frame()
+    pool = rivals.PoolState(
+        (rivals.RivalState("r1", "Rival", frozenset(), 0, 0, known=(("QB", 1, None),)),), 0
+    )
+    with config.override(WINPROB_SIMS=200, RIVAL_NOISE_TOP_N=3):
+        advice = advise_week(proj, 1, set(), {}, now=NOW, pool=pool)
+    qb = next(a for a in advice if a.slot == "QB")
+    assert qb.shares, "the view ran"
+    assert qb.contested == {}
+
+
 def test_a_reported_pick_enters_the_explanation_at_certainty():
     """It is the strongest form of "this rival holds this player", so the divergence
     sentence has to read it as such rather than as one of three things they might do."""
@@ -662,6 +694,41 @@ def test_the_policy_reads_a_report_that_arrived_before_the_decision_and_not_one_
     pat = next(r for r in after.rivals if r.display_name == "Pat")
     assert pat.pinned("QB", [2]) == {2: "q2"}, "Pat's reported week-2 quarterback"
     assert all(week >= 2 for _slot, week, _pid in pat.known), "week 1 is spending, not a pick"
+
+
+def test_a_mid_week_report_pins_no_picks_and_shows_unresolved_names_as_guesses(seeded, wide):
+    """The review's reproduction of finding 3, through the database. Pat reports a
+    quarterback and nothing else: both empty slots are pinned empty, and survive the
+    capture that has to replay them. Jamie's quarterback did not resolve, so it is still
+    predicted -- and `recommend` says it is a guess where the report gave an answer."""
+    from typer.testing import CliRunner
+
+    from pool import capture, predictions
+    from pool.cli import app
+    from tests import test_predictions as log
+
+    conn, path = seeded
+    week2 = dict(log.WEEK2, Pat=("Quarter Two", "", ""), Jamie=("Nobody Known", "", ""))
+    # Arrived already, so `recommend` on the real clock reads it too.
+    log._report(conn, 2, week2, "2026-09-15T00:00:00+00:00")
+    pool = predictions.pool_state(conn, 2026, 2)
+    pat = next(r for r in pool.rivals if r.display_name == "Pat")
+    assert pat.pinned("QB", [2]) == {2: "q2"}
+    assert pat.pinned("RB", [2]) == {2: None} and pat.pinned("FLEX", [2]) == {2: None}
+    jamie = next(r for r in pool.rivals if r.display_name == "Jamie")
+    assert jamie.pinned("QB", [2]) == {}, "an unreadable name is not an answer"
+    assert capture._pool_from_detail(capture._pool_detail(pool)) == pool
+    ahead = predictions.unresolved_ahead(conn, 2026, 2, datetime.now(UTC))
+    assert ahead == [("Jamie", 2, "QB", "Nobody Known")]
+    conn.close()
+    with config.override(WINPROB_SIMS=200):
+        result = CliRunner().invoke(
+            app, ["recommend", "--week", "2", "--no-capture", "--db", str(path)]
+        )
+    assert result.exit_code == 0, result.output
+    assert "Simulated as unknown: Jamie QB week 2 ('Nobody Known' did not resolve)" in (
+        result.output
+    )
 
 
 # --- does the answer need the numbers we had to fit? ----------------------------------
