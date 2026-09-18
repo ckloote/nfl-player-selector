@@ -165,15 +165,12 @@ def used_pools(
     """Observe all imports, including unfinished games; repeats never spend a player twice."""
     with db.transaction(conn):
         rows = entrants.entrant_picks(conn, season)
-        identities = conn.execute(
-            "SELECT entrant_id FROM pool_entrants WHERE season = ?", (season,)
-        ).fetchall()
+        identities = entrants.members(conn, season)
     if through is not None:
         rows = rows[rows.week.le(through)]
     last = through if through is not None else (int(rows.week.max()) if len(rows) else None)
     result = {}
-    for identity in identities:
-        eid = identity["entrant_id"]
+    for eid in identities.entrant_id:
         picks = rows[rows.entrant_id.eq(eid)]
         spent = defaultdict(list)
         for pick in picks[picks.player_id.notna()].itertuples():
@@ -236,7 +233,7 @@ def _board(conn, season, week) -> Board:
     as_of = scoring.resolved_through(conn, season)
     picks = _score_rows(conn, season, raw, scores)
     used = used_pools(conn, season)
-    identities = db.read_df(conn, "SELECT * FROM pool_entrants WHERE season = ?", (season,))
+    identities = entrants.members(conn, season)
     reported = {r.entrant_id: r for r in entrants.reported_totals(conn, season, shown).itertuples()}
     indexed = {(p.entrant_id, p.week, p.slot): p for p in picks}
 

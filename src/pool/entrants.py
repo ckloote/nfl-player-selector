@@ -315,6 +315,43 @@ def _compare_me(conn, season, week, me_id, picks) -> tuple[list[dict], list[dict
     return unrecorded, conflicts
 
 
+def members(conn: sqlite3.Connection, season: int) -> pd.DataFrame:
+    """The season's entrants: every identity with at least one reported pick.
+
+    A correction replaces a week's entrant set and deletes the picks of anyone it drops, but
+    keeps their `pool_entrants` row. An identity left with no picks at all is a spelling
+    that was corrected away, not a competitor, and counting it puts a phantom in the
+    standings and in the simulated field. Decided when read rather than by deleting the
+    row, so a database that already holds one is repaired without a migration.
+    """
+    return db.read_df(
+        conn,
+        "SELECT e.* FROM pool_entrants e WHERE e.season = ? AND EXISTS "
+        "(SELECT 1 FROM pool_picks p WHERE p.season = e.season AND p.entrant_id = e.entrant_id)",
+        (season,),
+    )
+
+
+def _surviving_me(conn, season, week, incoming) -> str | None:
+    """My established identity, if it is still an entrant once this week is replaced.
+
+    It survives when this file names it or another week does. One whose only picks are the
+    ones this import replaces, and which this file leaves out, is a misspelling of me being
+    corrected: it is about to have no picks, and `--me` may move off it rather than
+    refusing the correction forever as a disagreement.
+    """
+    for (candidate,) in conn.execute(
+        "SELECT entrant_id FROM pool_entrants WHERE season = ? AND is_me = 1", (season,)
+    ).fetchall():
+        elsewhere = conn.execute(
+            "SELECT 1 FROM pool_picks WHERE season = ? AND entrant_id = ? AND week != ? LIMIT 1",
+            (season, candidate, week),
+        ).fetchone()
+        if candidate in incoming or elsewhere:
+            return candidate
+    return None
+
+
 def _write_report(conn, result, entrant_rows, picks, totals, me_id):
     stamp = conn.execute(
         "SELECT observed_at FROM input_observations WHERE observation_id = ?",
@@ -332,6 +369,13 @@ def _write_report(conn, result, entrant_rows, picks, totals, me_id):
                 int(entrant.entrant_id == me_id),
                 stamp,
             ),
+        )
+    if me_id is not None:
+        # One of me. An identity `--me` has moved off -- a misspelling of mine, corrected --
+        # keeps its row, and must not keep claiming to be me beside the corrected one.
+        conn.execute(
+            "UPDATE pool_entrants SET is_me = 0 WHERE season = ? AND entrant_id != ?",
+            (result.season, me_id),
         )
     # A report is the complete week's set. Corrected files must remove obsolete rows,
     # while retaining historical entrant identities and all original observations.
@@ -440,10 +484,7 @@ def import_report(
                     "Entrant roster changed; review the difference and re-run with "
                     "--allow-roster-change to acknowledge it."
                 )
-        own = conn.execute(
-            "SELECT entrant_id FROM pool_entrants WHERE season = ? AND is_me = 1", (season,)
-        ).fetchone()
-        me_id = own[0] if own else None
+        me_id = _surviving_me(conn, season, week, set(entrant_rows.entrant_id))
         if me is not None:
             requested = state._norm(me)
             if requested not in set(entrant_rows.entrant_id):

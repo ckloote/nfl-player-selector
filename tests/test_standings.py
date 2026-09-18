@@ -195,12 +195,15 @@ def test_missing_entrant_week_and_unresolved_game_remain_incomplete(pool):
     from pool import standings
 
     conn, _ = pool
+    # Jamie is reported in week 2, so she is still an entrant when week 1 drops her. Without
+    # that she would have no picks at all, which is a corrected-away spelling, not a gap.
+    report(conn, week=2)
     report(conn, picks={k: v for k, v in DEFAULT_PICKS.items() if k != "Jamie"})
     with conn:
         conn.execute(
             "UPDATE pool_picks SET game_id = NULL WHERE entrant_id = 'pat' AND slot = 'QB'"
         )
-    result = standings.board(conn, 2026)
+    result = standings.board(conn, 2026, week=1)
     assert result.as_of == 1 and not result.final
     jamie = next(r for r in result.rows if r.entrant_id == "jamie")
     assert jamie.season_total.missing == 3 and jamie.week_total.missing == 3
