@@ -537,7 +537,7 @@ def test_cached_weekly_lineup_agrees_with_every_conditional_lock(replayed, monke
         assert calls[0] == {}
         assert len(calls) <= len(config.SLOTS)
         for locks in calls[1:]:
-            assert list(locks) == list(config.SLOTS)[:len(locks)]
+            assert list(locks) == list(config.SLOTS)[: len(locks)]
             assert all(final[week, slot] == picks[week] for slot, picks in locks.items())
 
 
@@ -564,8 +564,9 @@ def test_a_shared_first_place_is_reported_as_shared_and_not_as_a_win():
 
 
 @pytest.mark.parametrize(("delta", "deviates"), [(0.5, True), (0.0005, False)])
-def test_winprob_deviates_only_where_the_pot_share_separates(replayed, monkeypatch, delta,
-                                                             deviates):
+def test_winprob_deviates_only_where_the_pot_share_separates(
+    replayed, monkeypatch, delta, deviates
+):
     """The deviation rule is `SlotAdvice.divergent` and not the raw pot-share argmax:
     inside simulation noise it keeps the expected-TD pick. Asserted in both directions,
     because the seam passing every other test here is also what a synonym for `optimizer`

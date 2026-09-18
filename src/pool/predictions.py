@@ -237,7 +237,8 @@ def pool_state(
     return rivals.PoolState(
         tuple(
             replace(_standing(row, spent, played, known), season_tds=banked.get(row.entrant_id, 0))
-            for row in board.rows if not row.is_me
+            for row in board.rows
+            if not row.is_me
         ),
         my_tds,
         finalized,
@@ -286,7 +287,8 @@ def _decision_outcomes(conn, season, week, at, members):
         if pick.week < week:
             # What I recorded is what I submitted, so it stands in for the report's copy.
             cells[(me, pick.week, pick.slot)] = (
-                "pending" if result.pending else "final", result.tds
+                "pending" if result.pending else "final",
+                result.tds,
             )
         elif not result.pending:
             fixed[(pick.week, pick.player_id)] = result.tds
@@ -476,8 +478,15 @@ def _eligible(records, kickoff, arrival):
 
 
 SCORED_COLUMNS = [
-    "week", "entrant_id", "display_name", "slot", "predictor",
-    "actual_player_id", "actual_player_name", "rank", "hit",
+    "week",
+    "entrant_id",
+    "display_name",
+    "slot",
+    "predictor",
+    "actual_player_id",
+    "actual_player_name",
+    "rank",
+    "hit",
 ]
 
 

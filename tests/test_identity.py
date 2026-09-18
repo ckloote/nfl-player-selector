@@ -76,8 +76,17 @@ def test_an_installed_copy_records_a_pick_outside_any_checkout(tmp_path):
     assert where.returncode == 0, where.stderr
     assert Path(where.stdout.strip()).parent == site / "pool", "the copy, not the checkout"
     result = run(
-        "-m", "pool.cli", "record", "--week", "1", "--rb", "AAA RB1",
-        "--season", str(SEASON), "--db", str(path),
+        "-m",
+        "pool.cli",
+        "record",
+        "--week",
+        "1",
+        "--rb",
+        "AAA RB1",
+        "--season",
+        str(SEASON),
+        "--db",
+        str(path),
     )
     assert result.returncode == 0, result.stdout + result.stderr
 

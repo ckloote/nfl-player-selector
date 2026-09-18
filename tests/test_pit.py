@@ -48,8 +48,10 @@ def test_the_commitment_stores_its_outcomes_and_reads_them_back(seeded):
     assert payload["schema_version"] == 2 and payload["draws_hash"]
     assert set(payload) >= {"seed", "sims", "surface_hash", "params", "week"}
     drawn = simulate.sample(
-        proj[proj.week.eq(1)].reset_index(drop=True), [1],
-        sims=payload["sims"], seed=payload["seed"],
+        proj[proj.week.eq(1)].reset_index(drop=True),
+        [1],
+        sims=payload["sims"],
+        seed=payload["seed"],
     )
     stored = pit._draws(conn, record)
     assert np.array_equal(stored.values, drawn.values) and stored.index == drawn.index
@@ -163,7 +165,9 @@ def test_the_jitter_seed_does_not_depend_on_this_process():
     elsewhere = [
         subprocess.run(
             [sys.executable, "-c", script],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
             env={"PYTHONHASHSEED": salt, "PATH": "/usr/bin:/bin"},
         ).stdout.strip()
         for salt in ("1", "12345")
@@ -182,14 +186,14 @@ def test_a_commitment_cannot_be_made_inside_an_open_transaction(seeded):
 UNUSED = datetime(2026, 9, 12, tzinfo=UTC)
 
 
-@pytest.mark.parametrize('deadline', ['kickoff', 'report'])
-@pytest.mark.parametrize('offset', [0, 1])
+@pytest.mark.parametrize("deadline", ["kickoff", "report"])
+@pytest.mark.parametrize("offset", [0, 1])
 def test_commitment_at_or_after_either_deadline_is_rejected(seeded, deadline, offset):
     from datetime import timedelta
 
     conn, _ = seeded
-    if deadline == 'report':
-        log._report(conn, 1, log.WEEK1, '2026-09-09T15:00:00+00:00')
+    if deadline == "report":
+        log._report(conn, 1, log.WEEK1, "2026-09-09T15:00:00+00:00")
         instant = datetime(2026, 9, 9, 15, tzinfo=UTC)
     else:
         instant = predictions.first_kickoff(conn, 2026, 1)
@@ -202,18 +206,20 @@ def test_commitment_at_or_after_either_deadline_is_rejected(seeded, deadline, of
 
 def test_only_latest_eligible_commitment_is_rebuilt(seeded, monkeypatch):
     conn, _ = seeded
-    for stamp, sims in [('2026-09-08T12:00:00+00:00', 10),
-                        ('2026-09-09T12:00:00+00:00', 20),
-                        ('2026-09-14T12:00:00+00:00', 30)]:
+    for stamp, sims in [
+        ("2026-09-08T12:00:00+00:00", 10),
+        ("2026-09-09T12:00:00+00:00", 20),
+        ("2026-09-14T12:00:00+00:00", 30),
+    ]:
         pit.commit(conn, 2026, 1, _proj(conn), observed_at=stamp, sims=sims)
     real = pit._draws
     seen = []
 
     def rebuild(conn, record):
-        seen.append(record['payload']['sims'])
+        seen.append(record["payload"]["sims"])
         return real(conn, record)
 
-    monkeypatch.setattr(pit, '_draws', rebuild)
+    monkeypatch.setattr(pit, "_draws", rebuild)
     scored, notes = pit.score(conn, 2026)
     assert len(scored) == 3
     assert seen == [20]
@@ -221,19 +227,20 @@ def test_only_latest_eligible_commitment_is_rebuilt(seeded, monkeypatch):
     assert len(pit.archived(conn, 2026)) == 3
 
 
-@pytest.mark.parametrize('missing', ['kickoff', 'report'])
+@pytest.mark.parametrize("missing", ["kickoff", "report"])
 def test_pit_requires_both_deadlines(seeded, missing):
     conn, _ = seeded
-    if missing == 'kickoff':
+    if missing == "kickoff":
         with conn:
-            conn.execute('UPDATE games SET kickoff_known = 0 WHERE season = 2026')
+            conn.execute("UPDATE games SET kickoff_known = 0 WHERE season = 2026")
     else:
         log._report(conn, 2, log.WEEK2, log.REPORT_AT)
         # Keep entrant picks but remove the archive arrival seam for this test.
-    pit.commit(conn, 2026, 1, _proj(conn), observed_at='2026-09-09T12:00:00+00:00')
-    if missing == 'report':
+    pit.commit(conn, 2026, 1, _proj(conn), observed_at="2026-09-09T12:00:00+00:00")
+    if missing == "report":
         from unittest.mock import patch
-        with patch.object(predictions, 'report_arrivals', return_value=({}, 0)):
+
+        with patch.object(predictions, "report_arrivals", return_value=({}, 0)):
             scored, notes = pit.score(conn, 2026)
     else:
         scored, notes = pit.score(conn, 2026)
@@ -243,11 +250,13 @@ def test_pit_requires_both_deadlines(seeded, missing):
 def test_pit_requires_every_slot_to_be_final():
     from types import SimpleNamespace
 
-    complete = [SimpleNamespace(slot=slot, status='final', player_id=slot, tds=0)
-                for slot in ('QB', 'RB', 'FLEX')]
-    assert pit._realised(complete) == (0, ['QB', 'RB', 'FLEX'])
+    complete = [
+        SimpleNamespace(slot=slot, status="final", player_id=slot, tds=0)
+        for slot in ("QB", "RB", "FLEX")
+    ]
+    assert pit._realised(complete) == (0, ["QB", "RB", "FLEX"])
     assert pit._realised(complete[:2]) is None
-    complete[-1].status = 'pending'
+    complete[-1].status = "pending"
     assert pit._realised(complete) is None
 
 
@@ -282,8 +291,13 @@ def _schema_one(conn, week=1, observed_at="2026-09-09T12:00:00+00:00"):
 
     proj = _proj(conn, week)
     payload = dict(
-        schema_version=1, season=2026, week=week, sims=config.WINPROB_SIMS,
-        seed=config.WINPROB_SEED, params=asdict(simulate.Params()), surface_hash=None,
+        schema_version=1,
+        season=2026,
+        week=week,
+        sims=config.WINPROB_SIMS,
+        seed=config.WINPROB_SEED,
+        params=asdict(simulate.Params()),
+        surface_hash=None,
     )
     with db.transaction(conn):
         payload["surface_hash"] = capture._store_surface(
@@ -292,9 +306,7 @@ def _schema_one(conn, week=1, observed_at="2026-09-09T12:00:00+00:00"):
     return predictions.archive(conn, 2026, week, payload, observed_at=observed_at, kind=pit.KIND)
 
 
-def test_a_commitment_made_before_outcomes_were_stored_is_frozen_on_first_read(
-    seeded, monkeypatch
-):
+def test_a_commitment_made_before_outcomes_were_stored_is_frozen_on_first_read(seeded, monkeypatch):
     """Drawn once from its seed, stored, and never drawn again. Scoring says so, and a
     sampler change after the freeze no longer reaches it."""
     conn, _ = seeded
@@ -348,16 +360,22 @@ def _every_branch():
     from tests.conftest import proj_row
 
     rows = [
-        ("qa1", "QB", 1.2, "A", "gA", "QB"), ("qa2", "QB", 0.3, "A", "gA", "QB"),
-        ("wa", "FLEX", 0.6, "A", "gA", "WR"), ("ta", "FLEX", 0.3, "A", "gA", "TE"),
-        ("ra", "RB", 0.5, "A", "gA", "RB"), ("wb", "FLEX", 0.5, "B", "gA", "WR"),
-        ("qc", "QB", 0.4, "C", "gC", "QB"), ("wc", "FLEX", 1.5, "C", "gC", "WR"),
+        ("qa1", "QB", 1.2, "A", "gA", "QB"),
+        ("qa2", "QB", 0.3, "A", "gA", "QB"),
+        ("wa", "FLEX", 0.6, "A", "gA", "WR"),
+        ("ta", "FLEX", 0.3, "A", "gA", "TE"),
+        ("ra", "RB", 0.5, "A", "gA", "RB"),
+        ("wb", "FLEX", 0.5, "B", "gA", "WR"),
+        ("qc", "QB", 0.4, "C", "gC", "QB"),
+        ("wc", "FLEX", 1.5, "C", "gC", "WR"),
         ("rd", "RB", 0.7, "D", "gC", "RB"),
     ]
-    return pd.DataFrame([
-        proj_row(pid, pid, slot, 1, lam, team=team, position=position) | {"game_id": game}
-        for pid, slot, lam, team, game, position in rows
-    ])
+    return pd.DataFrame(
+        [
+            proj_row(pid, pid, slot, 1, lam, team=team, position=position) | {"game_id": game}
+            for pid, slot, lam, team, game, position in rows
+        ]
+    )
 
 
 def test_the_sampler_output_is_pinned():

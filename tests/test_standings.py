@@ -341,8 +341,7 @@ def test_cli_provisional_tie_distinguishes_unresolved_names(pool, invoke):
     shown = invoke("standings")
     assert "as of week 1 (provisional)" in shown
     assert (
-        "As it stands Chris and Pat are tied for first with 2 TDs, with 1 unresolved name."
-        in shown
+        "As it stands Chris and Pat are tied for first with 2 TDs, with 1 unresolved name." in shown
     )
     assert "A tie at the end splits the winnings 1/2 each." in shown
     assert "each takes" not in shown and "leader" not in shown
@@ -483,14 +482,17 @@ def test_a_pick_with_no_game_waits_while_the_week_is_unfinished_then_scores_zero
     conn, _ = pool
     with conn:
         conn.execute("UPDATE pool_picks SET game_id = NULL WHERE entrant_id = 'pat'")
-        conn.execute("UPDATE game_results SET complete = 0, reason = 'no end-of-game marker' "
-                     "WHERE game_id = 'g2'")
+        conn.execute(
+            "UPDATE game_results SET complete = 0, reason = 'no end-of-game marker' "
+            "WHERE game_id = 'g2'"
+        )
     pat = next(p for p in standings.entrant_scores(conn, 2026) if p.entrant_id == "pat")
     assert pat.tds is None and pat.pending == "game unresolved" and pat.note == ""
 
     with conn:
-        conn.execute("UPDATE game_results SET complete = 1, reason = 'complete' "
-                     "WHERE game_id = 'g2'")
+        conn.execute(
+            "UPDATE game_results SET complete = 1, reason = 'complete' WHERE game_id = 'g2'"
+        )
     scored = [p for p in standings.entrant_scores(conn, 2026) if p.entrant_id == "pat"]
     assert all(p.tds == 0 and p.pending == "" for p in scored)
     assert [p.note for p in scored if p.player_name] == ["no game that week; scored zero"] * 2

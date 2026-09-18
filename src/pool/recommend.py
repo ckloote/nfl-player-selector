@@ -171,7 +171,12 @@ def advise_slot(
         raise ValueError("n_alternatives must be zero or more")
     now = state.eastern_now(now)
     plan = plan_slot(
-        proj, slot, week, used_ids, locked, discount=discount,
+        proj,
+        slot,
+        week,
+        used_ids,
+        locked,
+        discount=discount,
         unavailable=state.unavailable_cells(proj, week, now),
     )
     if week in locked:
@@ -343,10 +348,7 @@ def pot_shares(
         if not slot_advice.recommended:
             continue
         others = [
-            pick
-            for slot, picks in baseline.items()
-            if slot != slot_advice.slot
-            for pick in picks
+            pick for slot, picks in baseline.items() if slot != slot_advice.slot for pick in picks
         ]
         evaluated = {}
         candidates = slot_advice.candidates or [slot_advice.recommended, *slot_advice.alternatives]

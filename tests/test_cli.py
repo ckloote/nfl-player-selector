@@ -132,8 +132,17 @@ def test_a_winprob_backtest_prints_the_invented_rivals_caveat(tmp_path):
     path = _backtest_db(tmp_path)
     result = runner.invoke(
         app,
-        ["backtest", "--season", str(SEASON), "--strategy", "winprob,optimizer",
-         "--rivals", "3", "--db", str(path)],
+        [
+            "backtest",
+            "--season",
+            str(SEASON),
+            "--strategy",
+            "winprob,optimizer",
+            "--rivals",
+            "3",
+            "--db",
+            str(path),
+        ],
     )
     assert result.exit_code == 0, result.stdout
     assert "winprob" in result.stdout
@@ -149,8 +158,7 @@ def test_a_backtest_without_winprob_invents_nobody_and_says_nothing(tmp_path):
     path = _backtest_db(tmp_path)
     result = runner.invoke(
         app,
-        ["backtest", "--season", str(SEASON), "--strategy", "optimizer,greedy",
-         "--db", str(path)],
+        ["backtest", "--season", str(SEASON), "--strategy", "optimizer,greedy", "--db", str(path)],
     )
     assert result.exit_code == 0, result.stdout
     assert "invented" not in result.stdout

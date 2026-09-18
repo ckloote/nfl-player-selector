@@ -314,8 +314,7 @@ def resolve_pick_game(
 ) -> str | None:
     """Prefer this week's actual appearance to the game recorded with the pick."""
     stat = conn.execute(
-        "SELECT game_id, team FROM player_weeks "
-        "WHERE season = ? AND week = ? AND player_id = ?",
+        "SELECT game_id, team FROM player_weeks WHERE season = ? AND week = ? AND player_id = ?",
         (season, week, player_id),
     ).fetchone()
     gid = stat["game_id"] if stat else None

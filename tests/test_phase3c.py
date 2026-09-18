@@ -365,7 +365,11 @@ def test_a_decision_made_while_an_earlier_week_was_unfinished_reaches_parity(tmp
     assert result["ok"], result
     with pytest.raises(ValueError, match="Incomplete touchdown coverage"):
         P.load_frames(
-            conn, SEASON, 4, input_policy="snapshots", decision_at=DECISION,
+            conn,
+            SEASON,
+            4,
+            input_policy="snapshots",
+            decision_at=DECISION,
             require_complete=True,
         )
 

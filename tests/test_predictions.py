@@ -51,8 +51,13 @@ def _report(conn, week, picks, observed_at, me="Chris"):
         ]
     )
     result = entrants.import_report(
-        conn, 2026, week, frame.to_csv(index=False).encode(),
-        me=me, allow_roster_change=True, observed_at=observed_at,
+        conn,
+        2026,
+        week,
+        frame.to_csv(index=False).encode(),
+        me=me,
+        allow_roster_change=True,
+        observed_at=observed_at,
     )
     assert result.written, result.errors
     return result
@@ -74,8 +79,10 @@ def _proj():
 
 
 PLAYERS = [
-    ("q1", "Quarter One", "QB", "A"), ("q2", "Quarter Two", "QB", "A"),
-    ("r1", "Runner One", "RB", "A"), ("f1", "Flex One", "WR", "C"),
+    ("q1", "Quarter One", "QB", "A"),
+    ("q2", "Quarter Two", "QB", "A"),
+    ("r1", "Runner One", "RB", "A"),
+    ("f1", "Flex One", "WR", "C"),
     ("f2", "Flex Two", "TE", "A"),
 ]
 
@@ -90,10 +97,20 @@ def _history(conn):
             "position, team, opponent, pass_td, rush_td, rec_td, attempts, carries, targets) "
             "VALUES (2025, ?, 'REG', ?, ?, ?, ?, 'Z', ?, ?, ?, ?, ?, ?)",
             [
-                (week, pid, name, pos, team, *(
-                    (2, 0, 0, 30, 2, 0) if pos == "QB" else
-                    (0, 1, 0, 0, 15, 2) if pos == "RB" else (0, 0, 1, 0, 0, 8)
-                ))
+                (
+                    week,
+                    pid,
+                    name,
+                    pos,
+                    team,
+                    *(
+                        (2, 0, 0, 30, 2, 0)
+                        if pos == "QB"
+                        else (0, 1, 0, 0, 15, 2)
+                        if pos == "RB"
+                        else (0, 0, 1, 0, 0, 8)
+                    ),
+                )
                 for week in range(1, 10)
                 for pid, name, pos, team in PLAYERS
             ],
@@ -106,7 +123,8 @@ def _history(conn):
         )
         conn.executemany(
             "INSERT INTO rosters(season, week, player_id, player_name, position, team, status) "
-            "VALUES (2026, 2, ?, ?, ?, ?, 'ACT')", PLAYERS,
+            "VALUES (2026, 2, ?, ?, ?, ?, 'ACT')",
+            PLAYERS,
         )
 
 
@@ -226,9 +244,7 @@ def test_the_last_prediction_that_beat_both_deadlines_is_the_one_scored(pool):
     _record(conn, BEFORE_ALL)
     _record(conn, AFTER_KICKOFF)
     _report(conn, 2, WEEK2, REPORT_AT)
-    chosen, _ = predictions._eligible(
-        predictions.archived(conn, 2026), KICKOFF, REPORT_AT
-    )
+    chosen, _ = predictions._eligible(predictions.archived(conn, 2026), KICKOFF, REPORT_AT)
     assert datetime.fromisoformat(chosen["observed_at"]) == datetime.fromisoformat(BEFORE_ALL)
 
 
@@ -337,8 +353,13 @@ def _legacy_check(conn, week, observed_at):
     from pool import entrants
 
     observation = entrants.archive_report(
-        conn, 2026, week, f"draft {week} {observed_at}".encode(), source="draft.csv",
-        observed_at=observed_at, coverage=dict(parsed=False, format="csv"),
+        conn,
+        2026,
+        week,
+        f"draft {week} {observed_at}".encode(),
+        source="draft.csv",
+        observed_at=observed_at,
+        coverage=dict(parsed=False, format="csv"),
     )
     errors = [] if week else ["Give --week or include a week column in the report"]
     receipt = entrants.ImportResult(observation, 2026, week, check=True, errors=errors)

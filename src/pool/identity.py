@@ -174,6 +174,7 @@ def git_state() -> tuple[str | None, bool | None]:
     in: an installed copy sitting under some unrelated repository must not borrow that
     repository's revision.
     """
+
     def git(*args, cwd):
         return subprocess.run(
             ["git", *args], cwd=cwd, capture_output=True, text=True, check=True

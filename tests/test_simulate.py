@@ -175,8 +175,10 @@ def test_pairing_beats_independent_draws_on_the_difference(frame):
     Both candidates sit in a game neither rival touches, so the only thing linking them is
     the rivals' maximum -- which is exactly the mechanism being asserted."""
     contest = pd.concat(
-        [frame, pd.DataFrame([cell("wd", "FLEX", 0.9, "D", "g3"),
-                              cell("we", "FLEX", 0.8, "D", "g3")])],
+        [
+            frame,
+            pd.DataFrame([cell("wd", "FLEX", 0.9, "D", "g3"), cell("we", "FLEX", 0.8, "D", "g3")]),
+        ],
         ignore_index=True,
     )
     draws = simulate.sample(contest, [1], sims=40_000, seed=7)
@@ -197,5 +199,12 @@ def test_weeks_outside_the_horizon_are_not_sampled(frame):
 
 def test_simulate_reads_nothing_from_the_world():
     assert not _imports(simulate) & {
-        "sqlite3", "db", "entrants", "standings", "predictions", "os", "pathlib", "io"
+        "sqlite3",
+        "db",
+        "entrants",
+        "standings",
+        "predictions",
+        "os",
+        "pathlib",
+        "io",
     }

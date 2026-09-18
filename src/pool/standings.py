@@ -91,9 +91,7 @@ class Board:
         out of weeks, not when the weeks played so far happen to be fully scored.
         """
         return (
-            self.final
-            and self.season_weeks is not None
-            and (self.as_of or 0) >= self.season_weeks
+            self.final and self.season_weeks is not None and (self.as_of or 0) >= self.season_weeks
         )
 
     @property

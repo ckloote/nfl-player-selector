@@ -204,10 +204,10 @@ def clustered_se(values: np.ndarray, edges) -> float:
     if groups < 2:
         return float("inf")
     centered = values - values.mean()
-    sums = np.array([
-        centered[low:high].sum() for low, high in zip(edges[:-1], edges[1:], strict=True)
-    ])
-    return float(np.sqrt(groups / (groups - 1) * np.dot(sums, sums) / len(values)**2))
+    sums = np.array(
+        [centered[low:high].sum() for low, high in zip(edges[:-1], edges[1:], strict=True)]
+    )
+    return float(np.sqrt(groups / (groups - 1) * np.dot(sums, sums) / len(values) ** 2))
 
 
 def paired(a: np.ndarray, b: np.ndarray, edges=None) -> tuple[float, float]:
