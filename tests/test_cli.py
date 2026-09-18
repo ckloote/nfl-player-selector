@@ -116,6 +116,63 @@ def test_backtest_renders_a_summary_table(tmp_path):
         assert strategy in result.stdout
 
 
+def _backtest_db(tmp_path):
+    from tests.test_backtest import _seed
+
+    path = tmp_path / "bt.db"
+    _seed(db.connect(path)).close()
+    return path
+
+
+def test_a_winprob_backtest_prints_the_invented_rivals_caveat(tmp_path):
+    """Claim 25. The caveat goes under every table that has a finish column, not once in
+    the help text, because the table is what gets copied into a message."""
+    from tests.test_backtest import SEASON
+
+    path = _backtest_db(tmp_path)
+    result = runner.invoke(
+        app,
+        ["backtest", "--season", str(SEASON), "--strategy", "winprob,optimizer",
+         "--rivals", "3", "--db", str(path)],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "winprob" in result.stdout
+    assert "3 invented rivals picking greedy" in result.stdout
+    assert "not of the idea" in result.stdout
+    assert "Finish" in result.stdout
+    assert "Invented A" in result.stdout
+
+
+def test_a_backtest_without_winprob_invents_nobody_and_says_nothing(tmp_path):
+    from tests.test_backtest import SEASON
+
+    path = _backtest_db(tmp_path)
+    result = runner.invoke(
+        app,
+        ["backtest", "--season", str(SEASON), "--strategy", "optimizer,greedy",
+         "--db", str(path)],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "invented" not in result.stdout
+    assert "Finish" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [(["--rival-behaviour", "telepathic"], "telepathic"), (["--rivals", "0"], "at least one")],
+)
+def test_a_bad_invented_field_is_named_rather_than_crashing(tmp_path, args, expected):
+    from tests.test_backtest import SEASON
+
+    path = _backtest_db(tmp_path)
+    result = runner.invoke(
+        app,
+        ["backtest", "--season", str(SEASON), "--strategy", "winprob", "--db", str(path), *args],
+    )
+    assert result.exit_code == 1
+    assert expected in result.stdout
+
+
 def test_sweep_renders_the_grid_and_warns_about_noise(tmp_path):
     from tests.test_backtest import SEASON, _seed
 

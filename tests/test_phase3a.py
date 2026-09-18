@@ -1018,7 +1018,9 @@ DECISION_SOURCES = [
     "src/pool/optimizer.py",
     "src/pool/projections.py",
     "src/pool/recommend.py",
+    "src/pool/rivals.py",
     "src/pool/scoring.py",
+    "src/pool/simulate.py",
     "src/pool/snapshots.py",
     "src/pool/state.py",
     "uv.lock",
@@ -1036,7 +1038,7 @@ def test_the_enforced_fingerprint_covers_the_decision_path_and_only_that():
     # The readers, the CLI and the research harness describe decisions; they do not make
     # them, and the record keeps their hashes without enforcing them.
     outside = {
-        "standings", "cli", "ingest", "entrants", "diagnostics",
+        "standings", "predictions", "cli", "ingest", "entrants", "diagnostics",
         "prospective", "capture", "benchmark",
     }
     assert not outside & {Path(p).stem for p in DECISION_SOURCES}

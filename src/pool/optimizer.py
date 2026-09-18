@@ -129,14 +129,26 @@ def plan_slot(
     return SlotPlan(slot, weeks, players, values, raw, assignment, total)
 
 
-def forced_total(plan: SlotPlan, row: int, week: int) -> float:
-    """Plan value if `row` is forced into `week` and the rest re-optimized."""
+def forced_plan(plan: SlotPlan, row: int, week: int) -> tuple[float, dict[int, int]]:
+    """Plan value *and* the week-to-row assignment if `row` is forced into `week`.
+
+    The assignment is what a policy scoring whole seasons needs: spending a player now
+    changes which players the remaining weeks get, and a total alone cannot say which.
+    Row indices are mapped back out of the reduced problem so they index `plan.players`.
+    """
     col = plan.weeks.index(week)
     v = plan.values[row, col]
     if v <= FORBIDDEN / 2:
-        return float("-inf")
+        return float("-inf"), {}
     keep_rows = [r for r in range(plan.values.shape[0]) if r != row]
     keep_cols = [c for c in range(len(plan.weeks)) if c != col]
     sub = plan.values[np.ix_(keep_rows, keep_cols)]
-    _, rest = solve(sub, [plan.weeks[c] for c in keep_cols])
-    return float(v) + rest
+    assignment, rest = solve(sub, [plan.weeks[c] for c in keep_cols])
+    mapped = {w: keep_rows[r] for w, r in assignment.items()}
+    mapped[week] = row
+    return float(v) + rest, mapped
+
+
+def forced_total(plan: SlotPlan, row: int, week: int) -> float:
+    """Plan value if `row` is forced into `week` and the rest re-optimized."""
+    return forced_plan(plan, row, week)[0]

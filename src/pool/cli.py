@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -22,22 +23,30 @@ from . import (
     freshness,
     ingest,
     models,
+    pit,
+    predictions,
     projections,
     prospective,
     scoring,
+    simulate,
     snapshots,
     state,
 )
 from . import evaluate as ev
 from . import standings as st
 from .optimizer import plan_slot
-from .recommend import Candidate, SlotAdvice, advise_week
+from .recommend import Candidate, SlotAdvice, advise_week, pot_shares
 
 app = typer.Typer(help="NFL touchdown pool decision support.", no_args_is_help=True)
 report_app = typer.Typer(
     help="Archive and read official weekly pool reports.", no_args_is_help=True
 )
 app.add_typer(report_app, name="report")
+predict_app = typer.Typer(
+    help="Predict rival picks before a week can be seen, and score the record.",
+    no_args_is_help=True,
+)
+app.add_typer(predict_app, name="predict")
 console = Console()
 
 SeasonOpt = typer.Option(config.DEFAULT_SEASON, "--season", "-s", help="Season year")
@@ -283,6 +292,170 @@ def report_list(season: int = SeasonOpt, db_path: Path | None = DbOpt):
     console.print(table)
 
 
+def _used_cell(block: dict) -> str:
+    unknown = block["unknown"]
+    return str(len(block["used"])) + (f" + {unknown} unknown" if unknown else "")
+
+
+@predict_app.command("record")
+def predict_record(
+    week: int | None = WeekOpt,
+    season: int = SeasonOpt,
+    db_path: Path | None = DbOpt,
+    write: bool = typer.Option(True, "--record/--dry-run", help="Archive it, or only show it"),
+):
+    """Predict every rival's picks for a week and archive it before the week can be seen.
+
+    Exits non-zero when the prediction will not be scorable -- the archive still happens,
+    because a record that cannot be scored is still evidence, but a scripted run has to be
+    told that this week's observation was lost.
+    """
+    conn = _conn(db_path)
+    try:
+        wk = _week(conn, season, week)
+        now = datetime.now(UTC)
+        kickoff = predictions.first_kickoff(conn, season, wk)
+        arrivals, _ = predictions.report_arrivals(conn, season)
+        arrival = arrivals.get(wk)
+        late = []
+        if kickoff is None:
+            late.append(f"week {wk} has no confirmed kickoff")
+        elif now >= kickoff:
+            late.append(f"week {wk} kicked off at {kickoff.isoformat(timespec='minutes')}")
+        if arrival is not None:
+            late.append(f"week {wk}'s report already arrived at {arrival}")
+        proj = _projections(conn, season, wk)
+        payload = predictions.predict(conn, season, wk, proj)
+        if not payload["rivals"]:
+            console.print(
+                f"No rivals to predict for {season}. Run pool report import first."
+            )
+            raise typer.Exit(1)
+        observation = predictions.archive(conn, season, wk, payload) if write else None
+        # The same act: what the model says before the week can be seen. The picks are one
+        # claim about these five people, the distribution behind their totals is another,
+        # and both expire at the same kickoff.
+        committed = pit.commit(conn, season, wk, proj) if write else None
+    finally:
+        conn.close()
+    table = Table(
+        "Rival", "Slot", *predictions.rivals.PREDICTORS, "Remaining", "Used",
+        title=f"Predicted rival picks \u2014 {season}, week {wk}",
+    )
+    for block in payload["rivals"].values():
+        for slot, byname in block["slots"].items():
+            table.add_row(
+                block["display_name"], slot,
+                *(byname[name][0]["player_name"] if byname.get(name) else "\u2014"
+                  for name in predictions.rivals.PREDICTORS),
+                str(block["remaining"].get(slot, "\u2014")),
+                _used_cell(block),
+            )
+    console.print(table)
+    console.print(
+        f"Top {payload['top_n']} kept per predictor; the full rankings are in the archive, "
+        "not in this table."
+    )
+    if observation is not None:
+        console.print(f"Archived prediction as observation {observation}.")
+        console.print(
+            f"Committed week {wk}'s implied distribution as observation {committed} "
+            f"({config.WINPROB_SIMS} draws, seed {config.WINPROB_SEED})."
+        )
+    else:
+        console.print("[yellow]Dry run: nothing archived.[/yellow]")
+    if late:
+        console.print(
+            "[red]This prediction will not be scorable: " + "; ".join(late) + ".[/red]"
+        )
+        console.print(
+            "A prediction counts only if it was archived before the week's first kickoff "
+            "and before its report. Both deadlines are checked against the archive."
+        )
+        raise typer.Exit(1)
+
+
+def _rate_table(frame, title: str, first: str) -> Table:
+    table = Table(first, "Predictor", "Scored", "Hits", "Hit rate", "In top N", title=title)
+    for row in frame.itertuples():
+        table.add_row(
+            str(getattr(row, first.lower().replace(" ", "_"), "")), row.predictor,
+            str(int(row.n)), str(int(row.hits)), f"{row.hit_rate:.0%}", f"{row.in_top_n:.0%}",
+        )
+    return table
+
+
+@predict_app.command("score")
+def predict_score(season: int = SeasonOpt, db_path: Path | None = DbOpt):
+    """Score archived predictions against the picks entrants actually made."""
+    conn = _conn(db_path)
+    try:
+        scored, notes = predictions.score(conn, season)
+    finally:
+        conn.close()
+    if scored.empty:
+        console.print(f"No scorable predictions for {season}.")
+    else:
+        overall = predictions.hit_rates(scored)
+        table = Table("Predictor", "Scored", "Hits", "Hit rate", "In top N",
+                      title=f"Rival-pick prediction accuracy \u2014 {season}")
+        for row in overall.itertuples():
+            table.add_row(row.predictor, str(int(row.n)), str(int(row.hits)),
+                          f"{row.hit_rate:.0%}", f"{row.in_top_n:.0%}")
+        console.print(table)
+        console.print(_rate_table(predictions.hit_rates(scored, "slot"), "By slot", "Slot"))
+        console.print(
+            _rate_table(predictions.hit_rates(scored, "display_name"), "By rival", "Display name")
+        )
+        ranks = Table("Predictor", "Rank of the actual pick", "Count",
+                      title="Where the actual pick landed")
+        for (name, rank), n in scored.groupby(
+            ["predictor", scored["rank"].astype("Int64")], dropna=False
+        ).size().items():
+            ranks.add_row(name, "outside top N" if pd.isna(rank) else str(int(rank)), str(int(n)))
+        console.print(ranks)
+        console.print(
+            "Hit rate is the share of rival slot-weeks whose actual pick the predictor "
+            "ranked first. Totals are picks, not touchdowns."
+        )
+    for note in notes:
+        where = "" if note["week"] is None else f"Week {note['week']}: "
+        console.print(f"[yellow]{where}{note['reason']}[/yellow]", markup=False)
+    _print_pit(conn_path=db_path, season=season)
+
+
+def _print_pit(conn_path, season: int) -> None:
+    """The other claim on the same feed: where realised weekly totals fell in the model.
+
+    Reported without a verdict. Eighty-five draws over a full season is not enough to test
+    uniformity with any power, so a pass/fail printed off a part-season would be a coin
+    flip wearing a conclusion. The lean is the readable part: mass at the top means the
+    model is under-predicting the players these five actually pick.
+    """
+    conn = _conn(conn_path)
+    try:
+        scored, notes = pit.score(conn, season)
+    finally:
+        conn.close()
+    if scored.empty:
+        console.print(f"[dim]No scorable weekly distributions for {season} yet.[/dim]")
+    else:
+        table = Table(
+            "Bin", "Count", "Expected if flat",
+            title=f"Where realised weekly totals fell — {season} ({len(scored)} draws)",
+        )
+        for row in pit.uniformity(scored).itertuples():
+            table.add_row(f"{row.low:.1f}-{row.high:.1f}", str(row.count), f"{row.expected:.1f}")
+        console.print(table)
+        console.print(
+            "Committed before each kickoff as a seed and a frame hash, so the distribution "
+            "could not have been chosen to fit. No pass or fail: a season is too few draws "
+            "to test uniformity, and the lean is what is worth reading."
+        )
+    for note in notes:
+        console.print(f"[dim]Week {note['week']}: {note['reason']}[/dim]", markup=False)
+
+
 @app.command()
 def standings(
     week: int | None = typer.Option(None, "--week", "-w", help="Week (default: latest imported)"),
@@ -465,6 +638,9 @@ def recommend(
     capture_decision: bool = typer.Option(
         True, "--capture/--no-capture", help="Record this decision's inputs, surface and advice"
     ),
+    sensitivity: bool = typer.Option(
+        False, "--sensitivity", help="Re-rank across the stress range of the fitted knobs"
+    ),
 ):
     """Recommend picks for every open slot this week."""
     conn = _conn(db_path)
@@ -483,18 +659,27 @@ def recommend(
         wk = _week(conn, season, week, now)
         proj = _projections(conn, season, wk)
         used, locked = state.used_ids(conn, season), state.locked_by_slot(conn, season)
-        advice = advise_week(proj, wk, used, locked, now=now)
+        # Read here, on this side of the closure, and handed across as plain data. With no
+        # reports imported this is empty and `advise_week` gives exactly the advice it
+        # always has -- the second objective is additive and never edits the first.
+        pool = predictions.pool_state(conn, season, wk, at=decided)
+        advice = advise_week(proj, wk, used, locked, now=now, pool=pool)
         decision_id = None
         if capture_decision:
             decision_id = capture.record_decision(
-                conn, season, wk, proj, advice, used, locked, decision_at=decided
+                conn, season, wk, proj, advice, used, locked, decision_at=decided, pool=pool
             )
         # Read inside the snapshot too: a data-age line or a pick name drawn from a
         # feed the advice never saw would describe a decision that was not made.
         freshness_rows, freshness_warnings = freshness.report(conn, season, wk, now)
         recorded_names = state.picks(conn, season).set_index("player_id").player_name.to_dict()
+        nudge = _prediction_nudge(conn, season, wk, decided)
+        # Inside the snapshot, on the same frame the advice was derived from. A sweep run
+        # against a later forecast would describe the stability of a different decision.
+        sweep = _sensitivity(proj, wk, advice, pool, locked) if sensitivity and pool else None
     console.print(f"[bold]Week {wk} — {season}[/bold]")
     _print_freshness(freshness_rows, freshness_warnings)
+    _print_pool(pool, season, nudge)
     if decision_id:
         # Printed so the submission can name it. With two decisions in a week the
         # fallback link -- the most recent advice for the slot -- is whichever happened
@@ -503,10 +688,12 @@ def recommend(
     for a in advice:
         if a.locked_player in recorded_names:
             a.locked_player = recorded_names[a.locked_player]
-        _render_slot(a)
+        _render_slot(a, pool)
+    if sweep is not None:
+        _print_sensitivity(sweep)
 
 
-def _render_slot(a: SlotAdvice) -> None:
+def _render_slot(a: SlotAdvice, pool=None) -> None:
     console.rule(f"[bold]{a.slot}[/bold]")
     if a.locked_player:
         console.print(f"  Locked: [green]{a.locked_player}[/green]")
@@ -522,7 +709,10 @@ def _render_slot(a: SlotAdvice) -> None:
     console.print(
         f"  [bold green]PICK: {r.player_name}[/bold green] ({r.team} {r.position}) — {_matchup(r)}"
     )
-    console.print(f"  Expected TDs {r.lam:.2f} · deadline {_fmt_dt(r.deadline)}")
+    shares = {s.player_id: s for s in a.shares}
+    own = shares.get(r.player_id)
+    share = f" · pot share {own.share:.1%} ± {own.se:.1%}" if own else ""
+    console.print(f"  Expected TDs {r.lam:.2f}{share} · deadline {_fmt_dt(r.deadline)}")
     if r.early:
         if a.hold and a.hold_alternative:
             h = a.hold_alternative
@@ -537,20 +727,269 @@ def _render_slot(a: SlotAdvice) -> None:
                 f"  [cyan]COMMIT:[/cyan] plays early, but the edge over {h.player_name} "
                 f"({h.cost:.2f} TD) beats the information premium ({config.INFO_PREMIUM_TD:.2f})."
             )
+    columns = ["Alternative", "Matchup", "xTD", "Season cost"]
+    if a.shares:
+        columns += ["Pot share", "vs EV"]
+    columns += ["Plan uses in", "Deadline", "Note"]
     t = Table(show_header=True, header_style="dim", box=None, padding=(0, 1))
-    for col in ("Alternative", "Matchup", "xTD", "Season cost", "Plan uses in", "Deadline", "Note"):
+    for col in columns:
         t.add_column(col)
     for c in a.alternatives:
-        t.add_row(
+        cells = [
             f"{c.player_name} ({c.team})",
             _matchup(c),
             f"{c.lam:.2f}",
             f"-{c.cost:.2f}",
+        ]
+        if a.shares:
+            cells += _share_cells(shares.get(c.player_id))
+        cells += [
             f"wk {c.planned_week}" if c.planned_week else "—",
             _fmt_dt(c.deadline),
             _note(c),
-        )
+        ]
+        t.add_row(*cells)
     console.print(t)
+    _share_notes(a, pool)
+
+
+def _sensitivity(proj, wk: int, advice, pool, locked) -> pd.DataFrame:
+    """Re-rank this week's candidates across the stress range of the two fitted knobs.
+
+    `k_game` sets how much one game moves both its teams together and was fitted on a
+    cross-team covariance; the rival-noise parameter is frankly provisional and says so
+    where it is defined. Neither is measured well enough to be load-bearing, so the useful
+    question is not what they are but whether the answer needs them.
+
+    Only the pot-share view is re-run. The expected-TD advice does not read either knob, so
+    re-deriving it would cost the same again to produce the same table.
+    """
+    rows = []
+    for k in config.SENSITIVITY_K_GAME:
+        for noise in config.SENSITIVITY_NOISE:
+            trial = [copy.copy(a) for a in advice]
+            with config.override(RIVAL_NOISE_TOP_N=noise):
+                pot_shares(proj, wk, trial, pool, locked, params=simulate.Params(k_game=k))
+            for a in trial:
+                best = a.best_share
+                if best is None:
+                    continue
+                rows.append(
+                    dict(
+                        slot=a.slot,
+                        k_game=k,
+                        noise=noise,
+                        player_id=best.player_id,
+                        player_name=best.player_name,
+                        share=best.share,
+                        tied=best.tied,
+                    )
+                )
+    return pd.DataFrame(rows)
+
+
+def _print_sensitivity(frame: pd.DataFrame) -> None:
+    if frame.empty:
+        console.print("[dim]Nothing to sweep: no pot-share view for this week.[/dim]")
+        return
+    table = Table(
+        "Slot", "Where the two objectives part", "Cells", "Verdict",
+        title="Sensitivity to k_game and rival noise",
+    )
+    for slot, block in frame.groupby("slot", sort=False):
+        # Only a cell where the pot share *clears the noise band* is a cell where the two
+        # objectives actually disagree. Reading the raw argmax instead would report a slot
+        # whose candidates are all statistically tied as wildly parameter-sensitive, when
+        # what is moving between settings is the coin, not the knob.
+        parting = block[~block.tied]
+        winners = sorted(set(parting.player_name))
+        if parting.empty:
+            where, verdict = "nowhere", "[green]agrees with expected TDs at every setting[/green]"
+        elif len(winners) > 1:
+            # Different settings name different players. Nothing here picks between them,
+            # and quoting whichever the fitted cell happened to give would present a choice
+            # of constant as a finding.
+            where = ", ".join(winners)
+            verdict = "[yellow]undetermined: follow expected TDs[/yellow]"
+        elif len(parting) == len(block):
+            where, verdict = winners[0], "[green]stable: separates at every setting[/green]"
+        else:
+            # One name wherever it separates, inside the noise band elsewhere. That is a
+            # consistent answer of uncertain strength, which is not the same thing as a
+            # contradictory one, and collapsing the two would lose the distinction that
+            # matters: whether to act, or which way.
+            where = winners[0]
+            verdict = (
+                f"[cyan]consistent, weak: separates in {len(parting)} of {len(block)} "
+                "settings and never the other way[/cyan]"
+            )
+        table.add_row(slot, where, str(len(block)), verdict)
+    console.print(table)
+    console.print(
+        f"k_game over {list(config.SENSITIVITY_K_GAME)} and rival noise over "
+        f"{list(config.SENSITIVITY_NOISE)}. A declared stress range, not a fitted interval: "
+        "the calibration gives k_game a point estimate and no uncertainty, so this brackets "
+        "it rather than quoting one."
+    )
+
+
+def _share_cells(s) -> list[str]:
+    """A candidate's share, and its difference from the expected-TD pick's.
+
+    A difference inside the noise band prints as "tied" rather than as a number with a
+    sign. Printing ±0.1% there would invite reading an ordering into it, and the whole
+    point of the paired draws is to know when there is not one.
+    """
+    if s is None:
+        return ["—", "—"]
+    if s.tied:
+        return [f"{s.share:.1%}", "[dim]tied[/dim]"]
+    colour = "green" if s.delta > 0 else "dim"
+    return [f"{s.share:.1%}", f"[{colour}]{s.delta:+.1%}[/{colour}]"]
+
+
+def _prediction_nudge(conn, season: int, wk: int, at: datetime) -> str | None:
+    """The prediction deadline, as a reminder, at the only moment it can still be met.
+
+    Silent once the week is observable. A nudge to record a prediction for a week that has
+    kicked off or whose report has landed is not a reminder, it is an invitation to file a
+    record that `predictions.score` will correctly refuse to score.
+
+    `at` is the decision's own instant rather than a fresh clock read, for the reason
+    `state.decision_instant` exists: one command that reads the clock twice can print a
+    deadline reminder that contradicts the advice printed above it.
+    """
+    kickoff = predictions.first_kickoff(conn, season, wk)
+    if kickoff is None or at >= kickoff:
+        return None
+    arrivals, _ = predictions.report_arrivals(conn, season)
+    if arrivals.get(wk) or any(r["week"] == wk for r in predictions.archived(conn, season)):
+        return None
+    return (
+        f"No rival-pick prediction on record for week {wk}. Run `pool predict record "
+        f"--week {wk}` before {kickoff.isoformat(timespec='minutes')}; after kickoff the "
+        "week can be seen and the record can no longer be made."
+    )
+
+
+def _print_pool(pool, season: int, nudge: str | None) -> None:
+    if not pool:
+        console.print(
+            f"[dim]No rivals on record for {season}, so there is no pot-share view. "
+            "Run `pool report import` to turn it on.[/dim]"
+        )
+    else:
+        leader = max(pool.rivals, key=lambda r: r.season_tds)
+        blind = sorted({w for r in pool.rivals for w in r.missing_weeks})
+        unresolved = [r.display_name for r in pool.rivals if r.unknown]
+        console.print(
+            f"[dim]Pot share vs {len(pool.rivals)} rivals: you {pool.my_tds} TD, "
+            f"best rival {leader.display_name} {leader.season_tds}. "
+            f"{config.WINPROB_SIMS} paired simulations, seed {config.WINPROB_SEED}.[/dim]"
+        )
+        # Both of these overstate what rivals have left, and so overstate what the
+        # simulation lets them score: a player they have already spent is free to be
+        # spent again. Said out loud, because a share printed to one decimal place does
+        # not otherwise look like a number computed against the wrong opposition.
+        if blind:
+            console.print(
+                f"[yellow]Week{'s' if len(blind) > 1 else ''} "
+                f"{', '.join(str(w) for w in blind)} {'have' if len(blind) > 1 else 'has'} "
+                "been played and never reported: every rival's remaining pool is overstated "
+                "by three players a week. Run `pool report import`.[/yellow]"
+            )
+        if unresolved:
+            console.print(
+                f"[yellow]Unresolved names in {', '.join(unresolved)}'s reports: their "
+                "remaining pool is overstated, and so is what this expects them to "
+                "score.[/yellow]"
+            )
+    if nudge:
+        console.print(f"[yellow]{nudge}[/yellow]")
+
+
+def _who(pairs, limit: int = 2) -> str:
+    names = [name for name, _ in pairs]
+    if len(names) <= limit:
+        return " and ".join(names)
+    return f"{', '.join(names[:limit])} and {len(names) - limit} more"
+
+
+def _standing(pool) -> str:
+    lead = pool.my_tds - max(r.season_tds for r in pool.rivals)
+    if lead > 0:
+        return f"You lead by {lead}"
+    if lead < 0:
+        return f"You are {-lead} behind the leader"
+    return "You are level with the leader"
+
+
+def _divergence(a: SlotAdvice, pool) -> str | None:
+    """Why the two objectives named different players, in the terms the policy used.
+
+    None when nothing here can say why. That is reported as a defect rather than dressed
+    up: a divergence with no statable reason is advice nobody can check, and the failure
+    is in the explanation or the policy, never in the reader.
+    """
+    ev, best = a.recommended, a.best_share
+    alt = next((c for c in (a.candidates or a.alternatives) if c.player_id == best.player_id), None)
+    trade = f"{best.delta:+.1%} share for {alt.cost:.2f} expected TDs" if alt else "no season cost"
+    mine = a.contested.get(ev.player_id, ())
+    theirs = a.contested.get(best.player_id, ())
+    weight, other = sum(p for _, p in mine), sum(p for _, p in theirs)
+    if weight > other:
+        return (
+            f"Differentiating: {_who(mine)} may take {ev.player_name} this week; "
+            f"{best.player_name} is further down their lists. Holding a player a rival holds "
+            f"ties your season to theirs, and a tie for first splits the pot. "
+            f"{_standing(pool)}. Buys {trade}."
+        )
+    if other > weight:
+        return (
+            f"Mirroring: {_who(theirs)} may take {best.player_name} this week; "
+            f"{ev.player_name} is further down their lists. Moving with the field narrows "
+            f"the gap it can open on you. {_standing(pool)}. Buys {trade}."
+        )
+    if pool.my_tds != max(r.season_tds for r in pool.rivals):
+        return (
+            f"{_standing(pool)}, and no rival is more likely to take one of these two than "
+            f"the other. What is left is the shape of the seasons rather than their means: "
+            f"finishing first is not the same target as scoring most. Buys {trade}."
+        )
+    return None
+
+
+def _share_notes(a: SlotAdvice, pool) -> None:
+    best = a.best_share
+    # Without the opposition there is no second objective to comment on, and every
+    # sentence below reads the standings. `_render_slot` defaults `pool` to None so it
+    # stays callable on its own, so this cannot assume the two arrived together.
+    if best is None or a.recommended is None or not pool:
+        return
+    if best.se == 0 and all(s.share == best.share for s in a.shares):
+        console.print(
+            f"  [dim]Every remaining line gives the same {best.share:.0%} share: the season "
+            "is decided here and nothing in this slot changes it.[/dim]"
+        )
+        return
+    if a.divergent:
+        reason = _divergence(a, pool)
+        if reason:
+            console.print(f"  [magenta]SHARE:[/magenta] {reason}")
+        else:
+            console.print(
+                f"  [red]Pot share prefers {best.player_name} over "
+                f"{a.recommended.player_name} and this tool cannot say why. Treat that as a "
+                "bug report, not as advice, and pick on expected TDs.[/red]"
+            )
+        return
+    if all(s.tied or s.player_id == a.recommended.player_id for s in a.shares):
+        band = config.WINPROB_SIGNIFICANCE * max((s.delta_se for s in a.shares), default=0.0)
+        console.print(
+            f"  [dim]No alternative separates from {a.recommended.player_name} by more than "
+            f"simulation noise (±{band:.1%} over {a.sims} draws); the two objectives agree "
+            "here.[/dim]"
+        )
 
 
 def _matchup(c: Candidate) -> str:
@@ -934,7 +1373,11 @@ def backtest(
         "optimizer,greedy,random,hindsight", "--strategy", help="Comma-separated strategies"
     ),
     trials: int = typer.Option(config.RANDOM_TRIALS, help="Trials for the random baseline"),
-    seed: int = typer.Option(0, help="Seed for the random baseline"),
+    seed: int = typer.Option(0, help="Seed for the random baseline and the invented rivals"),
+    rivals: int = typer.Option(4, help="Invented rivals the winprob strategy plays against"),
+    rival_behaviour: str = typer.Option(
+        "greedy", help="How the invented rivals pick: greedy, naive or optimizer"
+    ),
     discount: float | None = typer.Option(None, help="Override FUTURE_DISCOUNT"),
     prior_weight: float | None = typer.Option(None, help="Override PRIOR_WEIGHT_GAMES"),
     role_source: str | None = RoleSourceOpt,
@@ -961,6 +1404,16 @@ def backtest(
         known = [*bt.STRATEGIES, "hindsight"]
         console.print(f"[red]Unknown strategy {unknown[0]!r}; choose from {known}.[/red]")
         raise typer.Exit(1)
+    # Built only when something asks for it, so an ordinary replay stays an ordinary
+    # replay: the invented rivals cost a greedy rollout a week and, more to the point,
+    # put a caveat under a table that does not need one.
+    field = None
+    if set(names) & bt.NEEDS_RIVALS:
+        try:
+            field = bt.Field(count=rivals, behaviour=rival_behaviour, seed=seed)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from None
 
     deltas: list[float] = []
     overrides = {} if prior_weight is None else {"PRIOR_WEIGHT_GAMES": prior_weight}
@@ -980,6 +1433,7 @@ def backtest(
                 input_policy=input_policy,
                 decision_times=times,
                 builder=builder,
+                against=field,
             )
         _render_input_provenance(rows[0].input_provenance)
         by_name = {r.strategy: r for r in rows}
@@ -1003,7 +1457,8 @@ def backtest(
 
 
 def _render_backtest(season: int, weeks: list[int], rows, base: float | None, ceiling: float):
-    t = Table(
+    against = next((r.against for r in rows if r.against), None)
+    columns = [
         "Strategy",
         "TDs",
         "vs greedy",
@@ -1012,6 +1467,10 @@ def _render_backtest(season: int, weeks: list[int], rows, base: float | None, ce
         "Proj/act",
         "Zero picks",
         "% ceiling",
+    ]
+    t = Table(
+        *columns,
+        *(["Finish"] if against else []),
         title=f"Backtest {season} (weeks {weeks[0]}-{weeks[-1]})",
     )
     for r in rows:
@@ -1027,11 +1486,35 @@ def _render_backtest(season: int, weeks: list[int], rows, base: float | None, ce
             ratio,
             f"{r.zero_picks}/{len(r.picks)}",
             f"{100 * r.total / ceiling:.0f}%" if ceiling else "—",
+            *([r.finish or "—"] if against else []),
         )
     console.print(t)
+    if against:
+        _render_invented(rows, against)
+
+
+def _render_invented(rows, against: str) -> None:
+    """The caveat the finish column cannot be read without.
+
+    Printed under every table that has one, not once per session and not in the help
+    text, because the row is what gets copied into a message to somebody.
+    """
+    standing = next((r.standing for r in rows if r.standing), ())
+    console.print(f"[yellow]Against {against}. {bt.INVENTED}.[/yellow]")
+    console.print(
+        "  They finished " + ", ".join(f"{name} {tds:.0f}" for name, tds in standing) + "."
+    )
+    console.print(
+        "  Read [bold]winprob[/bold] on the finish column and not on TDs: giving up a "
+        "touchdown for a larger share of the pot is the whole of what it does, so it is "
+        "meant to lose the other one. And a season is a single trial — a finish here, "
+        "or fifteen of them, settles nothing about the policy either way."
+    )
 
 
 def _render_picks(summary) -> None:
+    if summary.against:
+        console.print(f"[yellow]Against {summary.against}.[/yellow]")
     t = Table(
         "Week",
         "Slot",

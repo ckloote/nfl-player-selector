@@ -8,7 +8,13 @@ and separate parse metadata.
 
 **Stage 2 implemented:** 2026-09-15, following the refined
 [stage 2 plan](PHASE4_STAGE2_PLAN.md): shared scoring, computed standings, ties,
-and independent used pools. Stage 3 remains planned.
+and independent used pools.
+
+**Stage 3 implemented:** 2026-09-17, following the refined
+[stage 3 plan](PHASE4_STAGE3_PLAN.md): a prediction log, a calibrated simulator, the
+pot-share policy beside the expected-TD advice, and the prospective checks that are the
+only evidence this stage can ever accrue. The sections below are annotated where building
+it proved something in them wrong.
 
 **Corrected:** 2026-09-13. Reports do not wait for a week to resolve. The person running
 the pool sends them by hand: sometimes before a week's games have finished, and always
@@ -180,6 +186,16 @@ no standings or opponent state. Widening it is part of this stage, and it touche
 `backtest.py` and `recommend.py`; the latter is inside the enforced fingerprint, which is
 correct, because this genuinely changes what a decision is.
 
+> **Implemented, and this paragraph was wrong about the easy part.** Widening the
+> *signature* is free; widening the *unit of decision* is not. A pot share is a property of
+> a season and not of a slot — the policy values a candidate by re-solving the other two
+> slots around it — so a per-slot chooser cannot express it at all. `pick_winprob` decides
+> the whole week once and serves each slot from that one decision. And the rivals a
+> historical replay plays against are not merely invented: by default they are invented
+> under the *same* hypothesis the policy assumes when it values a candidate, so the replay
+> is the policy's best case rather than a neutral one. `--rival-behaviour` runs the
+> mis-specified case, and the gap between the two is the only reading there worth anything.
+
 ### The part that cannot be finessed
 
 **A season is one Bernoulli trial.** You win the pool, share it, or do not. No season, and
@@ -193,16 +209,25 @@ machinery, not of the idea.
 
 What *can* be established, and what stage 3 should be judged on:
 
-| Claim | How it is checked |
-|---|---|
-| The simulator is calibrated | Simulated player-week touchdown frequencies against 15 seasons of observed ones, including the conditional tails, not just the mean |
-| The opponent model predicts picks | Hit rate against the picks entrants actually made, once stage 1 has weeks of them |
-| The policy behaves as intended | In simulation: takes variance when behind, sheds it when ahead, and converges on the expected-TD pick when the standings are level |
-| The advantage exists in the model | Expected share of the pot under win-max against the same under TD-max, **inside the simulator** |
+| Claim | How it is checked | Outcome |
+|---|---|---|
+| The simulator is calibrated | Simulated player-week touchdown frequencies against 15 seasons of observed ones, including the conditional tails, not just the mean | [Reported pass and fail](../experiments/results/phase4-simulator/CALIBRATION.md): spread within 2.9%, tail shape passes once the shipped model's calibration tilt is removed, same-team substitution fails and is deferred with its route written down |
+| The opponent model predicts picks | Hit rate against the picks entrants actually made, once stage 1 has weeks of them | `pool predict record` / `pool predict score`, three hypotheses archived per rival per week before the report arrives. Accrues weekly; nothing to read yet |
+| The policy behaves as intended | In simulation: takes variance when behind, sheds it when ahead, and ~~converges on the expected-TD pick when the standings are level~~ | Scripted scenarios, fixed seed. **The level clause was wrong** and is struck: they converge when my candidates are equally unrelated to what rivals hold. Level with every rival about to take my player, the policy differentiates — mirroring buys a guaranteed split, differentiating buys a chance at all of it |
+| The advantage exists in the model | Expected share of the pot under win-max against the same under TD-max, **inside the simulator** | Printed per candidate as `vs EV`, with `tied` where the paired difference does not clear its own standard error |
 
 The last row is a simulated gain and must be reported as one. The repo's own earlier note
 put it correctly: validate conditional tails and simulation behaviour before treating a
 simulated win-probability gain as an established advantage.
+
+One check this section did not think to ask for, added because the stage needed it: the
+knobs the policy leans on are stress-tested rather than trusted. `pool recommend
+--sensitivity` re-ranks across a declared range of `k_game` and the rival-noise width. On
+the scripted converging-rivals case the fitted `k_game` turns out **not** to matter at any
+value in the range, while the rival-noise width — the one `config.py` already declares
+provisional — decides whether the divergence separates or falls inside the band. The
+direction is settled and the strength is not, which is the argument for the prediction log
+in one sentence.
 
 ### How it ships
 
@@ -211,9 +236,16 @@ gains the win-probability view next to it, so the two are visible together and t
 disagreement is the interesting output. Silently swapping the objective would replace a
 decision rule that is understood with one that cannot be validated, and hide the swap.
 
-This also matches the season's shape: early on, with everyone level, the two objectives
-mostly agree. They diverge late, when chasing or protecting a lead is what actually
-decides the pool — which is exactly when a visible second opinion is worth having.
+~~This also matches the season's shape: early on, with everyone level, the two objectives
+mostly agree.~~ **Struck.** That is the same wrong rule as the table above. What makes them
+agree is my candidates being equally unrelated to what rivals hold, which is common early
+because rivals have spent little and their likely picks are spread thin — not levelness,
+which is neither necessary nor sufficient. The objectives can diverge sharply in week 1 with
+the standings at nil apiece, and that is exactly the case the scripted scenarios keep.
+
+The acceptance test for "alongside" is mechanical: `recommend.advise_slot` with no rival
+state returns exactly the previous advice — same pick, same alternatives, same hold flag.
+That is what fails if this work ever starts quietly editing the first objective.
 
 ## Out Of Scope
 
@@ -232,3 +264,8 @@ Stages 1 and 2 are ordinary feature work on `main` with no ceremony. Stage 3's f
 pieces — the simulator and its calibration — depend on nothing but history and can begin
 whenever; the policy waits on real opponent data, and how long that takes is set by
 whatever the answer to stage 1's open question turns out to be.
+
+In the event stage 3 was built in eight commits over two days on `claude/phase4-stage3`,
+in that order: the prediction log first, because it is the only part that expires, then the
+simulator, its calibration, the policy and its one fingerprint move, the CLI, the behaviour
+scenarios and prospective checks, the backtest seam, and these documents.

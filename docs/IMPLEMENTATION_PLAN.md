@@ -14,7 +14,7 @@ after F11. The superseded Phase 2 results remain published for comparison.
 | Validation repairs (review step 2) | Implemented: F02–F04, F06, F08, F10; F07 documentation corrected |
 | Candidate-pool repair (review step 2) | Implemented: F11; benchmark rerun on the same frozen dataset |
 | Phase 3: readiness, calibration and shadow validation (review step 3) | 3A complete; 3B completed 2026-09-07 with no candidate promoted. 3C identity-baseline protocol dated 2026-09-07 and its collection tooling implemented; collection and review pending. Production unchanged |
-| Leaderboard strategy (review step 4) | Pending |
+| Leaderboard strategy (review step 4) | Implemented 2026-09-17: expected pot share beside expected TDs, calibrated simulator, prospective prediction log. Judged on calibration and prospective fit, never on a season result |
 
 ## Weekly reliability
 
@@ -291,7 +291,8 @@ opponent modeling and win-probability optimization belong to later work, not Pha
 
 ## Phase 4 — Opponents, standings and winning
 
-**Stage 1 implemented 2026-09-11; stage 2 implemented 2026-09-15; stage 3 planned.**
+**Stage 1 implemented 2026-09-11; stage 2 implemented 2026-09-15; stage 3 implemented
+2026-09-17.**
 The full plan is in
 [PHASE4_PLAN.md](PHASE4_PLAN.md). Three stages in the order their dependencies force:
 opponent-pick ingestion, then standings, then deciding by the chance of finishing first
@@ -319,13 +320,31 @@ upstream data and are not an independent comparison. The isolated scoring refact
 the decision fingerprint once; existing 2026 captures verify only with the explicit drift
 override. Stage 3 is unchanged.
 
+[Stage 3](PHASE4_STAGE3_PLAN.md) adds the second objective beside the first. `simulate.py`
+draws joint seasons from a gamma-mixed Poisson with one game factor per game, sharing one
+sampled outcome across every entrant holding that player and paying a quarterback for a
+credited passing touchdown as the pool does. `rivals.py` predicts a rival's pick under three
+named hypotheses and uses a reported pick instead wherever the report arrived before the
+decision. `recommend.py` scores every candidate by expected share of the pot on identical
+draws, refuses to order two whose difference does not clear the paired standard error, and
+never edits the expected-TD advice — the acceptance test is that `advise_slot` with no rival
+state returns exactly what it always did. The enforced decision closure gained `rivals.py`
+and `simulate.py` in one isolated commit, its third move this phase; `predictions.py`,
+`standings.py` and `entrants.py` stay outside it, which is what keeps a report parser out of
+the decision path.
+
 The first two are ordinary feature work. The third changes what the tool optimises and
 cannot be validated the way the first two can: a season is one Bernoulli trial, and
 seasons before ingestion have no opponent picks to replay against. It is therefore judged
 on simulator calibration, opponent-model fit and a *simulated* advantage, and it ships
-beside the expected-TD advice rather than replacing it. Simulations must share one sampled
-player-week outcome across every entrant selecting that player, with relevant player
-correlations, ties, uncertainty about opponent choices and future policy updates.
+beside the expected-TD advice rather than replacing it. The
+[calibration run](../experiments/results/phase4-simulator/CALIBRATION.md) reports each of its
+four checks pass or fail: one passes outright, two pass only in part, and same-team
+substitution fails and is deferred with its route written down. `pool predict record` / `pool predict score` accrue
+the prospective evidence one week at a time — rival-pick hit rates, and a probability
+integral transform of each entrant's weekly total committed as a seed and a content hash
+rather than as numbers. `pool backtest --strategy winprob` replays a season and is labelled
+everywhere it prints as run against invented rivals.
 
 The person running the pool sends every entrant's picks by hand, sometimes before a week's
 games have finished and always before the next week's first lock. Standings and every

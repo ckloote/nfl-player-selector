@@ -16,8 +16,11 @@ appetite change with your position on the leaderboard?
 - [`docs/PHASE3B_OUTCOME.md`](docs/PHASE3B_OUTCOME.md) - completed calibration experiment: no candidate promoted, rationale and next step
 - [`docs/PHASE3C_PROTOCOL.md`](docs/PHASE3C_PROTOCOL.md) - dated prospective baseline protocol: window, decision events, parity criteria and floors, written but never run
 - [`docs/PHASE3C_OUTCOME.md`](docs/PHASE3C_OUTCOME.md) - the decision to close that window without collecting, and what it gives up
-- [`docs/PHASE4_PLAN.md`](docs/PHASE4_PLAN.md) - opponent ingestion, standings, and deciding by win probability: staging, and what can and cannot be validated
+- [`docs/PHASE4_PLAN.md`](docs/PHASE4_PLAN.md) - opponent ingestion, standings, and deciding by expected share of the pot: staging, and what can and cannot be validated
 - [`docs/PHASE4_STAGE1_PLAN.md`](docs/PHASE4_STAGE1_PLAN.md) - implemented report ingestion, archive guarantees, and identity checks
+- [`docs/PHASE4_STAGE2_PLAN.md`](docs/PHASE4_STAGE2_PLAN.md) - implemented shared scoring, computed standings, ties, and independent used pools
+- [`docs/PHASE4_STAGE3_PLAN.md`](docs/PHASE4_STAGE3_PLAN.md) - implemented pot-share policy: the simulator, the opponent model, what it can and cannot be judged on
+- [`experiments/results/phase4-simulator/CALIBRATION.md`](experiments/results/phase4-simulator/CALIBRATION.md) - the simulator fitted against 2011-2025, with the checks it fails beside the ones it passes
 - [`docs/REVIEW.md`](docs/REVIEW.md) — September 2026 review: open defects, validation limitations, and recommended priorities
 
 ## Status
@@ -37,11 +40,25 @@ work — opponent ingestion, standings, a win-probability objective — could no
 The replay assumption it would have checked is still open, and a single captured decision
 verified the same day settles it whenever that is worth doing.
 
-Phase 4, stages 1 and 2 are implemented: weekly entrant reports are archived before
-parsing, imported with identity checks, and scored through the same core as your own picks.
-`pool standings` shows computed ranks and reported values together, preserves ties, and
-tracks each entrant’s used players. `pool report list` includes failed imports.
-Win probability remains stage 3 work. See the [stage 2 plan](docs/PHASE4_STAGE2_PLAN.md).
+Phase 4 is implemented. Weekly entrant reports are archived before parsing, imported with
+identity checks, and scored through the same core as your own picks. `pool standings` shows
+computed ranks and reported values together, preserves ties, and tracks each entrant’s used
+players. `pool report list` includes failed imports. See the
+[stage 1](docs/PHASE4_STAGE1_PLAN.md) and [stage 2](docs/PHASE4_STAGE2_PLAN.md) plans.
+
+[Stage 3](docs/PHASE4_STAGE3_PLAN.md) adds a second objective **beside** the first, never in
+place of it: `pool recommend` still gives the expected-TD advice and now prints each
+candidate's expected share of the pot next to it, with a sentence naming why the two
+disagree when they do. A tie at the top splits the winnings, so the quantity is a share and
+not a probability of an outright win. The
+[simulator calibration](experiments/results/phase4-simulator/CALIBRATION.md) reports each of
+its four checks pass or fail: one passes outright, two pass only in part, and same-team
+substitution fails and is deferred with its route written down. Nothing here establishes that the policy wins
+pools and nothing can: a season is one Bernoulli trial. What accrues instead is prospective
+and weekly — `pool predict record` archives a prediction of every rival's picks before the
+report that settles it, and `pool predict score` reads the record back. `pool backtest
+--strategy winprob` replays a finished season and says, everywhere it prints, that it did so
+against rivals who do not exist.
 
 The [evaluation report](docs/EVALUATION.md) combines actual season scores from each model's
 greedy and optimizer pick history with ranking and calibration diagnostics. Its
@@ -109,6 +126,7 @@ uv run pool score --week 3 --season 2026 --refresh  # refresh first
 uv run pool picks                       # scores, pending reasons, and subtotals
 uv run pool status --season 2026 --week 3 # feed attempts, coverage, freshness, fallbacks
 uv run pool unrecord 3 QB               # remove an incorrect entry
+uv run pool predict record              # archive rival predictions before the week is visible
 ```
 
 Each invocation uses one Eastern decision time. A player becomes unavailable
@@ -191,14 +209,18 @@ uv run pool baseline --config experiments/phase3c-baseline.toml \
   --out experiments/results/phase3c-baseline         # the descriptive export and dated note
 ```
 
-The five existing 2026 captures now require
-`uv run pool verify-capture --season 2026 --allow-code-drift`: stage 2 extracted the shared
-pick-scoring core in `scoring.py`, which is inside the enforced decision closure. Three
-captures already needed that override before this change. The refactor moved the fingerprint
-in an isolated commit, and a later review fix to the same file — scoring a pick with no game
-zero once its week is final — moved it a second time. All five captures
-still reconstruct and match replay with the override, which explicitly reports that the
-fingerprint check was bypassed. See the [recorded verification](docs/PHASE4_STAGE2_PLAN.md#implementation-verification--2026-09-15).
+The existing 2026 captures require
+`uv run pool verify-capture --season 2026 --allow-code-drift`, and have since stage 2. The
+enforced closure has moved three times: stage 2 extracted the shared pick-scoring core into
+`scoring.py`, a later review fix to the same file — scoring a pick with no game zero once its
+week is final — moved it again, and stage 3 added `rivals.py` and `simulate.py` when
+`recommend` gained the second objective. Each move was an isolated commit, with the pre-move
+output recorded first. Every capture still reconstructs and matches replay under the
+override, which explicitly reports that the fingerprint check was bypassed. A capture made
+this week cannot reach parity until its own week has been scored — replay needs complete
+touchdown coverage, and an unplayed week has none; that is pending, not a failure. See the
+recorded verifications for [stage 2](docs/PHASE4_STAGE2_PLAN.md#implementation-verification--2026-09-15)
+and [stage 3](docs/PHASE4_STAGE3_PLAN.md#implementation-verification--2026-09-17).
 
 `verify-capture` re-derives each decision's advice from its stored surface alone, then
 rebuilds the same instant from the archived feeds and compares the model columns. The
@@ -353,12 +375,92 @@ and repeated players are counted once with their weeks reported. The Python API
 `standings.remaining_counts(conn, season, week, entrant_id)` counts known remaining players
 by slot from `state.historical_pool`, spending only what was used **before** that week, so a
 report that has already arrived for the week itself cannot shrink its own answer; callers
-should inspect `used_pools` for unknown usage and missing weeks. Opponent projections and pick recommendations remain stage 3 work.
+should inspect `used_pools` for unknown usage and missing weeks. The pot-share view below is
+what reads these pools.
 
 Entrant scores are computed without a cache or a migration. Your own `my_picks.tds` cache
 still updates only with `pool score`; standings prompts for that command when it is empty
 or stale for a finished game. With matching recorded and reported picks and a current cache,
 `pool picks` and standings use the same scoring function and show the same TD count.
+
+## Deciding by share of the pot
+
+Once reports are imported, `pool recommend` prints a second opinion beside the expected-TD
+advice. It never replaces it: the recommended pick is still the assignment solver's, and
+the pot-share column sits next to it so the disagreement is visible rather than silent.
+
+```
+Pot share vs 4 rivals: you 1 TD, best rival Jamie 5. 2000 paired simulations, seed 20260916.
+─────────────────────────────────── QB ───────────────────────────────────
+  PICK: Lamar Jackson (BAL QB) — @ DAL, Vegas x1.22, opp-D x1.28
+  Expected TDs 2.65 · pot share 46.2% ± 1.1% · deadline Sun 9/27 3:25PM ET
+ Alternative           xTD   Season cost  Pot share  vs EV   Plan uses in
+ Patrick Mahomes (KC)  2.48  -0.17        45.5%      tied    wk 9
+ Jared Goff (DET)      2.66  -0.36        43.3%      -2.8%   wk 12
+```
+
+A **tie for first splits the winnings**, so the quantity maximised is an expected share —
+a win counts 1 and a k-way tie counts 1/k — and not the chance of an outright win. Season
+totals are small integers and ties are common; a rule that ignored them would
+systematically undervalue positions that reliably draw level.
+
+`vs EV` is the difference from the recommended pick's share, estimated on **identical
+draws**: every candidate is evaluated against the same simulated seasons and the same rival
+pick-paths, so a difference is estimated far more precisely than either level. A candidate
+whose difference does not clear that paired standard error prints as `tied` and is not
+ordered. Without that the tool would reorder picks on Monte Carlo noise every week, and the
+simulation count would quietly become a decision input.
+
+Where the two objectives disagree, the line under the slot says why — an overlap with the
+rivals likely to take that player, or the standings — and names them. A divergence it cannot
+attribute to either is printed as a defect rather than dressed up as advice. With no reports
+imported it says there is no second view and gives the expected-TD advice alone.
+
+```bash
+uv run pool recommend --season 2026 --sensitivity   # re-rank across the fitted knobs
+```
+
+`--sensitivity` re-runs each slot across a declared stress range of the game-correlation
+constant and the rival-noise width, and reports per slot whether a divergence separates at
+every setting, at some of them and never the other way, or nowhere. It reads the noise band
+rather than the raw ranking, so a slot whose candidates are all tied reports as tied and not
+as knob-sensitive. On the scripted test cases the fitted `k_game` turns out not to matter at
+any value in the range; the rival-noise width, which `config.py` declares provisional,
+decides whether a divergence separates at all.
+
+### The prediction log
+
+The one place this work gets to be empirical. Predict every rival's picks, archive the
+prediction, read the report, score it — and the prediction must be recorded before it could
+have seen the answer.
+
+```bash
+uv run pool predict record --season 2026 --week 3          # archive before the week is visible
+uv run pool predict record --season 2026 --week 3 --dry-run  # show it, archive nothing
+uv run pool predict score --season 2026                    # hit rates and the PIT histogram
+```
+
+Three hypotheses are archived per rival per slot per week, not one: greedy from their own
+remaining pool, the same optimizer this tool runs, and naive — the best player in the slot,
+ignoring the one-per-season rule entirely. Which of these describes five particular people
+is a fact about them rather than a choice to make in advance, and it can only ever be
+measured if all three were written down before the week they describe. The gap between
+naive and greedy is its own measurement: it says whether they track the constraint at all.
+The ranked list matters more than its winner, so where the actual pick landed in each
+ranking is recorded, not just whether the top one hit.
+
+`predict record` exits non-zero when the record will not be scorable — the archive still
+happens, because an unscorable record is still evidence, but a scripted run has to be told
+the observation was lost. Reports carry their arrival time, so a report that landed after a
+prediction cannot be used to make it.
+
+`predict score` also reports the **probability integral transform** of each entrant's weekly
+total: where the actual total fell in the simulated distribution, randomised within the
+observed integer because the counts are discrete. What gets archived is the *commitment* — a
+seed, a simulation count, the parameters and a content hash of the projection frame — and
+not the numbers, so rebuilding it twice gives the identical distribution and a later
+re-forecast cannot move it. It is reported with no verdict: 85 draws a season cannot test
+uniformity with any power, and the lean is the readable part.
 
 ## Backtesting
 
@@ -367,6 +469,7 @@ uv run pool refresh --season 2025          # imports 2024 (prior) and 2025
 uv run pool backtest --season 2025         # replay one season against the baselines
 uv run pool backtest --season 2017-2025 --detail
 uv run pool sweep --season 2017-2025       # grid-search the discount and prior weight
+uv run pool backtest --season 2025 --strategy winprob,optimizer  # pot share, vs invented rivals
 ```
 
 Two layers are measured separately, because a better forecast is not the same
@@ -384,6 +487,35 @@ repeat a player, while its achieved replay uses each player at most once. Rankin
 are never multiplied into purported season gains. Slot-week differences are averaged within
 season; shuffled seeds are averaged within season before computing uncertainty across seasons.
 Seed variability and empty-cell coverage are reported separately.
+
+The `winprob` strategy replays the pot-share policy, and everything it prints carries the
+reason it proves nothing:
+
+```
+Strategy    TDs         ...  % ceiling   Finish
+winprob     12.0             100%        1st of 5
+optimizer   12.0             100%        1st of 5
+random      6.0 ± 0.8        50%         5th of 5
+
+Against 4 invented rivals picking greedy, among their top 3 (seed 0). No opponent picks
+exist for a finished season, so this field was invented — "a test of the machinery, not of
+the idea", in the phase plan's own words.
+```
+
+A finished season has no opponent picks, so `--rivals N` invents them. Worse than invented:
+by default they pick greedily among their best few, which is the *same* hypothesis the
+policy assumes when it values a candidate, so it is being scored against an opponent model
+that is true by construction — its best case, not a neutral one. `--rival-behaviour naive`
+or `optimizer` runs the mis-specified case, and the gap between two such runs is the only
+reading here worth anything. Whatever the behaviour, the one-player-per-season rule is
+enforced on them.
+
+Read that row on the **finish** column and not on TDs. Giving up a touchdown for a larger
+share of the pot is the whole of what the policy does, so it is meant to lose the other one.
+Every strategy in the run plays the same invented field — the rivals never see your picks,
+so one seed gives them all the identical opposition — which is what makes the finishes
+comparable. And a season is a single trial: a finish here, or fifteen of them, settles
+nothing either way.
 
 Replay commands share these input policies:
 
@@ -454,12 +586,21 @@ duplicate source TD plays in one 2011 game; original observations remain archive
 deadline (one hour before kickoff), and alternatives ranked by **season cost**:
 how many projected TDs the rest-of-season plan loses if you take that player
 now instead. When the recommended player plays before the Sunday slate, it says
-whether to commit or hold for injury news.
+whether to commit or hold for injury news. With the pool's reports imported it also prints
+each candidate's expected share of the pot; see [deciding by share of the
+pot](#deciding-by-share-of-the-pot).
 
 ## Tuning
 
 Every modeling knob lives in `src/pool/config.py` (shrinkage weights, home edge,
 depth-chart role multipliers, future discount, information premium).
+
+The pot-share block there is annotated with what each number is and is not. `K_GAME` and
+`THROW_SHARE` are fitted and measured against 2011–2025. `RIVAL_NOISE_TOP_N` is
+**provisional and says so**: the real distribution is what `pool predict` measures, and it
+is meant to be replaced by that measurement in writing, with the date. `WINPROB_SEED` is
+fixed so identical inputs give identical advice — a policy that answered differently on
+re-run could not be reconstructed from its own capture.
 
 ## Development
 

@@ -381,6 +381,32 @@ def _advice_details(advice) -> dict:
     return json.loads(capture._json({a.slot: capture._advice_detail(a) for a in advice}))
 
 
+def _claims_hold(derived: dict | None, recorded: dict | None) -> bool:
+    """Does everything the record actually wrote down still re-derive?
+
+    Compared on the recorded detail's own keys rather than by whole-dictionary equality.
+    A decision captured before a field existed cannot re-derive that field, and demanding
+    it would report every decision taken before the newest one as insufficient -- which is
+    the opposite of what those decisions are. Adding the win-probability view retroactively
+    failed all five of the 2026 captures this way before this narrowing.
+
+    It is still a strict check of what was claimed: a recorded key whose value no longer
+    re-derives fails, and so does a recorded key the current code no longer produces at
+    all. Only keys the record never had are exempt, and about those it has no claim to
+    make.
+    """
+    if derived is None or recorded is None:
+        return derived == recorded
+    return all(derived.get(key) == value for key, value in recorded.items())
+
+
+def _advice_matches(derived: dict, recorded: dict) -> dict[str, bool]:
+    return {
+        slot: _claims_hold(derived.get(slot), recorded.get(slot))
+        for slot in set(derived) | set(recorded)
+    }
+
+
 def reconstruction(
     conn: sqlite3.Connection, decision_id: str, *, allow_code_drift: bool = False
 ) -> dict:
@@ -411,8 +437,7 @@ def reconstruction(
     # The rebuild's own record where there is one; the pre-computed stands in only on the
     # failure path, and carries the same keys so a reader never has to ask which produced it.
     drift = rebuilt_drift
-    derived = _advice_details(advice)
-    slots = {slot: derived.get(slot) == recorded.get(slot) for slot in set(derived) | set(recorded)}
+    slots = _advice_matches(_advice_details(advice), recorded)
     return dict(
         decision_id=decision_id,
         ok=all(slots.values()) and bool(slots),
@@ -594,6 +619,10 @@ def parity(
                         for slot, cells in detail["locked"].items()
                     },
                     now=state.eastern_now(datetime.fromisoformat(decision_at)),
+                    # Restored from the record for the same reason `reconstruct` restores
+                    # it: rebuilding the opposition from today's standings would replay the
+                    # decision against a pool that has since spent more weeks.
+                    pool=capture._pool_from_detail(detail.get("pool")),
                 )
                 recorded = {
                     r["slot"]: json.loads(r["detail"])
@@ -603,7 +632,7 @@ def parity(
                         (decision_id,),
                     )
                 }
-                advice_ok = _advice_details(derived) == recorded
+                advice_ok = all(_advice_matches(_advice_details(derived), recorded).values())
                 advice_reason = None if advice_ok else "replayed advice differs from the record"
             except (ValueError, KeyError) as exc:
                 advice_reason = str(exc)

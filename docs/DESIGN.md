@@ -92,7 +92,7 @@ Four layers, deliberately decoupled so each can improve independently:
 │  CLI (weekly workflow: refresh → recommend → record)   │
 ├────────────────────────────────────────────────────────┤
 │  Optimizer            │  Risk / leaderboard module     │
-│  (assignment solver)  │  (Monte Carlo win probability) │
+│  (assignment solver)  │  (Monte Carlo pot share)       │
 ├────────────────────────────────────────────────────────┤
 │  Projection model (per-player, per-week TD forecast)   │
 ├────────────────────────────────────────────────────────┤
@@ -227,34 +227,57 @@ far-future matchups that may never materialize.
 
 ### 3.4 Risk / leaderboard module
 
-Turns "maximize expected TDs" into "maximize probability of winning the pool."
+Adds "maximize expected share of the pot" **beside** "maximize expected TDs" — never in
+place of it. Implemented 2026-09-17 in `simulate.py`, `rivals.py` and `recommend.py`; see
+the [stage 3 plan](PHASE4_STAGE3_PLAN.md).
+
+The quantity is an expected *share*, not a probability of winning: a tie at the top splits
+the winnings, season totals are small integers, and ties are common enough that a rule
+ignoring them would systematically undervalue positions that reliably draw level. A win
+counts 1 and a k-way tie counts 1/k.
 
 - **State tracked:** every opponent's cumulative score *and used players*,
   imported from the pool's weekly report (they face the same one-use
   constraint, so their remaining arsenal is exactly knowable, at most one week
-  behind).
-- **Monte Carlo simulation:** simulate the rest of the season a few thousand
-  times. Your picks follow the optimizer plan; opponents are modeled as playing
-  a near-optimal assignment over their own remaining pools (with noise). Each
-  simulation draws actual TD outcomes from the projection distributions. Output:
-  your expected share of the pot for each candidate pick this week (a win counts
-  1, a k-way tie for first counts 1/k).
-- **Decision rule:** rank this week's candidate picks by *win probability*, not
-  expected TDs. This automatically produces the intuitive behavior:
-  - **Trailing:** high-variance picks and *differentiation* — avoid picking the
-    same player the leader is likely to pick this week (their actual pick is
-    unknown until the report, so this is played against their modeled best
-    move); you can't gain ground on mirrored picks.
-  - **Leading:** high-floor picks and *blocking/mirroring* — favor your
-    chaser's best remaining options' equivalents; matched outcomes preserve a
-    lead.
-  - **Mid-pack / early season:** win probability and expected TDs agree, and
-    the module recommends the EV pick.
-- The CLI shows both rankings (EV and win-probability) side by side with a note
-  when they diverge and why.
+  behind). A week whose report never arrived is carried as a separate defect from a name
+  that would not resolve; both mean the remaining pool is overstated, and the CLI says so
+  before printing shares computed against it.
+- **Monte Carlo simulation:** a gamma-mixed Poisson with one game factor shared by both
+  teams, so two picks in the same game move together. One sampled outcome per player-week
+  is shared by every entrant holding that player, and a credited passing touchdown pays
+  the quarterback as well as the receiver — the pool's own rule, worth 90.6% of a
+  quarterback's credits. Fitted and checked against 2011–2025 in
+  [the calibration report](../experiments/results/phase4-simulator/CALIBRATION.md).
+- **Opponent model:** what a rival does in a week not yet reported. The baseline is
+  greedy-from-their-remaining-pool with noise — uniform among their best few — because a
+  perfectly predictable opponent would let the policy block them exactly, which is the more
+  dangerous error. A pick that *has* been reported is used rather than predicted. The
+  noise width is **provisional and declared as such**; `pool predict` measures the real
+  distribution one week at a time and is what replaces it.
+- **Decision rule:** a one-step lookahead, and it should be called nothing grander — hold
+  the expected-TD plan for the rest of the season, vary only this week's pick, and score
+  each candidate on identical draws. Two candidates whose difference does not clear the
+  paired Monte Carlo standard error are reported as **tied** rather than ordered; without
+  that the tool would reorder picks on noise every week and the simulation count would
+  quietly become a decision input.
+- **What it actually does, measured rather than assumed:**
+  - **Trailing:** *differentiation* — with the leader highly likely to take a player, an
+    identical pick scores a lower share than an equivalent-EV alternative. You cannot gain
+    ground on mirrored picks.
+  - **Leading against one chaser:** *mirroring* — matched outcomes preserve a lead. With
+    three rivals still in range it does not reverse; mirroring needs a single threat.
+  - **When they agree:** when my candidates are equally unrelated to what rivals hold —
+    **not**, as this section used to say, when everyone is level. Levelness is neither
+    necessary nor sufficient. With the standings dead level and every rival about to take
+    the player I would take, mirroring them buys a guaranteed k-way split and
+    differentiating buys a chance at all of it, so the objectives diverge at exactly the
+    moment the old rule predicted agreement.
+- The CLI shows both rankings side by side with a sentence naming why they diverge and
+  which rivals are in the overlap it is reasoning about.
 
-This module is later work, after Phase 3 calibration and policy validation. Expected-TD
-planning is useful without it, but is not generally equivalent to maximizing win probability.
+Expected-TD planning is useful without this and is not equivalent to it. The assignment
+solver is untouched: win probability is not a separable sum over (player, week) cells, so
+it could not be given to `linear_sum_assignment` even in principle.
 
 ### 3.5 Interface
 
@@ -272,6 +295,10 @@ pool report import week4.csv    # ingest the pool's weekly report
 pool report list                # archived import attempts, times, counts, and status
 pool standings                  # latest imported picks; computed ranks through last resolved week
 pool plan                       # full remaining-season assignment view
+pool predict record             # every rival's predicted picks, archived before the week
+pool predict score              # hit rates, and the weekly PIT histogram
+pool recommend --sensitivity    # re-rank across the stress range of the fitted knobs
+pool backtest --strategy winprob   # replay a season on pot share, against invented rivals
 ```
 
 The initial report parser accepts one CSV row per entrant/slot, with optional reported
@@ -282,8 +309,21 @@ consecutive complete week. Computed TDs and shared ranks sit beside unchanged re
 columns. A tie for first prints the equal pot split, qualified while totals are incomplete.
 Later reported picks and your recorded picks for weeks without reports appear in progress.
 Used counts include all imported weeks and flag unknown names and repeats; the count API
-exposes remaining players by slot. Opponent projections, win probability, and manual
-`opponent record` remain deferred. See [stage 2](PHASE4_STAGE2_PLAN.md).
+exposes remaining players by slot. See [stage 2](PHASE4_STAGE2_PLAN.md).
+
+`recommend` gains a pot-share column and a `vs EV` delta beside the expected-TD advice,
+printing `tied` where a candidate does not clear the paired simulation error. Where the two
+objectives disagree it names the reason — overlap with a rival's likely pick, or the
+standings — and refuses to dress an unattributable divergence as advice. With no reports
+imported it says why there is no second view rather than failing. `--sensitivity` re-ranks
+across the declared stress range of `k_game` and the rival-noise width and reports, per
+slot, whether the divergence separates at every setting, at some of them, or nowhere.
+
+`predict record` archives a prediction of every rival's picks before the week can be seen
+and exits non-zero when the record will not be scorable; `predict score` reports hit rates
+by predictor, where the actual pick landed in each ranking, and the probability-integral
+histogram of each entrant's weekly total. Manual `opponent record` remains deferred — the
+report is the input. See [stage 3](PHASE4_STAGE3_PLAN.md).
 
 A web dashboard is a possible Phase 4 nicety, not a requirement.
 
@@ -350,6 +390,25 @@ strategy trials and hindsight are separate reference strategies. The configurati
 constants and retrospective era summaries. The runner audits all game coverage, freezes a
 research database, fingerprints code/data/configuration, checkpoints each season, and exports
 forecasts, future surfaces, picks, per-seed metrics and reports. Operational picks are untouched.
+
+The joint outcome model is fitted and checked separately from the projection, against the
+same frozen 2011–2025 study, and the checks it fails are published with the ones it passes:
+marginal spread matches to 2.9%, tail *shape* matches once the shipped model's own
+calibration tilt is removed, the quarterback/receiver coupling matches the identity that
+generates it, and same-team substitution is **not** modelled — a team's passing touchdowns
+are under-dispersed at `var/mean = 0.884` and a Poisson total cannot produce that under any
+allocation rule. See [the calibration report](../experiments/results/phase4-simulator/CALIBRATION.md).
+
+None of that is evidence that deciding by pot share wins pools, and the plan says so first:
+a season is one Bernoulli trial. What accrues instead is prospective and weekly. Every rival
+pick is predicted under three named hypotheses and archived before the report that settles
+it, with arrival times recorded so a prediction cannot be scored against an answer it could
+have seen; and each week's distribution over entrant totals is committed as a seed, a size
+and a content hash — not as numbers — so a later re-forecast cannot move it, and scored by
+probability integral transform once the week is final. A historical replay of the policy is
+available (`pool backtest --strategy winprob`) and is labelled wherever it prints as run
+against invented rivals: seasons before ingestion have no opponent picks, so it tests the
+machinery and not the idea.
 
 Generated reports contain facts, methods and provenance; human/AI interpretation belongs in
 the separately authored [analysis](ANALYSIS.md), which reruns do not refresh. The saved historical

@@ -84,6 +84,39 @@ CANDIDATES_PER_SLOT = 80
 INFO_PREMIUM_TD = 0.10
 ALTERNATIVES_SHOWN = 6
 
+# --- Win probability --------------------------------------------------------
+# Simulated seasons behind each candidate's expected share of the pot. Every candidate is
+# scored on the *same* draws, so what matters is the precision of a difference rather than
+# of a level, and a few thousand paired draws resolve one far better than an unpaired
+# thousand would suggest.
+WINPROB_SIMS = 2000
+# Fixed, so identical inputs give identical advice. A policy that answered differently on
+# re-run could not be reconstructed, and `capture.reconstruct` would have nothing to restore.
+WINPROB_SEED = 20260916
+# Distinct rival pick-paths drawn per opponent; simulations are split evenly between them.
+# This is where uncertainty about what opponents do enters, as opposed to uncertainty about
+# what happens once they have done it.
+RIVAL_SCENARIOS = 32
+# A rival takes uniformly among their top N remaining candidates rather than always the
+# best. PROVISIONAL and declared as such: the real distribution is what the prediction log
+# measures, and this is replaced by it -- in writing, with the date -- once enough weeks
+# have accrued. Until then a deterministic opponent would make the policy overconfident
+# about blocking, which is the worse error.
+RIVAL_NOISE_TOP_N = 3
+# A candidate must beat the expected-TD pick by this many standard errors before it is
+# called better rather than tied. Without it the tool reorders picks on Monte Carlo noise
+# every week and the simulation count quietly becomes a decision input.
+WINPROB_SIGNIFICANCE = 2.0
+
+# Stress range for `pool recommend --sensitivity`. A **declared range, not a fitted
+# interval**: the calibration reports a point estimate for `k_game` and no uncertainty on
+# it, so quoting one here would invent evidence. These bracket it by roughly a factor of
+# two either way -- the game factor mattering twice as much as fitted, and half as much --
+# which is generous enough that a pick surviving all of it does not depend on the number.
+SENSITIVITY_K_GAME = (7.0, 14.302, 30.0)
+# 1 is a perfectly predictable opponent, 5 is one barely worth modelling.
+SENSITIVITY_NOISE = (1, 3, 5)
+
 # --- Role source ------------------------------------------------------------
 # Where the role multiplier comes from: the depth-chart snapshot ("depth"),
 # usage share to date ("usage"), or nothing at all ("none"). Live picks use the
