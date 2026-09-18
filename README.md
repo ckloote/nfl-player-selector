@@ -106,6 +106,13 @@ so there is no separate `venv`/`pip` step. Every command below is prefixed with
 If you prefer bare commands, `source .venv/bin/activate` once and drop the
 prefix, or install the CLI globally with `uv tool install .`.
 
+An installed `pool` runs the weekly commands (`refresh`, `recommend`, `record`, `unrecord`,
+`report`, `standings`, `predict`) from any directory. Set `POOL_DB` to an absolute path,
+because the default `data/pool.db` is relative to wherever you run it. Captures made by an
+installed tool carry no git revision; their fingerprint is the same as a checkout's for the
+same code and dependency versions. Research commands (`backtest`, `sweep`, `evaluate`,
+`benchmark`) still need the checkout, because a study is reproduced from a revision.
+
 Data comes from [nflverse](https://github.com/nflverse) via `nflreadpy`. The
 default season is 2026 (override with `--season` or `POOL_SEASON`); the prior
 season is always used for the start-of-season prior.
@@ -216,11 +223,20 @@ enforced closure has moved three times: stage 2 extracted the shared pick-scorin
 week is final — moved it again, and stage 3 added `rivals.py` and `simulate.py` when
 `recommend` gained the second objective. Each move was an isolated commit, with the pre-move
 output recorded first. Every capture still reconstructs and matches replay under the
-override, which explicitly reports that the fingerprint check was bypassed. A capture made
-this week cannot reach parity until its own week has been scored — replay needs complete
-touchdown coverage, and an unplayed week has none; that is pending, not a failure. See the
+override, which explicitly reports that the fingerprint check was bypassed. The exceptions
+are the three captures that carry a pot share (`cf9cc9e5d64d`, `8edc0f08b08e`,
+`fd9c03a2946a`): a later fix changed the pot-share arithmetic, so current code re-derives
+different shares from them. They reconstruct exactly at the revision they recorded,
+`89dca93`, and their expected-TD advice and replayed surfaces match today. See the
 recorded verifications for [stage 2](docs/PHASE4_STAGE2_PLAN.md#implementation-verification--2026-09-15)
 and [stage 3](docs/PHASE4_STAGE3_PLAN.md#implementation-verification--2026-09-17).
+
+Replay rebuilds the inputs a decision read, exactly as it read them. A week still being
+played at the decision is restored as it stood, through the same legacy-touchdown fallback
+the live path used, so a capture made mid-week reaches parity like any other. The archive
+holds only what was observed by the decision, so waiting for a week to be scored changes
+nothing about it. Research replays keep requiring complete history, because they ask a
+different question.
 
 `verify-capture` re-derives each decision's advice from its stored surface alone, then
 rebuilds the same instant from the archived feeds and compares the model columns. The
@@ -229,8 +245,10 @@ is not reported as a live/archive divergence. The archive is written by `refresh
 decision made without one cannot be verified and is reported as unverified rather than
 skipped; a window with no captures at all exits nonzero, because nothing verified is not
 verification. The fingerprint it compares covers what a decision is a function of — the
-import closure of `recommend`, `projections` and `snapshots`, plus `uv.lock` — and not the
-whole tree; the whole-tree hash is still recorded beside it, so drift stays visible without
+import closure of `recommend`, `projections` and `snapshots`, plus the installed version of
+every runtime dependency — and not the whole tree. It is read from the package itself, so it
+works installed, and captures made before it replaced `uv.lock` report the decision path as
+moved; the whole-tree hash is still recorded beside it, so drift stays visible without
 an unrelated module invalidating a capture it could not have changed. `baseline` describes
 the captures under the dated [3C protocol](experiments/phase3c-baseline.toml), which
 declares the window, the decision events, the populations and the floors; a missing floor
@@ -481,11 +499,14 @@ prediction cannot be used to make it.
 
 `predict score` also reports the **probability integral transform** of each entrant's weekly
 total: where the actual total fell in the simulated distribution, randomised within the
-observed integer because the counts are discrete. What gets archived is the *commitment* — a
-seed, a simulation count, the parameters and a content hash of the projection frame — and
-not the numbers, so rebuilding it twice gives the identical distribution and a later
-re-forecast cannot move it. It is reported with no verdict: 85 draws a season cannot test
-uniformity with any power, and the lean is the readable part.
+observed integer because the counts are discrete. What gets archived is the *outcomes*:
+every player-week in the frame, drawn once before kickoff and stored (about 130 KB a week),
+beside the seed, parameters and projection-frame hash that produced them. Scoring reads
+them back, so neither a re-forecast nor a later change to the simulator or numpy can move
+them. Commitments archived before outcomes were stored are drawn once from their seed the
+first time `predict score` runs, then stored the same way and never drawn again. It is
+reported with no verdict: 85 draws a season cannot test uniformity with any power, and the
+lean is the readable part.
 
 ## Backtesting
 
