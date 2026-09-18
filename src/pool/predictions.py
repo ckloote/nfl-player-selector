@@ -226,7 +226,7 @@ def pool_state(
         if not identified(conn, season):
             return rivals.PoolState(withheld=(entrants.IDENTITY_PROMPT,))
         board, spent, played, known = _as_of(conn, season, week, at)
-        banked, my_tds, finalized = _decision_outcomes(conn, season, week, at)
+        banked, my_tds, finalized, gaps = _decision_outcomes(conn, season, week, at, board.rows)
     return rivals.PoolState(
         tuple(
             replace(_standing(row, spent, played, known), season_tds=banked.get(row.entrant_id, 0))
@@ -234,14 +234,20 @@ def pool_state(
         ),
         my_tds,
         finalized,
+        _withheld(gaps, played),
     )
 
 
-def _decision_outcomes(conn, season, week, at):
-    """Authoritative scores available now, split into past totals and fixed future cells.
+def _decision_outcomes(conn, season, week, at, members):
+    """Authoritative scores available now: past totals, fixed future cells, and the gaps.
 
     Scoring tables hold the latest import, not a history. A later import cannot be used
     for an earlier decision; captures carry these resolved values for subsequent replay.
+
+    A past cell that is not final -- pending, an unresolved name, or nothing on record --
+    is a gap, never a zero. The simulation starts at `week`, so nothing else would ever
+    account for it, and a season total missing a score is indistinguishable from one that
+    scored nothing. Gaps are (who, week, slot, status), with me as "you".
     """
     scores = scoring.score_board(conn, season)
     imports = {
@@ -255,29 +261,81 @@ def _decision_outcomes(conn, season, week, at):
     games.loc[unseen, "complete"] = 0
     games.loc[unseen, "reason"] = "results not available at decision"
     scores = replace(scores, games=games)
-    banked, mine, fixed = {}, {}, {}
+    cells, fixed = {}, {}
     reported = entrants.entrant_picks(conn, season)
     if not reported.empty:
         reported = reported[[datetime.fromisoformat(t) <= at for t in reported.observed_at]]
         for pick in standings._score_rows(conn, season, reported, scores):
             if pick.week < week:
-                if pick.is_me:
-                    mine[(pick.week, pick.slot)] = pick.tds or 0
-                else:
-                    banked[pick.entrant_id] = banked.get(pick.entrant_id, 0) + (pick.tds or 0)
+                cells[(pick.entrant_id, pick.week, pick.slot)] = (pick.status, pick.tds)
             elif not pick.is_me and pick.status == "final" and pick.player_id:
                 fixed[(pick.week, pick.player_id)] = pick.tds
+    me = next((row.entrant_id for row in members if row.is_me), None)
     for pick in personal_picks(conn, season).itertuples():
         if datetime.fromisoformat(pick.recorded_at) > at:
             continue
         gid = scoring.resolve_pick_game(conn, season, pick.week, pick.player_id, pick.game_id)
         result = scoring.score_pick(scores, pick.week, pick.player_id, gid)
         if pick.week < week:
-            mine[(pick.week, pick.slot)] = result.tds or 0
+            # What I recorded is what I submitted, so it stands in for the report's copy.
+            cells[(me, pick.week, pick.slot)] = (
+                "pending" if result.pending else "final", result.tds
+            )
         elif not result.pending:
             fixed[(pick.week, pick.player_id)] = result.tds
+    banked, gaps = {}, []
+    for row in members:
+        who = "you" if row.is_me else row.display_name
+        for past in range(1, week):
+            for slot in config.SLOTS:
+                status, tds = cells.get((row.entrant_id, past, slot), ("missing", None))
+                if status == "final":
+                    banked[row.entrant_id] = banked.get(row.entrant_id, 0) + int(tds)
+                else:
+                    gaps.append((who, past, slot, status))
     finalized = tuple((w, pid, int(tds)) for (w, pid), tds in sorted(fixed.items()))
-    return banked, sum(mine.values()), finalized
+    return banked, banked.pop(me, 0), finalized, gaps
+
+
+def _names(names) -> str:
+    names = list(dict.fromkeys(names))
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _withheld(gaps, played: set[int]) -> tuple[str, ...]:
+    """Why the pot share cannot be computed, one sentence per week and kind of gap.
+
+    Each ends with what fixes it, because the reader is deciding a pick and the useful
+    question is what to do next, not which table is short.
+    """
+    reasons = []
+    for past in sorted({gap[1] for gap in gaps}):
+        here = [gap for gap in gaps if gap[1] == past]
+        if past not in played:
+            reasons.append(
+                f"Week {past} has not been played yet, so nobody's season before this week is "
+                "known. The pot share is only for the next week to be decided."
+            )
+            continue
+        missing = [who for who, _, _, status in here if status == "missing"]
+        if missing:
+            reasons.append(
+                f"Week {past}: nothing on record for {_names(missing)}. "
+                "Import that week's report with `pool report import`."
+            )
+        pending = sum(status == "pending" for *_, status in here)
+        if pending:
+            reasons.append(
+                f"Week {past}: {pending} pick{'s are' if pending > 1 else ' is'} not final "
+                "yet. Run `pool refresh` once the games are over."
+            )
+        unresolved = [f"{who} {slot}" for who, _, slot, status in here if status == "unresolved"]
+        if unresolved:
+            reasons.append(
+                f"Week {past}: the name for {_names(unresolved)} did not resolve to a player. "
+                "Re-import that week's report once it does."
+            )
+    return tuple(reasons)
 
 
 def predict(conn: sqlite3.Connection, season: int, week: int, proj: pd.DataFrame) -> dict:

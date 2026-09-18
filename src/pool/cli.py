@@ -890,31 +890,14 @@ def _print_pool(pool, season: int, nudge: str | None, uncertain=()) -> None:
             "Run `pool report import` to turn it on.[/dim]"
         )
     else:
+        # An unreported played week and an unresolved past name used to be warnings here.
+        # Both leave a season total unknown, so both now withhold the view instead.
         leader = max(pool.rivals, key=lambda r: r.season_tds)
-        blind = sorted({w for r in pool.rivals for w in r.missing_weeks})
-        unresolved = [r.display_name for r in pool.rivals if r.unknown]
         console.print(
             f"[dim]Pot share vs {len(pool.rivals)} rivals: you {pool.my_tds} TD, "
             f"best rival {leader.display_name} {leader.season_tds}. "
             f"{config.WINPROB_SIMS} paired simulations, seed {config.WINPROB_SEED}.[/dim]"
         )
-        # Both of these overstate what rivals have left, and so overstate what the
-        # simulation lets them score: a player they have already spent is free to be
-        # spent again. Said out loud, because a share printed to one decimal place does
-        # not otherwise look like a number computed against the wrong opposition.
-        if blind:
-            console.print(
-                f"[yellow]Week{'s' if len(blind) > 1 else ''} "
-                f"{', '.join(str(w) for w in blind)} {'have' if len(blind) > 1 else 'has'} "
-                "been played and never reported: every rival's remaining pool is overstated "
-                "by three players a week. Run `pool report import`.[/yellow]"
-            )
-        if unresolved:
-            console.print(
-                f"[yellow]Unresolved names in {', '.join(unresolved)}'s reports: their "
-                "remaining pool is overstated, and so is what this expects them to "
-                "score.[/yellow]"
-            )
         # Reported, but unreadable: simulated as though the report had not arrived.
         for name, week, slot, reported in uncertain:
             console.print(

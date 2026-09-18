@@ -254,6 +254,11 @@ def _pool_detail(pool: rivals.PoolState | None) -> dict | None:
         my_tds=int(pool.my_tds), rivals=state_of,
         finalized=[[int(w), str(pid), int(tds)] for w, pid, tds in pool.finalized],
     )
+    if pool.withheld:
+        # Only when there is something to say, so a complete state hashes as it always has.
+        # Stored because it changes the advice: replayed without it, the decision would
+        # compute a share the original refused to.
+        observed["withheld"] = list(pool.withheld)
     return dict(
         observed,
         # Hashed separately from the decision's own identity: two weeks apart with the same
@@ -293,6 +298,7 @@ def _pool_from_detail(detail: dict | None) -> rivals.PoolState | None:
         ),
         int(detail["my_tds"]),
         tuple((int(w), str(pid), int(tds)) for w, pid, tds in detail.get("finalized", ())),
+        tuple(str(reason) for reason in detail.get("withheld", ())),
     )
 
 
