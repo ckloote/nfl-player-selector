@@ -65,8 +65,15 @@ def report_arrivals(conn: sqlite3.Connection, season: int) -> tuple[dict[int, st
 
     Parse outcome is deliberately ignored. A report whose parser failed still delivered the
     answer -- the bytes were in hand -- so it closes the window just as a clean one does.
+
+    A `--check` receipt is not a delivery. Checks archived until they stopped, and what
+    they archived were drafts of a file being put together; `entrants.import_report` says
+    as much. Counted here, a draft checked before the real import would close a window
+    early, and one with no week would be reported as a delivery nobody can place.
     """
     reports = entrants.reports(conn, season)
+    if not reports.empty:
+        reports = reports[~reports.check.astype(bool)]
     if reports.empty:
         return {}, 0
     known = reports[reports.week.notna()]

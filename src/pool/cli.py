@@ -423,7 +423,9 @@ def predict_score(season: int = SeasonOpt, db_path: Path | None = DbOpt):
         )
     for note in notes:
         where = "" if note["week"] is None else f"Week {note['week']}: "
-        console.print(f"[yellow]{where}{note['reason']}[/yellow]", markup=False)
+        # A style rather than markup: the reason can quote a name, and markup is off so a
+        # bracket in it prints as written.
+        console.print(f"{where}{note['reason']}", style="yellow", markup=False)
     _print_pit(conn_path=db_path, season=season)
 
 
@@ -456,7 +458,8 @@ def _print_pit(conn_path, season: int) -> None:
             "to test uniformity, and the lean is what is worth reading."
         )
     for note in notes:
-        console.print(f"[dim]Week {note['week']}: {note['reason']}[/dim]", markup=False)
+        where = "" if note["week"] is None else f"Week {note['week']}: "
+        console.print(f"{where}{note['reason']}", style="dim", markup=False)
 
 
 @app.command()

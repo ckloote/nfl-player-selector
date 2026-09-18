@@ -327,3 +327,58 @@ def test_cli_refuses_to_predict_without_an_identity_and_archives_nothing(local):
     conn = db.connect(path)
     assert not predictions.archived(conn, 2026) and not predictions.archived(conn, 2026, "pit")
     conn.close()
+
+
+def _legacy_check(conn, week, observed_at):
+    """A receipt as `report import --check` wrote them, before checks stopped archiving."""
+    import json
+    from dataclasses import asdict
+
+    from pool import entrants
+
+    observation = entrants.archive_report(
+        conn, 2026, week, f"draft {week} {observed_at}".encode(), source="draft.csv",
+        observed_at=observed_at, coverage=dict(parsed=False, format="csv"),
+    )
+    errors = [] if week else ["Give --week or include a week column in the report"]
+    receipt = entrants.ImportResult(observation, 2026, week, check=True, errors=errors)
+    db.set_meta(conn, f"{entrants.META_PREFIX}{observation}", json.dumps(asdict(receipt)))
+    return observation
+
+
+def test_a_check_receipt_is_not_a_delivery(pool):
+    """Old `--check` runs archived drafts. One naming a week closed that week's window
+    before the real report arrived, and one naming none was reported, on every score, as
+    a delivery nobody could place."""
+    conn, _ = pool
+    _legacy_check(conn, None, "2026-09-18T12:00:00+00:00")
+    _legacy_check(conn, 2, "2026-09-18T13:00:00+00:00")
+    arrivals, unattributed = predictions.report_arrivals(conn, 2026)
+    assert unattributed == 0 and 2 not in arrivals
+    _record(conn)  # after both drafts, before the real report
+    _report(conn, 2, WEEK2, REPORT_AT)
+    arrivals, _ = predictions.report_arrivals(conn, 2026)
+    assert datetime.fromisoformat(arrivals[2]) == datetime.fromisoformat(REPORT_AT)
+    scored, notes = predictions.score(conn, 2026)
+    assert len(scored), "a draft did not close the window on the prediction"
+    assert not any("name no week" in note["reason"] for note in notes)
+
+
+def test_cli_prints_notes_as_text_and_names_only_a_real_undated_delivery(pool):
+    """The notes were printed with markup off and the markup still in them, so every
+    one arrived wrapped in literal `[yellow]` or `[dim]`, and the PIT section called an
+    unplaced report "Week None"."""
+    from pool import entrants
+
+    conn, path = pool
+    _legacy_check(conn, None, "2026-09-18T12:00:00+00:00")
+    undated = entrants.import_report(
+        conn, 2026, None, b"entrant,slot,player_name\nPat,QB,Quarter One\n", source="undated.csv"
+    )
+    assert undated.observation_id and undated.errors, "a real delivery whose week is unknown"
+    conn.close()
+    result = runner.invoke(app, ["predict", "score", "--db", str(path)])
+    assert result.exit_code == 0, result.output
+    assert "[yellow]" not in result.output and "[dim]" not in result.output
+    assert "Week None" not in result.output
+    assert result.output.count("1 archived report(s) name no week") == 2, "once per section"
