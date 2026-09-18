@@ -376,3 +376,30 @@ def test_valid_empty_feed_is_archived_and_source_time_does_not_backdate(
         assert row["source_timestamp"] == "1990-01-01T00:00:00Z"
         assert datetime.fromisoformat(row["observed_at"]).year >= 2026
         assert '"rows": 0' in row["coverage"]
+
+
+def test_a_complete_refresh_retires_the_legacy_stamp_and_a_partial_one_keeps_it(
+    tmp_path, feeds, monkeypatch
+):
+    """The old per-season stamp has no timezone and nothing writes it any more, so its
+    warning printed on every run. It goes once every feed has a success of its own."""
+    conn = db.connect(tmp_path / "legacy.db")
+    for season in (2025, 2026):
+        db.set_meta(conn, f"last_refresh_{season}", "2026-09-02T21:54:22")
+    working = ingest.fetch_injuries
+
+    def offline(season):
+        if season == 2026:
+            raise ConnectionError("offline")
+        return working(season)
+
+    monkeypatch.setattr(ingest, "fetch_injuries", offline)
+    ingest.refresh(conn, 2026, log=lambda _: None)
+    assert db.get_meta(conn, "last_refresh_2025") is None
+    assert db.get_meta(conn, "last_refresh_2026") == "2026-09-02T21:54:22"
+    assert any("Legacy refresh timestamp" in w for w in freshness.report(conn, 2026, 1)[1])
+
+    monkeypatch.setattr(ingest, "fetch_injuries", working)
+    ingest.refresh(conn, 2026, log=lambda _: None)
+    assert db.get_meta(conn, "last_refresh_2026") is None
+    assert not any("Legacy refresh timestamp" in w for w in freshness.report(conn, 2026, 1)[1])
