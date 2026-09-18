@@ -19,6 +19,10 @@ from . import config, db, scoring, state
 SCHEMA_VERSION = 1
 TOTAL_COLUMNS = ["reported_week", "reported_total", "reported_rank"]
 META_PREFIX = "pool_report:"
+IDENTITY_PROMPT = (
+    "No entrant in the imported reports is marked as you, so the pot-share view and rival "
+    'predictions are off. Re-import a report once with --me "Your Name" to set it.'
+)
 
 
 @dataclass
@@ -493,6 +497,10 @@ def import_report(
                 raise ValueError(f"--me disagrees with the existing identity {me_id!r}")
             me_id = requested
         result.unrecorded, result.conflicts = _compare_me(conn, season, week, me_id, picks)
+        if me_id is None:
+            # Not an error: standings need no identity. But every row without the flag is
+            # read as a rival, so until one has it I am one of my own opponents.
+            result.warnings.append(IDENTITY_PROMPT)
         if check:
             return result
         # An unacknowledged roster change writes nothing. `_write_report` drops the rows

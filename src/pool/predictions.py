@@ -74,6 +74,17 @@ def report_arrivals(conn: sqlite3.Connection, season: int) -> tuple[dict[int, st
     return arrivals, int(len(reports) - len(known))
 
 
+def identified(conn: sqlite3.Connection, season: int) -> bool:
+    """False when there are entrants and none of them is marked as me.
+
+    Every entrant without the flag is read as a rival, so without it I am one of my own
+    opponents: predicted against, and simulated beside the entry that is actually mine.
+    No entrants at all is not a missing identity, only an empty pool.
+    """
+    found = entrants.members(conn, season)
+    return found.empty or bool(found.is_me.any())
+
+
 def _standing(row, spent, played: set[int], known=None) -> rivals.RivalState:
     pool = spent[row.entrant_id]
     return rivals.RivalState(
@@ -169,6 +180,8 @@ def rival_states(
 ) -> list[rivals.RivalState]:
     """Every entrant but me, with what they had spent going into `week`."""
     at = at or datetime.now(UTC)
+    if not identified(conn, season):
+        raise ValueError(entrants.IDENTITY_PROMPT)
     board, spent, played, _known = _as_of(conn, season, week, at)
     # Deliberately without `known`: this builds the state a *prediction* is made from, and
     # handing it the answer would make every hit rate meaningless. `pool_state` takes it,
@@ -190,6 +203,8 @@ def pool_state(
     """
     at = at or datetime.now(UTC)
     with db.transaction(conn):
+        if not identified(conn, season):
+            return rivals.PoolState(withheld=(entrants.IDENTITY_PROMPT,))
         board, spent, played, known = _as_of(conn, season, week, at)
         banked, my_tds, finalized = _decision_outcomes(conn, season, week, at)
     return rivals.PoolState(

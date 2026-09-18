@@ -123,7 +123,7 @@ def test_import_and_readback_keep_provenance_and_reported_totals(report_db):
     result = import_reference(report_db)
     assert result.ok and result.written and result.parsed
     assert (result.entrants, result.picks, result.totals) == (2, 6, 2)
-    assert not result.warnings
+    assert result.warnings == [entrants.IDENTITY_PROMPT], "imported without --me"
     rows = entrants.entrant_picks(report_db, 2026, 1)
     assert len(rows) == 6 and set(rows.observation_id) == {result.observation_id}
     assert rows.observed_at.notna().all() and rows.content_hash.notna().all()
@@ -380,6 +380,26 @@ def test_my_own_misspelt_name_can_be_corrected_in_one_import(report_db):
     raw = frame[frame.entrant.ne("Chris K.")].to_csv(index=False).encode()
     moved = import_reference(report_db, raw, week=2, me="Pat", allow_roster_change=True)
     assert not moved.ok and "disagrees with the existing identity" in moved.errors[0]
+
+
+def test_an_import_without_me_is_standings_only_until_an_identity_is_set(report_db):
+    """The review's reproduction. Every entrant without the flag reads as a rival, so a
+    report imported without --me made me one of my own opponents. Standings need no
+    identity and keep working; the pot share and the rival predictions refuse, and say
+    what one import sets it."""
+    result = import_reference(report_db)
+    assert result.ok and result.written
+    assert result.warnings == [entrants.IDENTITY_PROMPT]
+    assert len(standings.board(report_db, 2026).rows) == 2
+    pool = predictions.pool_state(report_db, 2026, 1)
+    assert not pool.rivals and pool.withheld == (entrants.IDENTITY_PROMPT,)
+    assert not pool.ready
+    with pytest.raises(ValueError, match="--me"):
+        predictions.rival_states(report_db, 2026, 1)
+    assert import_reference(report_db, me="Chris K.").warnings == [], "set once"
+    assert import_reference(report_db).warnings == [], "and kept without repeating it"
+    pool = predictions.pool_state(report_db, 2026, 1)
+    assert pool.ready and [r.entrant_id for r in pool.rivals] == ["pat"]
 
 
 def test_me_comparison_persists_and_never_edits_my_picks(report_db):

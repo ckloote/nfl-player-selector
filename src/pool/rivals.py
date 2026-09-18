@@ -86,9 +86,19 @@ class PoolState:
     my_tds: int = 0
     # Final player-week results known at the decision instant, including zeroes.
     finalized: tuple[tuple[int, str, int], ...] = ()
+    # Why the pot share cannot be computed from this state, one sentence each, ending with
+    # what fixes it. Empty when it can. A reason is a refusal rather than a caveat: a share
+    # computed against the wrong field, or from a total that is really unknown, prints to
+    # one decimal place exactly like one computed from the right inputs.
+    withheld: tuple[str, ...] = ()
 
     def __bool__(self) -> bool:
         return bool(self.rivals)
+
+    @property
+    def ready(self) -> bool:
+        """There is opposition to simulate, and nothing says the simulation would be wrong."""
+        return bool(self.rivals) and not self.withheld
 
 
 @dataclass(frozen=True)

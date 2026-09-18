@@ -459,6 +459,34 @@ def test_recommend_without_reports_says_so_rather_than_printing_zeroes(local, wi
     assert "Pot share" not in result.output, "no column of nothing"
 
 
+def test_recommend_without_an_identity_still_advises_and_says_what_turns_the_view_on(
+    local, wide
+):
+    """Imported without --me, the field would include me. The expected-TD advice needs no
+    field and is printed as always; the pot share is withheld with the one step that fixes
+    it, and no prediction reminder points at a command that would refuse."""
+    from typer.testing import CliRunner
+
+    from pool import scoring
+    from pool.cli import app
+    from tests import test_predictions as log
+    from tests import test_workflow as workflow
+
+    conn, path = local
+    scoring.import_touchdowns(
+        conn, 2026, pd.DataFrame([workflow.play(), workflow.end(), workflow.end("g2", 0, 0)])
+    )
+    log._history(conn)
+    log._report(conn, 1, log.WEEK1, "2026-09-14T00:00:00+00:00", me=None)
+    conn.close()
+    result = CliRunner().invoke(app, ["recommend", "--week", "2", "--db", str(path)])
+    assert result.exit_code == 0, result.output
+    assert "PICK:" in result.output
+    assert "Pot share withheld" in result.output and '--me "Your Name"' in result.output
+    assert "Pot share vs" not in result.output and "vs EV" not in result.output
+    assert "predict record" not in result.output
+
+
 def test_the_nudge_stops_once_the_week_can_be_seen(seeded):
     """A reminder to predict a week that has kicked off is an invitation to file a record
     `predictions.score` will refuse. It has to fall silent exactly when the window shuts."""

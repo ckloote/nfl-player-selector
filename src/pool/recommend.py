@@ -326,7 +326,9 @@ def pot_shares(
     sims = config.WINPROB_SIMS if sims is None else sims
     seed = config.WINPROB_SEED if seed is None else seed
     weeks = sorted({int(w) for w in proj.week.unique() if w >= week})
-    if not weeks or not pool.rivals:
+    # Checked here rather than by each caller: the sensitivity sweep calls this directly,
+    # and a withheld state must not produce a share by that door either.
+    if not weeks or not pool.ready:
         return
     # Spent and capped teammates still supply receiving TDs and share game outcomes.
     sub = proj[proj.week.isin(weeks)]

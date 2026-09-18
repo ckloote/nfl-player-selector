@@ -40,7 +40,7 @@ def local(tmp_path):
     yield from workflow.local.__wrapped__(tmp_path)
 
 
-def _report(conn, week, picks, observed_at):
+def _report(conn, week, picks, observed_at, me="Chris"):
     from pool import entrants
 
     frame = pd.DataFrame(
@@ -52,7 +52,7 @@ def _report(conn, week, picks, observed_at):
     )
     result = entrants.import_report(
         conn, 2026, week, frame.to_csv(index=False).encode(),
-        me="Chris", allow_roster_change=True, observed_at=observed_at,
+        me=me, allow_roster_change=True, observed_at=observed_at,
     )
     assert result.written, result.errors
     return result
@@ -297,4 +297,20 @@ def test_cli_says_so_when_the_prediction_can_no_longer_be_scored(pool):
     assert "will not be scorable" in result.output
     conn = db.connect(path)
     assert len(predictions.archived(conn, 2026)) == 1, "archived anyway"
+    conn.close()
+
+
+def test_cli_refuses_to_predict_without_an_identity_and_archives_nothing(local):
+    """Without an identity I am one of the rivals, and a prediction of my own picks is not
+    evidence about anybody. The command says what sets it rather than archiving that."""
+    conn, path = local
+    scoring.import_touchdowns(conn, 2026, pd.DataFrame([play(), end(), end("g2", 0, 0)]))
+    _history(conn)
+    _report(conn, 1, WEEK1, "2026-09-14T00:00:00+00:00", me=None)
+    conn.close()
+    result = runner.invoke(app, ["predict", "record", "--week", "2", "--db", str(path)])
+    assert result.exit_code == 1
+    assert "--me" in result.output
+    conn = db.connect(path)
+    assert not predictions.archived(conn, 2026) and not predictions.archived(conn, 2026, "pit")
     conn.close()

@@ -313,6 +313,9 @@ def predict_record(
     conn = _conn(db_path)
     try:
         wk = _week(conn, season, week)
+        if not predictions.identified(conn, season):
+            console.print(entrants.IDENTITY_PROMPT, style="red", markup=False)
+            raise typer.Exit(1)
         now = datetime.now(UTC)
         kickoff = predictions.first_kickoff(conn, season, wk)
         arrivals, _ = predictions.report_arrivals(conn, season)
@@ -673,7 +676,8 @@ def recommend(
         # feed the advice never saw would describe a decision that was not made.
         freshness_rows, freshness_warnings = freshness.report(conn, season, wk, now)
         recorded_names = state.picks(conn, season).set_index("player_id").player_name.to_dict()
-        nudge = _prediction_nudge(conn, season, wk, decided)
+        # Only with rivals to predict. Without them the command it names would refuse.
+        nudge = _prediction_nudge(conn, season, wk, decided) if pool.rivals else None
         # Inside the snapshot, on the same frame the advice was derived from. A sweep run
         # against a later forecast would describe the stability of a different decision.
         sweep = _sensitivity(proj, wk, advice, pool, locked) if sensitivity and pool else None
@@ -873,7 +877,13 @@ def _prediction_nudge(conn, season: int, wk: int, at: datetime) -> str | None:
 
 
 def _print_pool(pool, season: int, nudge: str | None) -> None:
-    if not pool:
+    if pool.withheld:
+        console.print(
+            "[yellow]Pot share withheld; the expected-TD advice below is unaffected.[/yellow]"
+        )
+        for reason in pool.withheld:
+            console.print(f"  {reason}", style="yellow", markup=False)
+    elif not pool:
         console.print(
             f"[dim]No rivals on record for {season}, so there is no pot-share view. "
             "Run `pool report import` to turn it on.[/dim]"
