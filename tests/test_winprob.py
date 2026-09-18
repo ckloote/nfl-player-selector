@@ -382,6 +382,38 @@ def test_a_pinned_player_cannot_be_spent_again_later():
     assert path[1] == "qz" and path[2] != "qz"
 
 
+def test_a_reported_no_pick_holds_its_week_empty_and_spends_nobody():
+    """Finding 3 of the 2026-09-17 review. A report saying a rival picked nobody is an
+    answer, not a gap: the rollout must not fill that week with a guess, and the player it
+    would have guessed there is still theirs to spend the week after."""
+    proj = frame(weeks=(1, 2))
+    state = rivals.RivalState("r1", "Rival", frozenset(), 0, 0, known=(("QB", 1, None),))
+    assert state.pinned("QB", [1, 2]) == {1: None}
+    players, values = rivals.remaining_matrix(proj, "QB", 1, [1, 2], state.used_ids)
+    guessed = rivals.rollout(players, values, [1, 2], rng=np.random.default_rng(0), top_n=1)
+    assert guessed[1] == "qa", "left to itself it spends the best quarterback in week 1"
+    held = rivals.rollout(
+        players, values, [1, 2], rng=np.random.default_rng(0), top_n=1,
+        known=state.pinned("QB", [1, 2]),
+    )
+    assert 1 not in held, "nothing is predicted into a slot the report says was empty"
+    assert held[2] == "qa", "and he is still unspent a week later"
+
+
+def test_a_reported_no_pick_is_no_claim_on_any_player():
+    """The explanation reads the same sampling sets. A rival who picked nobody this week is
+    not a rival who "may take" anybody."""
+    proj = frame()
+    pool = rivals.PoolState(
+        (rivals.RivalState("r1", "Rival", frozenset(), 0, 0, known=(("QB", 1, None),)),), 0
+    )
+    with config.override(WINPROB_SIMS=200, RIVAL_NOISE_TOP_N=3):
+        advice = advise_week(proj, 1, set(), {}, now=NOW, pool=pool)
+    qb = next(a for a in advice if a.slot == "QB")
+    assert qb.shares, "the view ran"
+    assert qb.contested == {}
+
+
 def test_a_reported_pick_enters_the_explanation_at_certainty():
     """It is the strongest form of "this rival holds this player", so the divergence
     sentence has to read it as such rather than as one of three things they might do."""
@@ -457,6 +489,34 @@ def test_recommend_without_reports_says_so_rather_than_printing_zeroes(local, wi
     assert result.exit_code == 0, result.output
     assert "no pot-share view" in result.output and "pool report import" in result.output
     assert "Pot share" not in result.output, "no column of nothing"
+
+
+def test_recommend_without_an_identity_still_advises_and_says_what_turns_the_view_on(
+    local, wide
+):
+    """Imported without --me, the field would include me. The expected-TD advice needs no
+    field and is printed as always; the pot share is withheld with the one step that fixes
+    it, and no prediction reminder points at a command that would refuse."""
+    from typer.testing import CliRunner
+
+    from pool import scoring
+    from pool.cli import app
+    from tests import test_predictions as log
+    from tests import test_workflow as workflow
+
+    conn, path = local
+    scoring.import_touchdowns(
+        conn, 2026, pd.DataFrame([workflow.play(), workflow.end(), workflow.end("g2", 0, 0)])
+    )
+    log._history(conn)
+    log._report(conn, 1, log.WEEK1, "2026-09-14T00:00:00+00:00", me=None)
+    conn.close()
+    result = CliRunner().invoke(app, ["recommend", "--week", "2", "--db", str(path)])
+    assert result.exit_code == 0, result.output
+    assert "PICK:" in result.output
+    assert "Pot share withheld" in result.output and '--me "Your Name"' in result.output
+    assert "Pot share vs" not in result.output and "vs EV" not in result.output
+    assert "predict record" not in result.output
 
 
 def test_the_nudge_stops_once_the_week_can_be_seen(seeded):
@@ -606,9 +666,21 @@ def test_a_week_nobody_has_played_is_not_a_week_nobody_reported(seeded):
     ahead = predictions.pool_state(conn, 2026, 3, at=kickoff - timedelta(hours=1))
     assert ahead.rivals and all(not r.missing_weeks for r in ahead.rivals)
     assert all(r.pool_complete for r in ahead.rivals), "looking ahead is not a data gap"
+    # Not a gap in anyone's used pool, but still a week nobody's total includes: the
+    # simulation starts at week 3, so week 2 would be neither banked nor simulated.
+    assert not ahead.ready
+    assert ahead.withheld == (
+        "Week 2 has not been played yet, so nobody's season before this week is known. "
+        "The pot share is only for the next week to be decided.",
+    )
     after = predictions.pool_state(conn, 2026, 3, at=kickoff + timedelta(hours=1))
     assert all(r.missing_weeks == (2,) for r in after.rivals), "played and never reported"
     assert all(not r.pool_complete for r in after.rivals)
+    assert not after.ready
+    assert after.withheld == (
+        "Week 2: nothing on record for you, Jamie and Pat. "
+        "Import that week's report with `pool report import`.",
+    )
 
 
 def test_the_policy_reads_a_report_that_arrived_before_the_decision_and_not_one_after(seeded):
@@ -634,6 +706,180 @@ def test_the_policy_reads_a_report_that_arrived_before_the_decision_and_not_one_
     pat = next(r for r in after.rivals if r.display_name == "Pat")
     assert pat.pinned("QB", [2]) == {2: "q2"}, "Pat's reported week-2 quarterback"
     assert all(week >= 2 for _slot, week, _pid in pat.known), "week 1 is spending, not a pick"
+
+
+def test_a_mid_week_report_pins_no_picks_and_shows_unresolved_names_as_guesses(seeded, wide):
+    """The review's reproduction of finding 3, through the database. Pat reports a
+    quarterback and nothing else: both empty slots are pinned empty, and survive the
+    capture that has to replay them. Jamie's quarterback did not resolve, so it is still
+    predicted -- and `recommend` says it is a guess where the report gave an answer."""
+    from typer.testing import CliRunner
+
+    from pool import capture, predictions
+    from pool.cli import app
+    from tests import test_predictions as log
+
+    conn, path = seeded
+    week2 = dict(log.WEEK2, Pat=("Quarter Two", "", ""), Jamie=("Nobody Known", "", ""))
+    # Arrived already, so `recommend` on the real clock reads it too.
+    log._report(conn, 2, week2, "2026-09-15T00:00:00+00:00")
+    pool = predictions.pool_state(conn, 2026, 2)
+    pat = next(r for r in pool.rivals if r.display_name == "Pat")
+    assert pat.pinned("QB", [2]) == {2: "q2"}
+    assert pat.pinned("RB", [2]) == {2: None} and pat.pinned("FLEX", [2]) == {2: None}
+    jamie = next(r for r in pool.rivals if r.display_name == "Jamie")
+    assert jamie.pinned("QB", [2]) == {}, "an unreadable name is not an answer"
+    assert capture._pool_from_detail(capture._pool_detail(pool)) == pool
+    ahead = predictions.unresolved_ahead(conn, 2026, 2, datetime.now(UTC))
+    assert ahead == [("Jamie", 2, "QB", "Nobody Known")]
+    conn.close()
+    with config.override(WINPROB_SIMS=200):
+        result = CliRunner().invoke(
+            app, ["recommend", "--week", "2", "--no-capture", "--db", str(path)]
+        )
+    assert result.exit_code == 0, result.output
+    assert "Simulated as unknown: Jamie QB week 2 ('Nobody Known' did not resolve)" in (
+        result.output
+    )
+
+
+def _unfinish(conn, game="g1"):
+    with conn:
+        conn.execute(
+            "UPDATE game_results SET complete = 0, reason = 'incomplete' WHERE game_id = ?",
+            (game,),
+        )
+
+
+def test_an_unfinished_past_score_withholds_the_share_rather_than_counting_zero(seeded):
+    """Finding 1 of the 2026-09-17 review, reproduced. Pat banks a touchdown in week 1;
+    once that game is no longer final, the total is unknown rather than one lower. A share
+    computed from it would print like any other, so it is not computed, and the expected-TD
+    advice beside it does not move."""
+    from pool import predictions, scoring
+    from tests import test_workflow as workflow
+
+    conn, _ = seeded
+    # Pat's quarterback scores, so Pat has a touchdown to lose.
+    scoring.import_touchdowns(
+        conn,
+        2026,
+        pd.DataFrame(
+            [workflow.play(pid="q1"), workflow.end(), workflow.end("g2", 0, 0)]
+        ),
+    )
+    ready = predictions.pool_state(conn, 2026, 2)
+    assert ready.ready and not ready.withheld
+    assert next(r for r in ready.rivals if r.display_name == "Pat").season_tds == 1
+    _unfinish(conn)
+    pool = predictions.pool_state(conn, 2026, 2)
+    assert pool.rivals and not pool.ready
+    assert pool.withheld == (
+        "Week 1: 5 picks are not final yet. Run `pool refresh` once the games are over.",
+    )
+    proj = _proj_for(conn)
+    now = datetime(2026, 9, 19, 12, 0, tzinfo=UTC)
+    with config.override(WINPROB_SIMS=200):
+        plain = advise_week(proj, 2, set(), {}, now=now)
+        withheld = advise_week(proj, 2, set(), {}, now=now, pool=pool)
+        shown = advise_week(proj, 2, set(), {}, now=now, pool=ready)
+    assert any(a.shares for a in shown), "the contrast: complete inputs do get a share"
+    assert not any(a.shares for a in withheld)
+    assert [(a.slot, a.recommended.player_id) for a in withheld] == [
+        (a.slot, a.recommended.player_id) for a in plain
+    ]
+
+
+def test_an_unresolved_past_name_withholds_the_share(seeded):
+    """An unresolved name scores nothing anyone knows. Counting it as zero understates that
+    rival by an unknown amount."""
+    from pool import predictions
+
+    conn, _ = seeded
+    with conn:
+        conn.execute(
+            "UPDATE pool_picks SET player_id = NULL WHERE entrant_id = 'pat' AND slot = 'QB'"
+        )
+    pool = predictions.pool_state(conn, 2026, 2)
+    assert pool.withheld == (
+        "Week 1: the name for Pat QB did not resolve to a player. "
+        "Re-import that week's report once it does.",
+    )
+
+
+def test_my_own_unfinished_recorded_pick_withholds_the_share(local):
+    """My recorded pick stands in for the report's copy of it, so its score is checked
+    too. Here it is the only pick in a game that has not finished."""
+    from pool import predictions, scoring
+    from tests import test_predictions as log
+    from tests import test_workflow as workflow
+
+    conn, _ = local
+    scoring.import_touchdowns(
+        conn, 2026, pd.DataFrame([workflow.play(), workflow.end(), workflow.end("g2", 0, 0)])
+    )
+    week1 = {
+        "Chris": ("Quarter One", "Runner One", "Flex Two"),
+        "Pat": ("Quarter One", "", "Flex Two"),
+    }
+    log._report(conn, 1, week1, "2026-09-14T00:00:00+00:00")
+    assert predictions.pool_state(conn, 2026, 2).ready
+    with conn:
+        conn.execute(
+            "INSERT INTO my_picks(season, week, slot, player_id, player_name, recorded_at, "
+            "game_id) VALUES (2026, 1, 'FLEX', 'f1', 'Flex One', '2026-09-09T12:00:00+00:00', "
+            "'g2')"
+        )
+    _unfinish(conn, "g2")
+    pool = predictions.pool_state(conn, 2026, 2)
+    assert pool.withheld == (
+        "Week 1: 1 pick is not final yet. Run `pool refresh` once the games are over.",
+    )
+
+
+def test_recommend_says_why_the_share_is_withheld_and_still_advises(seeded, wide):
+    from typer.testing import CliRunner
+
+    from pool.cli import app
+
+    conn, path = seeded
+    _unfinish(conn)
+    conn.close()
+    with config.override(WINPROB_SIMS=200):
+        result = CliRunner().invoke(app, ["recommend", "--week", "2", "--db", str(path)])
+    assert result.exit_code == 0, result.output
+    assert "PICK:" in result.output
+    assert "Pot share withheld; the expected-TD advice below is unaffected." in result.output
+    assert "Week 1: 5 picks are not final yet." in result.output
+    assert "Pot share vs" not in result.output, "no partial totals"
+    assert "vs EV" not in result.output
+
+
+def test_a_withheld_decision_is_captured_and_replays_without_a_share(seeded):
+    """The refusal changes the advice, so the capture has to carry it: replayed without
+    it, the decision would compute a share the original declined to. A complete state
+    stores nothing extra, so it hashes as it did before the field existed."""
+    from pool import capture, predictions, prospective, state
+
+    conn, _ = seeded
+    assert "withheld" not in capture._pool_detail(predictions.pool_state(conn, 2026, 2))
+    _unfinish(conn)
+    pool = predictions.pool_state(conn, 2026, 2)
+    detail = capture._pool_detail(pool)
+    assert detail["withheld"] == list(pool.withheld)
+    assert capture._pool_from_detail(detail) == pool
+    now = state.eastern_now(datetime(2026, 9, 19, 12, 0, tzinfo=UTC))
+    proj = _proj_for(conn)
+    used, locked = state.used_ids(conn, 2026), state.locked_by_slot(conn, 2026)
+    with config.override(WINPROB_SIMS=200):
+        advice = advise_week(proj, 2, used, locked, now=now, pool=pool)
+        assert not any(a.shares for a in advice)
+        decision_id = capture.record_decision(
+            conn, 2026, 2, proj, advice, used, locked,
+            decision_at=state.decision_instant(now), pool=pool,
+        )
+        rebuilt = prospective.reconstruction(conn, decision_id)
+    assert rebuilt["ok"], rebuilt
 
 
 # --- does the answer need the numbers we had to fit? ----------------------------------

@@ -804,8 +804,16 @@ match replay.
 The sixth is week 3's, taken on 2026-09-17 under the new policy. It reconstructs and cannot
 reach parity, for a reason that is not a defect: parity rebuilds the decision from the
 archived feeds, which needs complete touchdown coverage through the prior week, and week 2
-has not been played. It will verify once week 2 is scored. This is the ordinary state of the
-current week's capture and it is why the strict count reads 1 of 6 rather than 0 of 6.
+has not been played. ~~It will verify once week 2 is scored. This is the ordinary state of
+the current week's capture and it is why the strict count reads 1 of 6 rather than 0 of 6.~~
+
+> **Correction (2026-09-18).** Waiting could not have helped. Replay restores the archive as
+> it stood at the decision, so week 2's later results were never going to appear in it. The
+> defect was the coverage gate itself, which the live path never applied. Finding 7 of
+> [the project review](PROJECT_REVIEW_2026-09-17.md) removed it: replay now rebuilds what
+> the decision read, and this capture's replayed surface matches its stored one exactly. It
+> still fails today, but on its pot shares, which a later fix changed; at `89dca93` it
+> reconstructs.
 
 Adding `shares` to the captured advice detail initially failed **all five** older captures,
 which had been recorded before the field existed. The fix was to narrow the comparison to

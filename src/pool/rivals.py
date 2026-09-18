@@ -48,14 +48,17 @@ class RivalState:
     missing_weeks: tuple[int, ...] = ()
     # (slot, week, player_id) for picks from this week on that are already on record. A
     # pick that has been reported is not a pick to predict, and simulating a guess at one
-    # I have been told is strictly worse than using it.
-    known: tuple[tuple[str, int, str], ...] = ()
+    # I have been told is strictly worse than using it. A player_id of None is the report
+    # saying they picked nobody, which is an answer too: the slot is held empty rather than
+    # predicted. A name that never resolved is not here at all -- who they took is unknown,
+    # so that week is still a guess.
+    known: tuple[tuple[str, int, str | None], ...] = ()
 
-    def pinned(self, slot: str, weeks) -> dict[int, str]:
-        """This rival's already-reported picks for one slot, within `weeks`."""
+    def pinned(self, slot: str, weeks) -> dict[int, str | None]:
+        """This rival's already-reported picks for one slot, within `weeks`; None is a no-pick."""
         allowed = {int(w) for w in weeks}
         return {
-            int(week): str(pid)
+            int(week): None if pid is None else str(pid)
             for name, week, pid in self.known
             if name == slot and int(week) in allowed
         }
@@ -86,9 +89,19 @@ class PoolState:
     my_tds: int = 0
     # Final player-week results known at the decision instant, including zeroes.
     finalized: tuple[tuple[int, str, int], ...] = ()
+    # Why the pot share cannot be computed from this state, one sentence each, ending with
+    # what fixes it. Empty when it can. A reason is a refusal rather than a caveat: a share
+    # computed against the wrong field, or from a total that is really unknown, prints to
+    # one decimal place exactly like one computed from the right inputs.
+    withheld: tuple[str, ...] = ()
 
     def __bool__(self) -> bool:
         return bool(self.rivals)
+
+    @property
+    def ready(self) -> bool:
+        """There is opposition to simulate, and nothing says the simulation would be wrong."""
+        return bool(self.rivals) and not self.withheld
 
 
 @dataclass(frozen=True)
@@ -210,22 +223,27 @@ def rollout(players, values, weeks, *, rng, top_n: int = 1, known=None) -> dict[
     player who is not in this matrix -- capped out of the candidate pool, or ineligible --
     still holds his week; he simply contributes whatever his cell is worth, which is the
     honest answer for a player the forecast does not rate.
+
+    A pinned None is a reported no-pick. It holds its week the same way -- nothing is
+    predicted there and nobody is spent -- and it is left out of the path returned, because
+    an empty slot scores nothing and there is no player to score.
     """
-    picks: dict[int, str] = {int(w): str(p) for w, p in (known or {}).items()}
-    if not len(players):
-        return picks
-    rows = {str(pid): row for row, pid in enumerate(players.player_id)}
-    taken: list[int] = [rows[pid] for pid in picks.values() if pid in rows]
-    for col, week in enumerate(weeks):
-        if int(week) in picks:
-            continue
-        best = options(values, col, taken, top_n=top_n)
-        if not best:
-            continue
-        row = best[0] if len(best) == 1 else int(rng.choice(best))
-        taken.append(row)
-        picks[int(week)] = str(players.iloc[row].player_id)
-    return picks
+    picks: dict[int, str | None] = {
+        int(w): None if p is None else str(p) for w, p in (known or {}).items()
+    }
+    if len(players):
+        rows = {str(pid): row for row, pid in enumerate(players.player_id)}
+        taken: list[int] = [rows[pid] for pid in picks.values() if pid in rows]
+        for col, week in enumerate(weeks):
+            if int(week) in picks:
+                continue
+            best = options(values, col, taken, top_n=top_n)
+            if not best:
+                continue
+            row = best[0] if len(best) == 1 else int(rng.choice(best))
+            taken.append(row)
+            picks[int(week)] = str(players.iloc[row].player_id)
+    return {week: pid for week, pid in picks.items() if pid is not None}
 
 
 PREDICTORS = {

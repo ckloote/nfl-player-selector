@@ -345,6 +345,31 @@ def test_parity_names_the_column_that_moved(tmp_path, monkeypatch):
     assert result["largest_difference"] == pytest.approx(0.25)
 
 
+def test_a_decision_made_while_an_earlier_week_was_unfinished_reaches_parity(tmp_path):
+    """Finding 7 of the 2026-09-17 review, reproduced. A week-4 decision made on the
+    Friday of week 3 read week 3 as it stood: the Thursday game final, the Sunday game
+    unplayed. Replay demanded complete coverage of every earlier week, which the live path
+    never did, so a faithfully archived decision could not be checked -- and because the
+    archive is immutable, no later refresh could ever change that. Replay now rebuilds
+    what the live path read. Research runs keep the stricter gate by asking for it."""
+    from pool import snapshots
+
+    conn, unplayed = _archived(tmp_path)
+    decision_id, _, _ = _decide(conn, 4, datetime.fromisoformat(DECISION))
+    # Everything after the decision arrives before the check is run.
+    _publish(conn, unplayed, "rest")
+    for feed in ("player_stats", "touchdowns"):
+        snapshots.archive(conn, SEASON, feed, observed_at=POST_SUN)
+    spec = prospective.resolve(_protocol(tmp_path, weeks="[4]", review=4))
+    result = prospective.parity(conn, decision_id, spec)
+    assert result["ok"], result
+    with pytest.raises(ValueError, match="Incomplete touchdown coverage"):
+        P.load_frames(
+            conn, SEASON, 4, input_policy="snapshots", decision_at=DECISION,
+            require_complete=True,
+        )
+
+
 def test_a_decision_whose_archive_was_never_written_cannot_be_verified(tmp_path):
     """An unverifiable decision is not a verified one. Dropping it from the denominator
     would let a window with no archive at all report a perfect parity rate."""

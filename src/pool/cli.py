@@ -313,6 +313,9 @@ def predict_record(
     conn = _conn(db_path)
     try:
         wk = _week(conn, season, week)
+        if not predictions.identified(conn, season):
+            console.print(entrants.IDENTITY_PROMPT, style="red", markup=False)
+            raise typer.Exit(1)
         now = datetime.now(UTC)
         kickoff = predictions.first_kickoff(conn, season, wk)
         arrivals, _ = predictions.report_arrivals(conn, season)
@@ -673,13 +676,15 @@ def recommend(
         # feed the advice never saw would describe a decision that was not made.
         freshness_rows, freshness_warnings = freshness.report(conn, season, wk, now)
         recorded_names = state.picks(conn, season).set_index("player_id").player_name.to_dict()
-        nudge = _prediction_nudge(conn, season, wk, decided)
+        # Only with rivals to predict. Without them the command it names would refuse.
+        nudge = _prediction_nudge(conn, season, wk, decided) if pool.rivals else None
+        uncertain = predictions.unresolved_ahead(conn, season, wk, decided) if pool.ready else []
         # Inside the snapshot, on the same frame the advice was derived from. A sweep run
         # against a later forecast would describe the stability of a different decision.
         sweep = _sensitivity(proj, wk, advice, pool, locked) if sensitivity and pool else None
     console.print(f"[bold]Week {wk} — {season}[/bold]")
     _print_freshness(freshness_rows, freshness_warnings)
-    _print_pool(pool, season, nudge)
+    _print_pool(pool, season, nudge, uncertain)
     if decision_id:
         # Printed so the submission can name it. With two decisions in a week the
         # fallback link -- the most recent advice for the slot -- is whichever happened
@@ -872,37 +877,34 @@ def _prediction_nudge(conn, season: int, wk: int, at: datetime) -> str | None:
     )
 
 
-def _print_pool(pool, season: int, nudge: str | None) -> None:
-    if not pool:
+def _print_pool(pool, season: int, nudge: str | None, uncertain=()) -> None:
+    if pool.withheld:
+        console.print(
+            "[yellow]Pot share withheld; the expected-TD advice below is unaffected.[/yellow]"
+        )
+        for reason in pool.withheld:
+            console.print(f"  {reason}", style="yellow", markup=False)
+    elif not pool:
         console.print(
             f"[dim]No rivals on record for {season}, so there is no pot-share view. "
             "Run `pool report import` to turn it on.[/dim]"
         )
     else:
+        # An unreported played week and an unresolved past name used to be warnings here.
+        # Both leave a season total unknown, so both now withhold the view instead.
         leader = max(pool.rivals, key=lambda r: r.season_tds)
-        blind = sorted({w for r in pool.rivals for w in r.missing_weeks})
-        unresolved = [r.display_name for r in pool.rivals if r.unknown]
         console.print(
             f"[dim]Pot share vs {len(pool.rivals)} rivals: you {pool.my_tds} TD, "
             f"best rival {leader.display_name} {leader.season_tds}. "
             f"{config.WINPROB_SIMS} paired simulations, seed {config.WINPROB_SEED}.[/dim]"
         )
-        # Both of these overstate what rivals have left, and so overstate what the
-        # simulation lets them score: a player they have already spent is free to be
-        # spent again. Said out loud, because a share printed to one decimal place does
-        # not otherwise look like a number computed against the wrong opposition.
-        if blind:
+        # Reported, but unreadable: simulated as though the report had not arrived.
+        for name, week, slot, reported in uncertain:
             console.print(
-                f"[yellow]Week{'s' if len(blind) > 1 else ''} "
-                f"{', '.join(str(w) for w in blind)} {'have' if len(blind) > 1 else 'has'} "
-                "been played and never reported: every rival's remaining pool is overstated "
-                "by three players a week. Run `pool report import`.[/yellow]"
-            )
-        if unresolved:
-            console.print(
-                f"[yellow]Unresolved names in {', '.join(unresolved)}'s reports: their "
-                "remaining pool is overstated, and so is what this expects them to "
-                "score.[/yellow]"
+                f"Simulated as unknown: {name} {slot} week {week} ({reported!r} did not "
+                "resolve). Re-import that report once it resolves to use the pick.",
+                style="yellow",
+                markup=False,
             )
     if nudge:
         console.print(f"[yellow]{nudge}[/yellow]")

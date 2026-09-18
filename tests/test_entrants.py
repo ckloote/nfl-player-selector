@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from typer.testing import CliRunner
 
-from pool import capture, config, db, entrants, freshness, snapshots
+from pool import capture, config, db, entrants, freshness, predictions, snapshots, standings
 from pool.cli import app
 
 REFERENCE = Path(__file__).parent / "fixtures" / "pool_report.csv"
@@ -123,7 +123,7 @@ def test_import_and_readback_keep_provenance_and_reported_totals(report_db):
     result = import_reference(report_db)
     assert result.ok and result.written and result.parsed
     assert (result.entrants, result.picks, result.totals) == (2, 6, 2)
-    assert not result.warnings
+    assert result.warnings == [entrants.IDENTITY_PROMPT], "imported without --me"
     rows = entrants.entrant_picks(report_db, 2026, 1)
     assert len(rows) == 6 and set(rows.observation_id) == {result.observation_id}
     assert rows.observed_at.notna().all() and rows.content_hash.notna().all()
@@ -336,6 +336,8 @@ def test_corrected_week_removes_obsolete_rows_only_once_acknowledged(report_db):
     assert len(entrants.entrant_picks(report_db, 2026, 1)) == 3
     assert len(entrants.reported_totals(report_db, 2026, 1)) == 1
     assert count(report_db, "pool_entrants") == 2
+    # The identity row is kept; the entrant is not. Pat has no picks left to stand on.
+    assert [r.entrant_id for r in standings.board(report_db, 2026).rows] == ["chris k"]
 
 
 def test_normalized_entrant_name_remains_one_identity_across_weeks(report_db):
@@ -344,6 +346,60 @@ def test_normalized_entrant_name_remains_one_identity_across_weeks(report_db):
     raw = entrants.parse_csv(raw).assign(week=2).to_csv(index=False).encode()
     assert import_reference(report_db, raw, week=2).ok
     assert count(report_db, "pool_entrants") == 2
+
+
+def test_a_corrected_entrant_name_leaves_no_phantom_opponent(report_db):
+    """The review's reproduction. A misspelt rival, corrected by re-importing the week, keeps
+    an identity row with no picks behind it. That is a spelling, not an entrant: it must not
+    reach the standings, the used pools, or the field the pot share is simulated against."""
+    typo = REFERENCE.read_bytes().replace(b"Pat", b"Rivla")
+    assert import_reference(report_db, typo, me="Chris K.").ok
+    corrected = import_reference(report_db, allow_roster_change=True)
+    assert corrected.ok and corrected.written
+    assert corrected.added == ["pat"] and corrected.removed == ["rivla"]
+    assert {r.entrant_id for r in standings.board(report_db, 2026).rows} == {"chris k", "pat"}
+    assert set(standings.used_pools(report_db, 2026)) == {"chris k", "pat"}
+    field = predictions.pool_state(report_db, 2026, 1).rivals
+    assert [r.entrant_id for r in field] == ["pat"], "one rival, not the misspelling as well"
+
+
+def test_my_own_misspelt_name_can_be_corrected_in_one_import(report_db):
+    """The same correction applied to my row. The misspelling is about to have no picks, so
+    it is no identity to disagree with, and `--me` moves to the corrected spelling rather
+    than refusing it forever."""
+    typo = REFERENCE.read_bytes().replace(b"Chris K.", b"Chris Kk")
+    assert import_reference(report_db, typo, me="Chris Kk").ok
+    corrected = import_reference(report_db, me="Chris K.", allow_roster_change=True)
+    assert corrected.ok and corrected.written, corrected.errors
+    assert [r.entrant_id for r in standings.board(report_db, 2026).rows if r.is_me] == ["chris k"]
+    mine = report_db.execute("SELECT entrant_id FROM pool_entrants WHERE is_me = 1").fetchall()
+    assert [r[0] for r in mine] == ["chris k"], "the corrected-away spelling is not me as well"
+    # An identity with picks in another week is still established: moving it is a
+    # disagreement, even in a file that leaves me out.
+    frame = entrants.parse_csv(REFERENCE.read_bytes()).assign(week="2")
+    raw = frame[frame.entrant.ne("Chris K.")].to_csv(index=False).encode()
+    moved = import_reference(report_db, raw, week=2, me="Pat", allow_roster_change=True)
+    assert not moved.ok and "disagrees with the existing identity" in moved.errors[0]
+
+
+def test_an_import_without_me_is_standings_only_until_an_identity_is_set(report_db):
+    """The review's reproduction. Every entrant without the flag reads as a rival, so a
+    report imported without --me made me one of my own opponents. Standings need no
+    identity and keep working; the pot share and the rival predictions refuse, and say
+    what one import sets it."""
+    result = import_reference(report_db)
+    assert result.ok and result.written
+    assert result.warnings == [entrants.IDENTITY_PROMPT]
+    assert len(standings.board(report_db, 2026).rows) == 2
+    pool = predictions.pool_state(report_db, 2026, 1)
+    assert not pool.rivals and pool.withheld == (entrants.IDENTITY_PROMPT,)
+    assert not pool.ready
+    with pytest.raises(ValueError, match="--me"):
+        predictions.rival_states(report_db, 2026, 1)
+    assert import_reference(report_db, me="Chris K.").warnings == [], "set once"
+    assert import_reference(report_db).warnings == [], "and kept without repeating it"
+    pool = predictions.pool_state(report_db, 2026, 1)
+    assert pool.ready and [r.entrant_id for r in pool.rivals] == ["pat"]
 
 
 def test_me_comparison_persists_and_never_edits_my_picks(report_db):
