@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import json
-import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -839,11 +838,9 @@ def week_command(
     conn = _conn(db_path)
     refreshed = None
     if refresh_first or (refresh_first is None and weekly.needs_refresh(conn, season)):
-        started = time.monotonic()
         # Per-feed progress is `pool refresh`'s to print. Here only the outcome matters,
         # and a failure is reported below without stopping the advice.
-        result = ingest.refresh(conn, season, log=lambda line: None)
-        refreshed = (time.monotonic() - started, result.failures)
+        refreshed = ingest.refresh(conn, season, log=lambda line: None).failures
 
     def reads(conn, wk, decision_id):
         arrivals, _ = predictions.report_arrivals(conn, season)
@@ -857,7 +854,10 @@ def week_command(
     d = _decide(conn, season, week, capture_when="open", also=reads)
     # After the snapshot closes: the archive refuses to write inside a transaction, and
     # the prediction is made on the very frame the advice above was derived from.
-    predicted = weekly.save_predictions(conn, season, d.week, d.proj, d.decided)
+    try:
+        predicted = weekly.save_predictions(conn, season, d.week, d.proj, d.decided)
+    except Exception as exc:  # the advice above must print whatever fails here
+        predicted = ("failed", f"{type(exc).__name__}: {exc}")
     _render_week(d, season, refreshed, db_path, predicted)
 
 
@@ -890,11 +890,11 @@ def _render_week(d: Decided, season: int, refreshed, db_path, predicted=None) ->
     reads: _WeekReads = d.extra
     pool, wk = d.pool, d.week
     views = weekly.slot_views(d.advice, reads.results, reads.previous)
-    header = "refreshed just now" if refreshed else _age(d.freshness_rows, d.now)
+    header = "refreshed just now" if refreshed is not None else _age(d.freshness_rows, d.now)
     console.print(f"[bold]Week {wk} · {season}[/bold] · {header} · times ET")
-    if refreshed and refreshed[1]:
+    if refreshed:
         console.print(
-            f"Refresh failed for {'; '.join(refreshed[1])}. Using the data from before it.",
+            f"Refresh failed for {'; '.join(refreshed)}. Using the data from before it.",
             style="yellow",
             markup=False,
         )
@@ -914,8 +914,16 @@ def _render_week(d: Decided, season: int, refreshed, db_path, predicted=None) ->
     )
 
 
-def _print_predicted(wk: int, what: str, kickoff: datetime) -> None:
+def _print_predicted(wk: int, what: str, kickoff) -> None:
     """One line on the rival prediction, which only counts if saved before first kickoff."""
+    if what == "failed":
+        console.print(
+            f"Could not save rival predictions for week {wk}: {kickoff}. Run pool predict "
+            f"record --week {wk} before first kickoff to save them by hand.",
+            style="yellow",
+            markup=False,
+        )
+        return
     when = _short(state.eastern_now(kickoff))
     console.print(
         {

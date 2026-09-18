@@ -562,3 +562,17 @@ def test_recommend_keeps_names_whole_at_eighty_columns_even_with_the_pot_share(m
     assert "…" not in output
     for name in long.values():
         assert name in output
+
+
+def test_a_prediction_that_cannot_be_saved_is_one_line_and_the_advice_still_prints(
+    seeded, monkeypatch
+):
+    def broken(*args, **kwargs):
+        raise ValueError("No projection rows for 2026 week 2")
+
+    monkeypatch.setattr(weekly, "save_predictions", broken)
+    conn, path = seeded
+    conn.close()
+    output = weekly_run(path, BEFORE_KICKOFF)
+    assert "PICK " in output
+    assert "Could not save rival predictions for week 2: ValueError" in output
