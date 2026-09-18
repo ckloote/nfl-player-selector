@@ -615,8 +615,12 @@ def report_cli(report_db, monkeypatch):
     return invoke
 
 
-def test_cli_import_list_and_reported_standings(report_cli, report_db, tmp_path):
-    result = report_cli("report", "import", str(REFERENCE))
+def test_cli_import_list_and_reported_standings(report_cli, report_db, tmp_path, monkeypatch):
+    # Imported by a relative path, so the listing's source column is the same short name
+    # wherever the repository is checked out. By its absolute path, a deep enough checkout
+    # pushed the table past the console width and truncated the name this test looks for.
+    monkeypatch.chdir(REFERENCE.parent)
+    result = report_cli("report", "import", REFERENCE.name)
     assert result.exit_code == 0, result.output
     assert "observation 1" in result.output and "2 entrants, 6 picks" in result.output
     listing = report_cli("report", "list")
