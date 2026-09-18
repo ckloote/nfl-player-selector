@@ -328,15 +328,21 @@ and renames leave the week exactly as it was and exit nonzero until acknowledged
 `--allow-roster-change`; review those differences before acknowledging them. A correction
 that drops an entrant and a delivery that was truncated look identical, so nothing is
 written until you say which it is; acknowledging then replaces that week's entrant set
-while preserving the archived originals. `--me` identifies your row once, then every
-import that contains your row compares it with `my_picks`; a file without your row is a
-roster change, not a mismatch. Include yourself: `standings` only lists entrants in the
-report, and the comparison is what catches the pool registering a different pick than the
-one you recorded. A slot you have not recorded is a note; a slot where
-your record and the report name different players — or where the report says you picked
-nobody — is a mismatch. Unresolved names, unacknowledged roster changes, and mismatches
-exit nonzero. `my_picks` is never edited by a report import. Incomplete game coverage
-warns but permits the import.
+while preserving the archived originals. An entrant left with no picks at all after a
+correction was a misspelling, and is no longer counted anywhere: not in `standings`, and not
+as an opponent in the pot share. That includes your own row: if a corrected report spells
+your name differently, pass the new spelling with `--me` on that same import.
+
+`--me` identifies your row once, then every import that contains your row compares it with
+`my_picks`; a file without your row is a roster change, not a mismatch. Standings work
+without it, but the pot share and `predict record` do not: without it every entrant reads as
+a rival, you included. An import that leaves no entrant marked as you says so. Include
+yourself: `standings` only lists entrants in the report, and the comparison is what catches
+the pool registering a different pick than the one you recorded. A slot you have not
+recorded is a note; a slot where your record and the report name different players — or
+where the report says you picked nobody — is a mismatch. Unresolved names, unacknowledged
+roster changes, and mismatches exit nonzero. `my_picks` is never edited by a report import.
+Incomplete game coverage warns but permits the import.
 
 Report archives appear in `status` but are excluded from projection inputs, snapshot replay,
 and feed freshness checks.
@@ -415,6 +421,25 @@ Where the two objectives disagree, the line under the slot says why — an overl
 rivals likely to take that player, or the standings — and names them. A divergence it cannot
 attribute to either is printed as a defect rather than dressed up as advice. With no reports
 imported it says there is no second view and gives the expected-TD advice alone.
+
+**The pot share is withheld, not estimated, when the season so far is not known.** Every
+entrant's picks for every earlier week must be on record and final. The simulation starts at
+the week being decided, so an earlier score it cannot see would otherwise count as zero, and
+the share would print like any other. When anything is missing, `recommend` says what and how
+to fix it, and gives the expected-TD advice unchanged:
+
+| Withheld because | Fix |
+| --- | --- |
+| No entrant is marked as you | Re-import a report once with `--me "Your Name"` |
+| A played week has no report, or an entrant is missing from it | `pool report import` for that week |
+| An earlier pick's game is unfinished, or its result is not refreshed | `pool refresh` once the games are over |
+| An earlier reported name did not resolve | Re-import that week's report once it resolves |
+| An earlier week has not been played (you asked about a later week) | Ask about the next week to be decided |
+
+A report that arrives before its week is played is used as it stands: a named pick is
+simulated as that player, and a no-pick holds the slot empty, spending nobody and scoring
+nothing. A name in it that did not resolve is simulated as an unknown choice, exactly as if
+that report had not arrived, and `recommend` names it as a guess.
 
 ```bash
 uv run pool recommend --season 2026 --sensitivity   # re-rank across the fitted knobs

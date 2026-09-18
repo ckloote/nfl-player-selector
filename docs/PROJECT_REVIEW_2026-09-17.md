@@ -96,6 +96,28 @@ rules while reducing the number of workflows and representations that must agree
    departures with historical picks need an explicit membership rule rather than
    deletion of their history.
 
+**Status of findings 1–4:** resolved on branch `claude/review-findings-1-4`.
+
+- `2d628a5` (finding 1): pot share is withheld, with named reasons and fixes, until every
+  entrant's earlier weeks are final. This includes looking ahead past an unfinished week.
+- `dbf3de5` (finding 2): pot share and `predict record` require an identity. An import
+  without one still succeeds, with a warning.
+- `98dae12` (finding 3): a reported no-pick holds its slot empty. An unresolved name is
+  simulated as unknown and named as a guess.
+- `9c73dc8` (finding 4): the minimal fix, not the alias mechanism. An identity with no
+  reported picks is not an entrant, and `--me` can move to a corrected spelling.
+
+Decided and deferred:
+- A `report alias` command waits for the report-format enhancement below.
+- There is no membership rule for mid-season departures or late joiners. Either one now
+  withholds pot share every later week, naming the entrant, until a rule follows the
+  pool's actual policy.
+
+`verify-capture --allow-code-drift` on a copy of the live database verifies 5 of 8 2026
+captures, identically before and after these changes. The failures predate them:
+`8edc0f08b08e` and `fd9c03a2946a` (week 2, re-derived advice differs) and `cf9cc9e5d64d`
+(week 3, finding 7).
+
 5. **Medium: the documented global installation is incompatible with normal capture.**
 
    The README recommends `uv tool install .`. But
