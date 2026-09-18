@@ -120,7 +120,7 @@ def _realised(picks) -> tuple[int, list[str]] | None:
     week, it is an unobserved one, and folding it in as a partial total would put mass at
     the bottom of the histogram that the model never claimed.
     """
-    if not picks or any(p.status != "final" for p in picks):
+    if {p.slot for p in picks} != set(config.SLOTS) or any(p.status != "final" for p in picks):
         return None
     cells = [p.player_id for p in picks if p.player_id]
     return sum(p.tds or 0 for p in picks), cells
@@ -137,9 +137,28 @@ def score(conn: sqlite3.Connection, season: int) -> tuple[pd.DataFrame, list[dic
     """
     rows, notes = [], []
     complete = set(scoring.complete_weeks(conn, season))
+    arrivals, unattributed = predictions.report_arrivals(conn, season)
+    if unattributed:
+        notes.append(dict(week=None, reason=f"{unattributed} archived report(s) name no week"))
+    by_week: dict[int, list[dict]] = {}
     for record in archived(conn, season):
-        payload = record["payload"]
-        week = int(payload["week"])
+        by_week.setdefault(int(record["week"]), []).append(record)
+    for week, records in sorted(by_week.items()):
+        arrival = arrivals.get(week)
+        chosen, reasons = predictions._eligible(
+            records, predictions.first_kickoff(conn, season, week), arrival
+        )
+        notes.extend(dict(week=week, reason=reason) for reason in reasons)
+        if chosen is None:
+            continue
+        superseded = len(records) - len(reasons) - 1
+        if superseded:
+            notes.append(dict(week=week, reason=f"{superseded} earlier eligible commitment(s) "
+                              "superseded by the last eligible archive"))
+        if arrival is None:
+            notes.append(dict(week=week, reason="no report yet; commitment stands unscored"))
+            continue
+        payload = chosen["payload"]
         if week not in complete:
             notes.append(dict(week=week, reason="week is not fully scored yet"))
             continue

@@ -88,6 +88,8 @@ class SlotAdvice:
     # divergence describes the distribution the policy actually used rather than a second
     # guess at it. Empty when no pool state was supplied.
     contested: dict[str, tuple[tuple[str, float], ...]] = field(default_factory=dict)
+    # Full solver-eligible collection; presentation limits apply only to alternatives.
+    candidates: list[Candidate] = field(default_factory=list)
 
     @property
     def best_share(self) -> PotShare | None:
@@ -161,13 +163,16 @@ def advise_slot(
     locked: dict[int, str],
     n_alternatives: int | None = None,
     now: datetime | None = None,
+    *,
+    discount: float | None = None,
 ) -> SlotAdvice:
     n_alternatives = config.ALTERNATIVES_SHOWN if n_alternatives is None else n_alternatives
     if n_alternatives < 0:
         raise ValueError("n_alternatives must be zero or more")
     now = state.eastern_now(now)
     plan = plan_slot(
-        proj, slot, week, used_ids, locked, unavailable=state.unavailable_cells(proj, week, now)
+        proj, slot, week, used_ids, locked, discount=discount,
+        unavailable=state.unavailable_cells(proj, week, now),
     )
     if week in locked:
         name = proj.loc[proj.player_id == locked[week], "player_name"]
@@ -210,7 +215,9 @@ def advise_slot(
         if later:
             hold_alt = later[0]
             hold = hold_alt.cost < config.INFO_PREMIUM_TD
-    return SlotAdvice(slot, week, None, recommended, alternatives, hold, hold_alt, plan)
+    return SlotAdvice(
+        slot, week, None, recommended, alternatives, hold, hold_alt, plan, candidates=cands
+    )
 
 
 def _locked_picks(locked_by_slot, week) -> list[tuple[int, str]]:
@@ -244,12 +251,13 @@ def _rival_totals(proj, week, weeks, pool, draws, sims, seed):
     per simulation, because a path costs a greedy rollout and an outcome costs a lookup.
 
     The second return value is this week's sampling set per slot, read off the same grids
-    the rollouts walk. It explains a divergence; it never changes one.
+    the rollouts walk. The third gives scenario boundaries for clustered uncertainty.
     """
     rng = np.random.default_rng(seed)
     totals = np.zeros((sims, len(pool.rivals)))
     contested: dict[str, dict[str, list[tuple[str, float]]]] = {slot: {} for slot in config.SLOTS}
-    edges = np.linspace(0, sims, config.RIVAL_SCENARIOS + 1).astype(int)
+    scenarios = min(config.RIVAL_SCENARIOS, sims)
+    edges = np.linspace(0, sims, scenarios + 1).astype(int)
     for index, rival in enumerate(pool.rivals):
         grids = {
             slot: rivals.remaining_matrix(proj, slot, week, weeks, rival.used_ids)
@@ -268,7 +276,7 @@ def _rival_totals(proj, week, weeks, pool, draws, sims, seed):
                 pid = str(players.iloc[row].player_id)
                 contested[slot].setdefault(pid, []).append((rival.display_name, 1 / len(rows)))
         column = np.full(sims, float(rival.season_tds))
-        for scenario in range(config.RIVAL_SCENARIOS):
+        for scenario in range(scenarios):
             picks: list[tuple[int, str]] = []
             for slot, (players, values) in grids.items():
                 path = rivals.rollout(
@@ -281,7 +289,7 @@ def _rival_totals(proj, week, weeks, pool, draws, sims, seed):
                 )
                 picks += list(path.items())
             low, high = edges[scenario], edges[scenario + 1]
-            column[low:high] += draws.totals(picks)[low:high]
+            column[low:high] += draws.totals(picks, pool.finalized)[low:high]
         totals[:, index] = column
     frozen = {
         slot: {
@@ -290,7 +298,7 @@ def _rival_totals(proj, week, weeks, pool, draws, sims, seed):
         }
         for slot, by_player in contested.items()
     }
-    return totals, frozen
+    return totals, frozen, edges
 
 
 def pot_shares(
@@ -320,19 +328,10 @@ def pot_shares(
     weeks = sorted({int(w) for w in proj.week.unique() if w >= week})
     if not weeks or not pool.rivals:
         return
-    keep = {pid for a in advice for pid in a.plan.players.player_id}
-    keep |= {pid for _, pid in _locked_picks(locked_by_slot, week)}
-    # A reported pick has to be sampled even when the candidate matrix never kept him.
-    # `Draws.totals` scores an absent cell as zero, so omitting one here would credit a
-    # rival with nothing for a week they have already told us they filled.
-    keep |= {pid for rival in pool.rivals for _, _, pid in rival.known}
-    for slot in config.SLOTS:
-        for rival in pool.rivals:
-            players, _ = rivals.remaining_matrix(proj, slot, week, weeks, rival.used_ids)
-            keep |= set(players.player_id)
-    sub = proj[proj.player_id.isin(keep) & proj.week.isin(weeks)]
+    # Spent and capped teammates still supply receiving TDs and share game outcomes.
+    sub = proj[proj.week.isin(weeks)]
     draws = simulate.sample(sub, weeks, sims=sims, seed=seed, params=params)
-    opposition, contested = _rival_totals(proj, week, weeks, pool, draws, sims, seed)
+    opposition, contested, edges = _rival_totals(proj, week, weeks, pool, draws, sims, seed)
 
     locked = _locked_picks(locked_by_slot, week)
     baseline = _baseline(advice)
@@ -346,7 +345,8 @@ def pot_shares(
             for pick in picks
         ]
         evaluated = {}
-        for candidate in [slot_advice.recommended, *slot_advice.alternatives]:
+        candidates = slot_advice.candidates or [slot_advice.recommended, *slot_advice.alternatives]
+        for candidate in candidates:
             mine = (
                 locked
                 + others
@@ -355,18 +355,18 @@ def pot_shares(
                     for w, r in candidate.future.items()
                 ]
             )
-            total = pool.my_tds + draws.totals(mine)
+            total = pool.my_tds + draws.totals(mine, pool.finalized)
             evaluated[candidate.player_id] = (candidate, simulate.shares(total, opposition))
         reference = evaluated[slot_advice.recommended.player_id][1]
         shares = []
         for candidate, drawn in evaluated.values():
-            delta, delta_se = simulate.paired(drawn, reference)
+            delta, delta_se = simulate.paired(drawn, reference, edges)
             shares.append(
                 PotShare(
                     candidate.player_id,
                     candidate.player_name,
                     float(drawn.mean()),
-                    float(drawn.std(ddof=1) / np.sqrt(sims)),
+                    simulate.clustered_se(drawn, edges),
                     delta,
                     delta_se,
                 )
@@ -380,6 +380,11 @@ def pot_shares(
         slot_advice.shares = shares
         slot_advice.sims = sims
         slot_advice.contested = contested.get(slot_advice.slot, {})
+        winner = shares[0].player_id
+        shown = {c.player_id for c in [slot_advice.recommended, *slot_advice.alternatives]}
+        if winner not in shown:
+            slot_advice.alternatives.append(next(c for c in candidates if c.player_id == winner))
+            slot_advice.alternatives.sort(key=lambda c: c.cost)
 
 
 def advise_week(
@@ -389,6 +394,8 @@ def advise_week(
     locked_by_slot: dict[str, dict[int, str]],
     now: datetime | None = None,
     pool: rivals.PoolState | None = None,
+    *,
+    discount: float | None = None,
 ) -> list[SlotAdvice]:
     """Expected-TD advice, plus the win-probability view when the pool's state is known.
 
@@ -397,7 +404,9 @@ def advise_week(
     """
     now = state.eastern_now(now)
     advice = [
-        advise_slot(proj, slot, week, used_ids, locked_by_slot.get(slot, {}), now=now)
+        advise_slot(
+            proj, slot, week, used_ids, locked_by_slot.get(slot, {}), now=now, discount=discount
+        )
         for slot in config.SLOTS
     ]
     if pool:

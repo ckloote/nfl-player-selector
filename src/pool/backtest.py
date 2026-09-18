@@ -391,15 +391,13 @@ class Opponents:
             for slot in config.SLOTS:
                 name = opponent.display_name
                 state = rivals.RivalState(name, name, frozenset(opponent.used))
-                # Ranked wider than needed and then filtered, because `naive` deliberately
-                # ignores the one-player-per-season rule when it ranks. That rule is the
-                # pool's and not a modelling choice -- a rival who submitted a spent player
-                # would simply be rejected -- so the invented one takes his next choice.
-                ranked = [
-                    r
-                    for r in predict(proj, slot, week, state, top_n=top_n * 4)
-                    if r.player_id not in opponent.used
-                ][:top_n]
+                # Remove spent players before naive's cap and ranking truncation. Its
+                # standalone predictor deliberately ignores depletion; a legal entrant cannot.
+                eligible = (
+                    proj[~proj.player_id.isin(opponent.used)]
+                    if self.spec.behaviour == "naive" else proj
+                )
+                ranked = predict(eligible, slot, week, state, top_n=top_n)
                 if not ranked:
                     opponent.picks.append((week, slot, None))
                     continue
@@ -479,13 +477,13 @@ def decision_time(proj: pd.DataFrame, week: int) -> datetime:
     return first - timedelta(minutes=config.PICK_DEADLINE_MINUTES + 1)
 
 
-def pick_winprob(proj, slot, week, used, *, against=None, memo=None, banked=0.0, **_) -> Choice:
+def pick_winprob(
+    proj, slot, week, used, *, against=None, memo=None, banked=0.0, discount=None, **_
+) -> Choice:
     """This week's pick by expected share of the pot, against an invented field.
 
-    Decided once for the whole week and served to each slot in turn, because a pot share is
-    a property of a season and not of a slot: `recommend.pot_shares` values a candidate by
-    re-solving the other two slots around it. Three independent slot decisions would be a
-    different policy from the one that ships, and this is here to replay the shipped one.
+    Cache a coherent lineup in QB/RB/FLEX order. Each accepted deviation changes the
+    comparison for remaining slots, so re-evaluate them with earlier choices locked.
 
     Deviates from expected touchdowns only where `SlotAdvice.divergent` -- a clear pot-share
     winner outside simulation noise -- which is the same rule the CLI prints under. Within
@@ -497,22 +495,28 @@ def pick_winprob(proj, slot, week, used, *, against=None, memo=None, banked=0.0,
         raise ValueError("The `winprob` strategy needs invented rivals: pass `against=Field(...)`.")
     memo = {} if memo is None else memo
     if week not in memo:
-        memo[week] = recommend.advise_week(
-            proj,
-            week,
-            set(used),
-            {},
-            now=decision_time(proj, week),
-            pool=against.state(banked),
+        pool, now = against.state(banked), decision_time(proj, week)
+        locked, choices = {}, {}
+        advice = recommend.advise_week(
+            proj, week, set(used), locked, now=now, pool=pool, discount=discount
         )
-    advice = next((a for a in memo[week] if a.slot == slot), None)
-    if advice is None or advice.recommended is None:
-        return EMPTY
-    chosen = advice.recommended
-    if advice.divergent:
-        by_id = {c.player_id: c for c in [advice.recommended, *advice.alternatives]}
-        chosen = by_id.get(advice.best_share.player_id, chosen)
-    return Choice(chosen.player_id, chosen.player_name, chosen.team, chosen.lam)
+        for index, name in enumerate(config.SLOTS):
+            one = next((a for a in advice if a.slot == name), None)
+            if one is None or one.recommended is None:
+                choices[name] = EMPTY
+                continue
+            chosen = one.recommended
+            if one.divergent:
+                candidates = one.candidates or [one.recommended, *one.alternatives]
+                chosen = next(c for c in candidates if c.player_id == one.best_share.player_id)
+            choices[name] = Choice(chosen.player_id, chosen.player_name, chosen.team, chosen.lam)
+            locked[name] = {week: chosen.player_id}
+            if one.divergent and index < len(config.SLOTS) - 1:
+                advice = recommend.advise_week(
+                    proj, week, set(used), locked, now=now, pool=pool, discount=discount
+                )
+        memo[week] = choices
+    return memo[week].get(slot, EMPTY)
 
 
 Chooser = Callable[..., Choice]
@@ -556,7 +560,7 @@ def replay(
         # Read before this week's picks are appended: what I have banked is what finished
         # weeks scored, and this week has not been played yet.
         banked = out.total
-        memo: dict[int, list] = {}
+        memo: dict[int, dict[str, Choice]] = {}
         for slot in config.SLOTS:
             choice = chooser(
                 proj, slot, week, used, against=opponents, memo=memo, banked=banked, **kw

@@ -932,7 +932,7 @@ def _divergence(a: SlotAdvice, pool) -> str | None:
     is in the explanation or the policy, never in the reader.
     """
     ev, best = a.recommended, a.best_share
-    alt = next((c for c in a.alternatives if c.player_id == best.player_id), None)
+    alt = next((c for c in (a.candidates or a.alternatives) if c.player_id == best.player_id), None)
     trade = f"{best.delta:+.1%} share for {alt.cost:.2f} expected TDs" if alt else "no season cost"
     mine = a.contested.get(ev.player_id, ())
     theirs = a.contested.get(best.player_id, ())

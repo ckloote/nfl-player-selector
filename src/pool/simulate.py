@@ -73,12 +73,14 @@ class Draws:
     sims: int
     rescaled: int = 0
 
-    def totals(self, picks) -> np.ndarray:
-        """Season total across `picks`, as (sims,). An unknown player-week contributes 0."""
-        rows = [self.index[key] for key in picks if key in self.index]
-        if not rows:
-            return np.zeros(self.sims, dtype=np.int32)
-        return self.values[rows].sum(axis=0)
+    def totals(self, picks, finalized=()) -> np.ndarray:
+        """Sum unique picks, replacing sampled cells with known final outcomes."""
+        fixed = {(int(w), str(pid)): int(tds) for w, pid, tds in finalized}
+        keys = dict.fromkeys(picks)
+        banked = sum(fixed[key] for key in keys if key in fixed)
+        rows = [self.index[key] for key in keys if key in self.index and key not in fixed]
+        total = self.values[rows].sum(axis=0) if rows else np.zeros(self.sims, dtype=np.int32)
+        return total + banked
 
 
 def _cells(proj: pd.DataFrame, weeks) -> pd.DataFrame:
@@ -195,7 +197,20 @@ def shares(mine: np.ndarray, rivals: np.ndarray) -> np.ndarray:
     return np.where(mine > top, 1.0, np.where(mine == top, 1.0 / (level + 1), 0.0))
 
 
-def paired(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
+def clustered_se(values: np.ndarray, edges) -> float:
+    """Cluster-robust SE for draws sharing a rival path within each scenario block."""
+    values = np.asarray(values, dtype=float)
+    groups = len(edges) - 1
+    if groups < 2:
+        return float("inf")
+    centered = values - values.mean()
+    sums = np.array([
+        centered[low:high].sum() for low, high in zip(edges[:-1], edges[1:], strict=True)
+    ])
+    return float(np.sqrt(groups / (groups - 1) * np.dot(sums, sums) / len(values)**2))
+
+
+def paired(a: np.ndarray, b: np.ndarray, edges=None) -> tuple[float, float]:
     """Mean difference and its standard error, on shared draws.
 
     Candidates are compared on identical outcomes, so the rivals' maximum is the same in
@@ -207,4 +222,6 @@ def paired(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
     difference = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
     if len(difference) < 2:
         return float(difference.sum()), float("inf")
+    if edges is not None:
+        return float(difference.mean()), clustered_se(difference, edges)
     return float(difference.mean()), float(difference.std(ddof=1) / np.sqrt(len(difference)))

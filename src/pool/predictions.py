@@ -25,13 +25,14 @@ import hashlib
 import json
 import sqlite3
 import zlib
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from . import config, db, entrants, rivals, scoring, standings
+from .state import picks as personal_picks
 
 SCHEMA_VERSION = 1
 FEED = "pool_prediction"
@@ -188,12 +189,60 @@ def pool_state(
     fixed its own clock does not acquire a second one here.
     """
     at = at or datetime.now(UTC)
-    board, spent, played, known = _as_of(conn, season, week, at)
-    mine = next((row for row in board.rows if row.is_me), None)
+    with db.transaction(conn):
+        board, spent, played, known = _as_of(conn, season, week, at)
+        banked, my_tds, finalized = _decision_outcomes(conn, season, week, at)
     return rivals.PoolState(
-        tuple(_standing(row, spent, played, known) for row in board.rows if not row.is_me),
-        mine.season_total.tds if mine else 0,
+        tuple(
+            replace(_standing(row, spent, played, known), season_tds=banked.get(row.entrant_id, 0))
+            for row in board.rows if not row.is_me
+        ),
+        my_tds,
+        finalized,
     )
+
+
+def _decision_outcomes(conn, season, week, at):
+    """Authoritative scores available now, split into past totals and fixed future cells.
+
+    Scoring tables hold the latest import, not a history. A later import cannot be used
+    for an earlier decision; captures carry these resolved values for subsequent replay.
+    """
+    scores = scoring.score_board(conn, season)
+    imports = {
+        row["game_id"]: datetime.fromisoformat(row["imported_at"])
+        for row in conn.execute(
+            "SELECT game_id, imported_at FROM game_results WHERE season = ?", (season,)
+        )
+    }
+    games = scores.games.copy()
+    unseen = [gid for gid in games.index if gid not in imports or imports[gid] > at]
+    games.loc[unseen, "complete"] = 0
+    games.loc[unseen, "reason"] = "results not available at decision"
+    scores = replace(scores, games=games)
+    banked, mine, fixed = {}, {}, {}
+    reported = entrants.entrant_picks(conn, season)
+    if not reported.empty:
+        reported = reported[[datetime.fromisoformat(t) <= at for t in reported.observed_at]]
+        for pick in standings._score_rows(conn, season, reported, scores):
+            if pick.week < week:
+                if pick.is_me:
+                    mine[(pick.week, pick.slot)] = pick.tds or 0
+                else:
+                    banked[pick.entrant_id] = banked.get(pick.entrant_id, 0) + (pick.tds or 0)
+            elif not pick.is_me and pick.status == "final" and pick.player_id:
+                fixed[(pick.week, pick.player_id)] = pick.tds
+    for pick in personal_picks(conn, season).itertuples():
+        if datetime.fromisoformat(pick.recorded_at) > at:
+            continue
+        gid = scoring.resolve_pick_game(conn, season, pick.week, pick.player_id, pick.game_id)
+        result = scoring.score_pick(scores, pick.week, pick.player_id, gid)
+        if pick.week < week:
+            mine[(pick.week, pick.slot)] = result.tds or 0
+        elif not result.pending:
+            fixed[(pick.week, pick.player_id)] = result.tds
+    finalized = tuple((w, pid, int(tds)) for (w, pid), tds in sorted(fixed.items()))
+    return banked, sum(mine.values()), finalized
 
 
 def predict(conn: sqlite3.Connection, season: int, week: int, proj: pd.DataFrame) -> dict:

@@ -84,6 +84,8 @@ class PoolState:
 
     rivals: tuple[RivalState, ...] = ()
     my_tds: int = 0
+    # Final player-week results known at the decision instant, including zeroes.
+    finalized: tuple[tuple[int, str, int], ...] = ()
 
     def __bool__(self) -> bool:
         return bool(self.rivals)
@@ -209,10 +211,10 @@ def rollout(players, values, weeks, *, rng, top_n: int = 1, known=None) -> dict[
     still holds his week; he simply contributes whatever his cell is worth, which is the
     honest answer for a player the forecast does not rate.
     """
-    if not len(players):
-        return {}
-    rows = {str(pid): row for row, pid in enumerate(players.player_id)}
     picks: dict[int, str] = {int(w): str(p) for w, p in (known or {}).items()}
+    if not len(players):
+        return picks
+    rows = {str(pid): row for row, pid in enumerate(players.player_id)}
     taken: list[int] = [rows[pid] for pid in picks.values() if pid in rows]
     for col, week in enumerate(weeks):
         if int(week) in picks:

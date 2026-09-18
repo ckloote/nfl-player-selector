@@ -44,7 +44,7 @@ def test_the_commitment_stores_no_numbers_and_still_fixes_the_distribution(seede
     be quietly restated once the answer was in.
     """
     conn, _ = seeded
-    pit.commit(conn, 2026, 1, _proj(conn))
+    pit.commit(conn, 2026, 1, _proj(conn), observed_at="2026-09-09T12:00:00+00:00")
     record = pit.archived(conn, 2026)[0]["payload"]
     assert set(record) >= {"seed", "sims", "surface_hash", "params", "week"}
     assert "draws" not in record and "values" not in record
@@ -57,7 +57,7 @@ def test_the_frame_is_pinned_by_hash_so_a_later_refresh_cannot_move_it(seeded):
     """A distribution defined by 'whatever the projections say' is not a commitment. The
     surface is content-addressed, so a re-forecast next week rebuilds the old one exactly."""
     conn, _ = seeded
-    pit.commit(conn, 2026, 1, _proj(conn))
+    pit.commit(conn, 2026, 1, _proj(conn), observed_at="2026-09-09T12:00:00+00:00")
     record = pit.archived(conn, 2026)[0]["payload"]
     before = pit._draws(conn, record).values.sum()
     conn.execute("UPDATE rosters SET status = 'ACT' WHERE season = 2026")
@@ -68,7 +68,7 @@ def test_the_two_claims_on_one_feed_do_not_read_each_other(seeded):
     """Both are things the model said before the week; neither scorer may see the other."""
     conn, _ = seeded
     predictions.archive(conn, 2026, 2, predictions.predict(conn, 2026, 2, _proj(conn, 2)))
-    pit.commit(conn, 2026, 2, _proj(conn, 2))
+    pit.commit(conn, 2026, 2, _proj(conn, 2), observed_at=log.BEFORE_ALL)
     assert len(predictions.archived(conn, 2026)) == 1
     assert len(pit.archived(conn, 2026)) == 1
     assert predictions.archived(conn, 2026)[0]["payload"]["rivals"]
@@ -79,7 +79,8 @@ def test_an_unfinished_week_is_not_scored_as_a_small_one(seeded):
     """A missing or pending slot makes the week unobserved, not low-scoring. Folding a
     partial total in would pile mass at the bottom of the histogram from nothing."""
     conn, _ = seeded
-    pit.commit(conn, 2026, 2, _proj(conn, 2))
+    pit.commit(conn, 2026, 2, _proj(conn, 2), observed_at=log.BEFORE_ALL)
+    log._report(conn, 2, log.WEEK2, log.REPORT_AT)
     scored, notes = pit.score(conn, 2026)
     assert scored.empty
     assert any("not fully scored" in note["reason"] for note in notes)
@@ -87,7 +88,7 @@ def test_an_unfinished_week_is_not_scored_as_a_small_one(seeded):
 
 def test_a_finished_week_gives_one_draw_per_entrant_inside_the_unit_interval(seeded):
     conn, _ = seeded
-    pit.commit(conn, 2026, 1, _proj(conn))
+    pit.commit(conn, 2026, 1, _proj(conn), observed_at="2026-09-09T12:00:00+00:00")
     scored, _notes = pit.score(conn, 2026)
     assert len(scored) == 3, "one per entrant in the fixture"
     assert scored.pit.between(0, 1).all()
@@ -99,7 +100,7 @@ def test_scoring_the_same_week_twice_gives_the_same_answer(seeded):
     """The randomisation inside the observed value is what makes a PIT over counts
     uniform, and it has to be seeded, or the histogram moves on every run."""
     conn, _ = seeded
-    pit.commit(conn, 2026, 1, _proj(conn))
+    pit.commit(conn, 2026, 1, _proj(conn), observed_at="2026-09-09T12:00:00+00:00")
     first, _ = pit.score(conn, 2026)
     second, _ = pit.score(conn, 2026)
     pd.testing.assert_frame_equal(first, second)
@@ -107,7 +108,7 @@ def test_scoring_the_same_week_twice_gives_the_same_answer(seeded):
 
 def test_the_histogram_reports_a_shape_and_not_a_verdict(seeded):
     conn, _ = seeded
-    pit.commit(conn, 2026, 1, _proj(conn))
+    pit.commit(conn, 2026, 1, _proj(conn), observed_at="2026-09-09T12:00:00+00:00")
     scored, _ = pit.score(conn, 2026)
     table = pit.uniformity(scored, bins=5)
     assert list(table.bin) == [1, 2, 3, 4, 5]
@@ -171,8 +172,77 @@ def test_a_commitment_cannot_be_made_inside_an_open_transaction(seeded):
     conn, _ = seeded
     conn.execute("BEGIN")
     with pytest.raises(ValueError, match="no open transaction"):
-        pit.commit(conn, 2026, 1, _proj(conn))
+        pit.commit(conn, 2026, 1, _proj(conn), observed_at="2026-09-09T12:00:00+00:00")
     conn.rollback()
 
 
 UNUSED = datetime(2026, 9, 12, tzinfo=UTC)
+
+
+@pytest.mark.parametrize('deadline', ['kickoff', 'report'])
+@pytest.mark.parametrize('offset', [0, 1])
+def test_commitment_at_or_after_either_deadline_is_rejected(seeded, deadline, offset):
+    from datetime import timedelta
+
+    conn, _ = seeded
+    if deadline == 'report':
+        log._report(conn, 1, log.WEEK1, '2026-09-09T15:00:00+00:00')
+        instant = datetime(2026, 9, 9, 15, tzinfo=UTC)
+    else:
+        instant = predictions.first_kickoff(conn, 2026, 1)
+    pit.commit(conn, 2026, 1, _proj(conn), observed_at=instant + timedelta(seconds=offset))
+    scored, notes = pit.score(conn, 2026)
+    assert scored.empty
+    assert notes
+    assert len(pit.archived(conn, 2026)) == 1
+
+
+def test_only_latest_eligible_commitment_is_rebuilt(seeded, monkeypatch):
+    conn, _ = seeded
+    for stamp, sims in [('2026-09-08T12:00:00+00:00', 10),
+                        ('2026-09-09T12:00:00+00:00', 20),
+                        ('2026-09-14T12:00:00+00:00', 30)]:
+        pit.commit(conn, 2026, 1, _proj(conn), observed_at=stamp, sims=sims)
+    real = pit._draws
+    seen = []
+
+    def rebuild(conn, payload):
+        seen.append(payload['sims'])
+        return real(conn, payload)
+
+    monkeypatch.setattr(pit, '_draws', rebuild)
+    scored, notes = pit.score(conn, 2026)
+    assert len(scored) == 3
+    assert seen == [20]
+    assert notes
+    assert len(pit.archived(conn, 2026)) == 3
+
+
+@pytest.mark.parametrize('missing', ['kickoff', 'report'])
+def test_pit_requires_both_deadlines(seeded, missing):
+    conn, _ = seeded
+    if missing == 'kickoff':
+        with conn:
+            conn.execute('UPDATE games SET kickoff_known = 0 WHERE season = 2026')
+    else:
+        log._report(conn, 2, log.WEEK2, log.REPORT_AT)
+        # Keep entrant picks but remove the archive arrival seam for this test.
+    pit.commit(conn, 2026, 1, _proj(conn), observed_at='2026-09-09T12:00:00+00:00')
+    if missing == 'report':
+        from unittest.mock import patch
+        with patch.object(predictions, 'report_arrivals', return_value=({}, 0)):
+            scored, notes = pit.score(conn, 2026)
+    else:
+        scored, notes = pit.score(conn, 2026)
+    assert scored.empty and notes
+
+
+def test_pit_requires_every_slot_to_be_final():
+    from types import SimpleNamespace
+
+    complete = [SimpleNamespace(slot=slot, status='final', player_id=slot, tds=0)
+                for slot in ('QB', 'RB', 'FLEX')]
+    assert pit._realised(complete) == (0, ['QB', 'RB', 'FLEX'])
+    assert pit._realised(complete[:2]) is None
+    complete[-1].status = 'pending'
+    assert pit._realised(complete) is None

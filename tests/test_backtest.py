@@ -520,21 +520,25 @@ def test_an_unknown_rival_behaviour_is_refused_where_it_is_named(replayed):
         B.Field(count=0)
 
 
-def test_the_week_is_decided_once_and_served_to_every_slot(replayed, monkeypatch):
-    """A pot share is a property of a season and not of a slot: `recommend.pot_shares`
-    values a candidate by re-solving the other two slots around it. Three independent
-    slot decisions would be a different policy from the one that ships."""
+def test_cached_weekly_lineup_agrees_with_every_conditional_lock(replayed, monkeypatch):
     frames, actuals = replayed
     seen = []
     real = B.recommend.advise_week
 
-    def spy(proj, week, *a, **kw):
-        seen.append(week)
-        return real(proj, week, *a, **kw)
+    def spy(proj, week, used, locked, **kw):
+        seen.append((week, {s: dict(p) for s, p in locked.items()}))
+        return real(proj, week, used, locked, **kw)
 
     monkeypatch.setattr(B.recommend, "advise_week", spy)
-    B.replay(frames, actuals, SEASON, "winprob", weeks=WEEKS, against=B.Field(count=2))
-    assert seen == list(WEEKS)
+    result = B.replay(frames, actuals, SEASON, "winprob", weeks=WEEKS, against=B.Field(count=2))
+    final = {(p.week, p.slot): p.player_id for p in result.picks}
+    for week in WEEKS:
+        calls = [locks for w, locks in seen if w == week]
+        assert calls[0] == {}
+        assert len(calls) <= len(config.SLOTS)
+        for locks in calls[1:]:
+            assert list(locks) == list(config.SLOTS)[:len(locks)]
+            assert all(final[week, slot] == picks[week] for slot, picks in locks.items())
 
 
 def test_the_replay_clock_forbids_nothing_the_other_strategies_kept(replayed):
@@ -575,6 +579,8 @@ def test_winprob_deviates_only_where_the_pot_share_separates(replayed, monkeypat
     def separated(*a, **kw):
         advice = real(*a, **kw)
         for one in advice:
+            if one.recommended is None:
+                continue
             alt, best = one.alternatives[0], one.recommended
             one.shares = [
                 PotShare(alt.player_id, alt.player_name, 0.9, 0.001, delta, 0.001),

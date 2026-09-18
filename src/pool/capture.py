@@ -247,7 +247,10 @@ def _pool_detail(pool: rivals.PoolState | None) -> dict | None:
         )
         for r in pool.rivals
     ]
-    observed = dict(my_tds=int(pool.my_tds), rivals=state_of)
+    observed = dict(
+        my_tds=int(pool.my_tds), rivals=state_of,
+        finalized=[[int(w), str(pid), int(tds)] for w, pid, tds in pool.finalized],
+    )
     return dict(
         observed,
         # Hashed separately from the decision's own identity: two weeks apart with the same
@@ -283,6 +286,7 @@ def _pool_from_detail(detail: dict | None) -> rivals.PoolState | None:
             for r in detail["rivals"]
         ),
         int(detail["my_tds"]),
+        tuple((int(w), str(pid), int(tds)) for w, pid, tds in detail.get("finalized", ())),
     )
 
 
