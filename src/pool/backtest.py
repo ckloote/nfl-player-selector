@@ -270,6 +270,9 @@ def weekly_inputs(
             vegas_horizon=vegas_horizon,
             input_policy=input_policy,
             decision_at=(decision_times or {}).get((season, week)),
+            # A research replay measures the model on finished history, so it keeps the
+            # gate a faithful reconstruction of one decision does not have.
+            require_complete=True,
         )
         for week in weeks
     }

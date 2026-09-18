@@ -89,6 +89,7 @@ def load_frames(
     *,
     input_policy: str | None = None,
     decision_at: str | datetime | None = None,
+    require_complete: bool = False,
 ) -> Frames:
     """Load the input frames one decision may read, under one input policy.
 
@@ -102,6 +103,14 @@ def load_frames(
     Weekly roster and injury reports are read through W in every replay policy; both
     precede kickoff. Final schedule revisions, weekly report timing within a week and
     later stat corrections remain historical approximations.
+
+    A snapshot replay reconstructs what a decision read, so by default it demands nothing
+    the live path did not: an earlier week still being played at the decision is
+    restored as it stood, and goes through the same legacy-touchdown fallback live
+    loading gave it. The archive holds only what was observed by then, so a later refresh
+    cannot fill it in, and demanding complete coverage made a faithful capture
+    permanently uncheckable. `require_complete` restores that demand for research runs,
+    whose question is a different one: how the model does on finished history.
     """
     policy = input_policy or ("historical" if as_of_week is not None else "live")
     validate_policy(policy, vegas_horizon=vegas_horizon)
@@ -112,23 +121,27 @@ def load_frames(
         raise ValueError("Snapshot replay requires a decision timestamp for every week")
     restored, provenance = snapshots.restore(conn, season, decision_at, as_of_week)
     try:
-        for yr, weeks in (
-            (season - 1, available_weeks(restored, season - 1)),
-            (season, [w for w in available_weeks(restored, season) if w < as_of_week]),
-        ):
-            if yr < season or weeks:
-                scoring.require_complete(restored, yr, weeks)
+        if require_complete:
+            for yr, weeks in (
+                (season - 1, available_weeks(restored, season - 1)),
+                (season, [w for w in available_weeks(restored, season) if w < as_of_week]),
+            ):
+                if yr < season or weeks:
+                    scoring.require_complete(restored, yr, weeks)
         # Week W itself is deliberately partial -- that is the point of reading it --
         # so it is never required to be complete.
         out = _local_frames(restored, season, as_of_week, None, policy)
+        # Integrity, not coverage: with no prior season at all the archive was never
+        # written, and no live decision was made from what it holds.
         if out.pw_prior.empty:
             raise ValueError(f"Missing essential {season - 1} player history in archived inputs")
-        prior_weeks = set(available_weeks(restored, season - 1))
-        if prior_weeks - set(out.pw_prior.week):
-            raise ValueError("Archived prior-season player history has missing weeks")
-        required = {w for w in available_weeks(restored, season) if w < as_of_week}
-        if required - set(out.pw_cur.week):
-            raise ValueError("Archived current-season player history has missing weeks")
+        if require_complete:
+            prior_weeks = set(available_weeks(restored, season - 1))
+            if prior_weeks - set(out.pw_prior.week):
+                raise ValueError("Archived prior-season player history has missing weeks")
+            required = {w for w in available_weeks(restored, season) if w < as_of_week}
+            if required - set(out.pw_cur.week):
+                raise ValueError("Archived current-season player history has missing weeks")
     finally:
         restored.close()
     out.decision_at = snapshots.timestamp(decision_at)
