@@ -28,17 +28,19 @@ week is not always the one the pick came from.
 
 No protocol governs how often decisions are captured any more —
 [3C is closed](PHASE3C_OUTCOME.md) and no capture is required at any point in the week.
-Capturing costs nothing and keeps the option: `pool captures` lists what you have and
-`pool verify-capture` checks it, and because the enforced source fingerprint covers only the
-decision path, an unrelated feature does not make yesterday's captures unverifiable.
+Capturing costs nothing and keeps the option: `pool research captures` lists what you have
+and `pool research verify-capture` checks it, and because the enforced source fingerprint
+covers only the decision path, an unrelated feature does not make yesterday's captures
+unverifiable.
 
 ```bash
-uv run pool captures --season 2026 --week 1          # captured decisions, or one in full
-uv run pool verify-capture --season 2026             # reconstruction and live/snapshot parity
+uv run pool research captures --season 2026 --week 1   # captured decisions
+uv run pool research captures --decision 95ed0d28cbe6   # one in full; the listed id is enough
+uv run pool research verify-capture --season 2026      # reconstruction and live/snapshot parity
 ```
 
-The existing 2026 captures require
-`uv run pool verify-capture --season 2026 --allow-code-drift`, and have since stage 2. The
+The existing 2026 captures require `uv run pool research verify-capture --season 2026
+--allow-code-drift`, and have since stage 2. The
 enforced closure has moved three times: stage 2 extracted the shared pick-scoring core into
 `scoring.py`, a later review fix to the same file — scoring a pick with no game zero once its
 week is final — moved it again, and stage 3 added `rivals.py` and `simulate.py` when
@@ -76,7 +78,7 @@ every runtime dependency — and not the whole tree. It is read from the package
 works installed, and captures made before it replaced `uv.lock` report the decision path as
 moved; the whole-tree hash is still recorded beside it, so drift stays visible without
 an unrelated module invalidating a capture it could not have changed. Both checks live in
-`src/pool/verify.py`.
+`src/pool/research/verify.py`.
 
 The [3C protocol](../experiments/phase3c-baseline.toml) that these checks were built for
 declared a collection window, decision events, populations and floors, and `pool baseline`
@@ -91,9 +93,9 @@ prediction, read the report, score it — and the prediction must be recorded be
 have seen the answer.
 
 ```bash
-uv run pool predict record --season 2026 --week 3          # archive before the week is visible
-uv run pool predict record --season 2026 --week 3 --dry-run  # show it, archive nothing
-uv run pool predict score --season 2026                    # hit rates and the PIT histogram
+uv run pool research predict record --season 2026 --week 3            # archive before kickoff
+uv run pool research predict record --season 2026 --week 3 --dry-run  # show it, archive nothing
+uv run pool research predict score --season 2026                  # hit rates and the PIT histogram
 ```
 
 Three hypotheses are archived per rival per slot per week, not one: greedy from their own
@@ -123,7 +125,7 @@ lean is the readable part.
 
 `pool week` makes the prediction for you on each run of the current week until its first
 kickoff or its report, and saves again only when it changed; the scorer reads the last one
-that beat both deadlines. `pool predict record` remains for a prediction made by hand.
+that beat both deadlines. `pool research predict record` remains for a prediction made by hand.
 
 ## How the pot share is computed
 
@@ -165,20 +167,21 @@ is what reads these pools.
 ## Backtesting
 
 ```bash
-uv run pool refresh --season 2025          # 2025, and 2024 (prior) until it is settled
-uv run pool backtest --season 2025         # replay one season against the baselines
-uv run pool backtest --season 2017-2025 --detail
-uv run pool sweep --season 2017-2025       # grid-search the discount and prior weight
-uv run pool backtest --season 2025 --strategy winprob,optimizer  # pot share, vs invented rivals
+uv run pool refresh --season 2025                 # 2025, and 2024 (prior) until it is settled
+uv run pool research backtest --season 2025       # replay one season against the baselines
+uv run pool research backtest --season 2017-2025 --detail
+uv run pool research sweep --season 2017-2025     # grid-search the discount and prior weight
+# pot share, against invented rivals:
+uv run pool research backtest --season 2025 --strategy winprob,optimizer
 ```
 
 Two layers are measured separately, because a better forecast is not the same
 thing as a better season:
 
 ```bash
-uv run pool models                         # the benchmark's projection models
-uv run pool evaluate --season 2011-2025    # score every player-week forecast
-uv run pool backtest --season 2017-2025 --projection player-vegas
+uv run pool research models                       # the benchmark's projection models
+uv run pool research evaluate --season 2011-2025  # score every player-week forecast
+uv run pool research backtest --season 2017-2025 --projection player-vegas
 ```
 
 `backtest` measures actual season scores; `evaluate` reports ranking and calibration diagnostics
@@ -231,15 +234,15 @@ before the first confirmed pick deadline. Snapshot replay also makes one decisio
 this phase does not simulate repeated decisions within a week.
 
 ```bash
-uv run pool evaluate --season 2024-2025 --model all --seeds 0-19 --csv /tmp/forecasts.csv
-uv run pool evaluate --model player-vegas,regressed-rate --baseline player-vegas
-uv run pool backtest --season 2025 --input-policy legacy-closing --vegas-horizon 0
-uv run pool backtest --season 2026 --input-policy snapshots --decision-times decisions.csv
-uv run pool benchmark --config experiments/phase2-validation.toml --output data/experiments/phase2-validation
+uv run pool research evaluate --season 2024-2025 --model all --seeds 0-19 --csv /tmp/forecasts.csv
+uv run pool research evaluate --model player-vegas,regressed-rate --baseline player-vegas
+uv run pool research backtest --season 2025 --input-policy legacy-closing --vegas-horizon 0
+uv run pool research backtest --season 2026 --input-policy snapshots --decision-times decisions.csv
+uv run pool research benchmark --config experiments/phase2-validation.toml --output data/experiments/phase2-validation
 # Continue only when configuration, code, dependencies and frozen dataset match:
-uv run pool benchmark --config experiments/phase2-validation.toml --output data/experiments/phase2-validation --resume
-uv run pool diagnose --run data/experiments/roster-snapshot-repair --out experiments/results/phase3a-readiness
-uv run pool benchmark --config experiments/phase3-calibration.toml --output data/experiments/phase3-calibration
+uv run pool research benchmark --config experiments/phase2-validation.toml --output data/experiments/phase2-validation --resume
+uv run pool research diagnose --run data/experiments/roster-snapshot-repair --out experiments/results/phase3a-readiness
+uv run pool research benchmark --config experiments/phase3-calibration.toml --output data/experiments/phase3-calibration
 ```
 
 `diagnose` describes a saved study's rate errors by population, position, rate bin,
@@ -289,7 +292,7 @@ depth-chart role multipliers, future discount, information premium).
 
 The pot-share block there is annotated with what each number is and is not. `K_GAME` and
 `THROW_SHARE` are fitted and measured against 2011–2025. `RIVAL_NOISE_TOP_N` is
-**provisional and says so**: the real distribution is what `pool predict` measures, and it
-is meant to be replaced by that measurement in writing, with the date. `WINPROB_SEED` is
+**provisional and says so**: the real distribution is what `pool research predict` measures,
+and it is meant to be replaced by that measurement in writing, with the date. `WINPROB_SEED` is
 fixed so identical inputs give identical advice — a policy that answered differently on
 re-run could not be reconstructed from its own capture.

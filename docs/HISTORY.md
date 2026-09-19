@@ -11,7 +11,7 @@ workflow is in the [README](../README.md); research methods and results are in
 - [`docs/ANALYSIS.md`](ANALYSIS.md) - dated, authored interpretation and research limits; not refreshed by reruns
 - [`docs/PHASE3B_OUTCOME.md`](PHASE3B_OUTCOME.md) - completed calibration experiment: no candidate promoted, rationale and next step
 - [`docs/PHASE3C_PROTOCOL.md`](PHASE3C_PROTOCOL.md) - dated prospective baseline protocol: window, decision events, parity criteria and floors, written but never run
-- [`docs/PHASE3C_OUTCOME.md`](PHASE3C_OUTCOME.md) - the decision to close that window without collecting, and what it gives up. Its tooling (`prospective.py`, `pool baseline`) was removed on 2026-09-19; revision `bc57683` is the last that has it, and its reconstruction and parity checks remain as `pool verify-capture`
+- [`docs/PHASE3C_OUTCOME.md`](PHASE3C_OUTCOME.md) - the decision to close that window without collecting, and what it gives up. Its tooling (`prospective.py`, `pool baseline`) was removed on 2026-09-19; revision `bc57683` is the last that has it, and its reconstruction and parity checks remain as `pool research verify-capture`
 - [`docs/PHASE4_PLAN.md`](PHASE4_PLAN.md) - opponent ingestion, standings, and deciding by expected share of the pot: staging, and what can and cannot be validated
 - [`docs/PHASE4_STAGE1_PLAN.md`](PHASE4_STAGE1_PLAN.md) - implemented report ingestion, archive guarantees, and identity checks
 - [`docs/PHASE4_STAGE2_PLAN.md`](PHASE4_STAGE2_PLAN.md) - implemented shared scoring, computed standings, ties, and independent used pools

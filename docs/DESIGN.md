@@ -252,8 +252,8 @@ counts 1 and a k-way tie counts 1/k.
   greedy-from-their-remaining-pool with noise — uniform among their best few — because a
   perfectly predictable opponent would let the policy block them exactly, which is the more
   dangerous error. A pick that *has* been reported is used rather than predicted. The
-  noise width is **provisional and declared as such**; `pool predict` measures the real
-  distribution one week at a time and is what replaces it.
+  noise width is **provisional and declared as such**; `pool research predict` measures the
+  real distribution one week at a time and is what replaces it.
 - **Decision rule:** a one-step lookahead, and it should be called nothing grander — hold
   the expected-TD plan for the rest of the season, vary only this week's pick, and score
   each candidate on identical draws. Two candidates whose difference does not clear the
@@ -295,10 +295,11 @@ pool report import week4.csv    # ingest the pool's weekly report
 pool report list                # archived import attempts, times, counts, and status
 pool standings                  # latest imported picks; computed ranks through last resolved week
 pool plan                       # full remaining-season assignment view
-pool predict record             # every rival's predicted picks, archived before the week
-pool predict score              # hit rates, and the weekly PIT histogram
+pool research predict record    # every rival's predicted picks, archived before the week
+pool research predict score     # hit rates, and the weekly PIT histogram
 pool recommend --sensitivity    # re-rank across the stress range of the fitted knobs
-pool backtest --strategy winprob   # replay a season on pot share, against invented rivals
+pool research backtest --strategy winprob
+                                # replay a season on pot share, against invented rivals
 ```
 
 The initial report parser accepts one CSV row per entrant/slot, with optional reported
@@ -406,8 +407,8 @@ it, with arrival times recorded so a prediction cannot be scored against an answ
 have seen; and each week's distribution over entrant totals is committed as a seed, a size
 and a content hash — not as numbers — so a later re-forecast cannot move it, and scored by
 probability integral transform once the week is final. A historical replay of the policy is
-available (`pool backtest --strategy winprob`) and is labelled wherever it prints as run
-against invented rivals: seasons before ingestion have no opponent picks, so it tests the
+available (`pool research backtest --strategy winprob`) and is labelled wherever it prints
+as run against invented rivals: seasons before ingestion have no opponent picks, so it tests the
 machinery and not the idea.
 
 Generated reports contain facts, methods and provenance; human/AI interpretation belongs in
