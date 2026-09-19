@@ -15,8 +15,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .. import config, projections
-from ..projections import Frames
+from ... import config, projections
+from ...projections import Frames
 
 # Sorting by player_id last makes tie order reproducible run to run, which the
 # shuffled nulls need and the degenerate environment model (identical lam for

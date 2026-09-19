@@ -4,7 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pool import backtest, config, recommend, rivals, simulate
+from pool import config, recommend, rivals, simulate
+from pool.research import backtest
 from tests.test_winprob import NOW, cell, frame, rival
 
 
@@ -280,7 +281,8 @@ def test_capture_stores_final_results_and_survives_later_corrections(local):
     from dataclasses import replace
     from datetime import UTC, datetime
 
-    from pool import capture, predictions, scoring, verify
+    from pool import capture, predictions, scoring
+    from pool.research import verify
     from tests import test_predictions as log
     from tests.test_workflow import end, play
 

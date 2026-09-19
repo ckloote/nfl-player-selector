@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pool import evaluate as ev
-from pool import models
 from pool import projections as P
+from pool.research import evaluate as ev
+from pool.research import models
 from tests.test_backtest import SEASON, WEEKS
 
 
@@ -174,7 +174,7 @@ def test_within_player_shuffle_keeps_each_player_their_own_values(seeded):
 
 def test_seeded_nulls_are_reproducible(seeded):
     frames = P.load_frames(seeded, SEASON, as_of_week=2)
-    from pool.models.baselines import shuffle_within_slot_week
+    from pool.research.models.baselines import shuffle_within_slot_week
 
     a = shuffle_within_slot_week(seed=5)(frames, 2, role_source="usage")
     b = shuffle_within_slot_week(seed=5)(frames, 2, role_source="usage")

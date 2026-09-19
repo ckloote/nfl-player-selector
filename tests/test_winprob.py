@@ -8,8 +8,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pool import benchmark, config, rivals, simulate
+from pool import config, rivals, simulate
 from pool.recommend import advise_slot, advise_week
+from pool.research import benchmark
 
 pytestmark = pytest.mark.filterwarnings("ignore::RuntimeWarning")
 
@@ -526,7 +527,7 @@ def test_recommend_without_an_identity_still_advises_and_says_what_turns_the_vie
     assert "PICK:" in result.output
     assert "Pot share withheld" in result.output and '--me "Your Name"' in result.output
     assert "Pot share (model estimate) vs" not in result.output and "vs EV" not in result.output
-    assert "predict record" not in result.output
+    assert "No rival-pick prediction on record" not in result.output
 
 
 def test_the_nudge_stops_once_the_week_can_be_seen(seeded):
@@ -540,7 +541,7 @@ def test_the_nudge_stops_once_the_week_can_be_seen(seeded):
     conn, _ = seeded
     kickoff = predictions.first_kickoff(conn, 2026, 2)
     before = _prediction_nudge(conn, 2026, 2, kickoff - timedelta(hours=1))
-    assert before and "pool predict record --week 2" in before
+    assert before and "Run `pool week` before" in before
     assert _prediction_nudge(conn, 2026, 2, kickoff) is None
     predictions.archive(conn, 2026, 2, predictions.predict(conn, 2026, 2, _proj_for(conn)))
     assert _prediction_nudge(conn, 2026, 2, kickoff - timedelta(hours=1)) is None
@@ -556,7 +557,8 @@ def test_a_decision_made_against_rivals_reconstructs_from_its_own_record(seeded)
     """The capture is sufficient or it is decoration. Re-deriving the advice from the
     stored surface has to reproduce the shares too, which it can only do if the rival
     state behind them was written down beside them."""
-    from pool import capture, predictions, state, verify
+    from pool import capture, predictions, state
+    from pool.research import verify
 
     conn, _ = seeded
     now = state.eastern_now(datetime(2026, 9, 19, 12, 0, tzinfo=UTC))
@@ -585,7 +587,8 @@ def test_a_decision_made_against_rivals_reconstructs_from_its_own_record(seeded)
 def test_a_capture_that_forgets_the_opposition_cannot_re_derive_its_own_shares(seeded):
     """The negative of the test above: without the pool on the surface, reconstruction
     reports the decision as differing from itself. This is what pins the storage."""
-    from pool import capture, predictions, state, verify
+    from pool import capture, predictions, state
+    from pool.research import verify
 
     conn, _ = seeded
     now = state.eastern_now(datetime(2026, 9, 19, 12, 0, tzinfo=UTC))
@@ -654,7 +657,7 @@ def test_a_record_is_checked_on_what_it_claims_not_on_what_it_never_stored(seede
     a key it never had it makes no claim.
     """
     from pool import predictions, state
-    from pool.verify import _advice_details, _claims_hold
+    from pool.research.verify import _advice_details, _claims_hold
 
     conn, _ = seeded
     now = state.eastern_now(datetime(2026, 9, 19, 12, 0, tzinfo=UTC))
@@ -881,7 +884,8 @@ def test_a_withheld_decision_is_captured_and_replays_without_a_share(seeded):
     """The refusal changes the advice, so the capture has to carry it: replayed without
     it, the decision would compute a share the original declined to. A complete state
     stores nothing extra, so it hashes as it did before the field existed."""
-    from pool import capture, predictions, state, verify
+    from pool import capture, predictions, state
+    from pool.research import verify
 
     conn, _ = seeded
     assert "withheld" not in capture._pool_detail(predictions.pool_state(conn, 2026, 2))

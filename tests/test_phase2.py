@@ -14,11 +14,12 @@ import pytest
 from typer.testing import CliRunner
 
 from experiments import appendix, figures
-from pool import backtest, benchmark, db, models, snapshots
-from pool import evaluate as ev
+from pool import db, snapshots
 from pool import projections as P
 from pool.cli import app
 from pool.optimizer import plan_slot
+from pool.research import backtest, benchmark, models
+from pool.research import evaluate as ev
 from tests.conftest import proj_row
 from tests.test_backtest import PRIOR, SEASON, WEEKS
 
@@ -237,12 +238,13 @@ def test_snapshot_dedup_empty_and_atomic_rollback(seeded):
 @pytest.mark.parametrize("command", ["evaluate", "backtest", "sweep"])
 def test_cli_rejects_incompatible_temporal_options(command, tmp_path):
     result = CliRunner().invoke(
-        app, [command, "--vegas-horizon", "0", "--db", str(tmp_path / "none.db")]
+        app, ["research", command, "--vegas-horizon", "0", "--db", str(tmp_path / "none.db")]
     )
     assert result.exit_code != 0
     assert "legacy-closing" in result.output
     result = CliRunner().invoke(
-        app, [command, "--input-policy", "snapshots", "--db", str(tmp_path / "snapshot.db")]
+        app,
+        ["research", command, "--input-policy", "snapshots", "--db", str(tmp_path / "snapshot.db")],
     )
     assert result.exit_code != 0
     assert "decision-times" in result.output
@@ -336,6 +338,7 @@ def test_evaluate_custom_baseline_cli_exports_reproducibility_metadata(seeded, t
     result = CliRunner().invoke(
         app,
         [
+            "research",
             "evaluate",
             "--season",
             str(SEASON),
@@ -422,6 +425,7 @@ def test_snapshot_replay_commands_report_optional_absence_and_age(seeded, tmp_pa
     )
     path = seeded.execute("PRAGMA database_list").fetchone()[2]
     args = [
+        "research",
         command,
         "--season",
         str(SEASON),
@@ -445,10 +449,10 @@ def test_snapshot_replay_commands_report_optional_absence_and_age(seeded, tmp_pa
 
 
 def test_invalid_backtest_policy_does_not_open_a_database(monkeypatch):
-    from pool import cli
+    from pool.research import cli as research_cli
 
-    monkeypatch.setattr(cli, "_conn", lambda path: pytest.fail("opened database"))
-    result = CliRunner().invoke(app, ["backtest", "--input-policy", "snapshots"])
+    monkeypatch.setattr(research_cli, "_conn", lambda path: pytest.fail("opened database"))
+    result = CliRunner().invoke(app, ["research", "backtest", "--input-policy", "snapshots"])
     assert result.exit_code != 0
     assert "decision-times" in result.output
 
@@ -686,8 +690,8 @@ def test_republish_renders_saved_metrics_without_changing_the_run(tmp_path, monk
     assert historical == {p: benchmark.digest(p) for p in historical}
     presentation = json.loads((published / "presentation.json").read_text())
     assert presentation["metric_source_hash"] == identity["code_hash"]
-    assert presentation["source_hashes"]["src/pool/benchmark.py"] == benchmark.digest(
-        benchmark.ROOT / "src/pool/benchmark.py"
+    assert presentation["source_hashes"]["src/pool/research/benchmark.py"] == benchmark.digest(
+        benchmark.ROOT / "src/pool/research/benchmark.py"
     )
     assert originals == {p: benchmark.digest(p) for p in originals}
     assert analysis.read_text() == "Separately reviewed interpretation.\n"

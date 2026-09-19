@@ -24,8 +24,8 @@ from statistics import pstdev
 import numpy as np
 import pandas as pd
 
-from . import config, projections, recommend, rivals, scoring
-from .optimizer import FORBIDDEN, build_matrix, plan_slot, solve
+from .. import config, projections, recommend, rivals, scoring
+from ..optimizer import FORBIDDEN, build_matrix, plan_slot, solve
 
 # Tunables that only affect the assignment, not the projection frame. Changing
 # one of these during a sweep does not require rebuilding projections; changing

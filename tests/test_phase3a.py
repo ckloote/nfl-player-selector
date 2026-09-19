@@ -18,11 +18,12 @@ import pytest
 from scipy import optimize
 from typer.testing import CliRunner
 
-from pool import benchmark, capture, config, db, diagnostics, snapshots, state
-from pool import evaluate as ev
+from pool import capture, config, db, snapshots, state
 from pool import projections as P
 from pool.cli import app
 from pool.recommend import advise_week
+from pool.research import benchmark, diagnostics
+from pool.research import evaluate as ev
 from tests.test_backtest import PRIOR, SEASON, WEEKS, _seed
 from tests.test_phase2 import archive_all
 
@@ -1697,7 +1698,17 @@ def test_planning_values_use_the_discount_the_study_ran_under(tmp_path, monkeypa
 def test_the_cli_reports_a_missing_surface_instead_of_a_traceback(tmp_path, monkeypatch):
     run = _diagnosable_run(tmp_path, monkeypatch)
     result = CliRunner().invoke(
-        app, ["diagnose", "--run", str(run), "--out", str(tmp_path / "x"), "--model", "no-such"]
+        app,
+        [
+            "research",
+            "diagnose",
+            "--run",
+            str(run),
+            "--out",
+            str(tmp_path / "x"),
+            "--model",
+            "no-such",
+        ],
     )
     assert result.exit_code == 1
     assert "No saved surface" in result.output
