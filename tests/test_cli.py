@@ -95,10 +95,10 @@ def test_backtest_explains_an_unreadable_season_spec(spec, dbfile):
 
 def test_backtest_renders_a_summary_table(tmp_path):
     """The happy path: a replay over a seeded two-season database."""
-    from tests.test_backtest import SEASON, _seed
+    from tests.support.season import SEASON, seed_season
 
     path = tmp_path / "bt.db"
-    _seed(db.connect(path)).close()
+    seed_season(db.connect(path)).close()
     result = runner.invoke(
         app,
         [
@@ -119,17 +119,17 @@ def test_backtest_renders_a_summary_table(tmp_path):
 
 
 def _backtest_db(tmp_path):
-    from tests.test_backtest import _seed
+    from tests.support.season import seed_season
 
     path = tmp_path / "bt.db"
-    _seed(db.connect(path)).close()
+    seed_season(db.connect(path)).close()
     return path
 
 
 def test_a_winprob_backtest_prints_the_invented_rivals_caveat(tmp_path):
     """Claim 25. The caveat goes under every table that has a finish column, not once in
     the help text, because the table is what gets copied into a message."""
-    from tests.test_backtest import SEASON
+    from tests.support.season import SEASON
 
     path = _backtest_db(tmp_path)
     result = runner.invoke(
@@ -156,7 +156,7 @@ def test_a_winprob_backtest_prints_the_invented_rivals_caveat(tmp_path):
 
 
 def test_a_backtest_without_winprob_invents_nobody_and_says_nothing(tmp_path):
-    from tests.test_backtest import SEASON
+    from tests.support.season import SEASON
 
     path = _backtest_db(tmp_path)
     result = runner.invoke(
@@ -182,7 +182,7 @@ def test_a_backtest_without_winprob_invents_nobody_and_says_nothing(tmp_path):
     [(["--rival-behaviour", "telepathic"], "telepathic"), (["--rivals", "0"], "at least one")],
 )
 def test_a_bad_invented_field_is_named_rather_than_crashing(tmp_path, args, expected):
-    from tests.test_backtest import SEASON
+    from tests.support.season import SEASON
 
     path = _backtest_db(tmp_path)
     result = runner.invoke(
@@ -204,10 +204,10 @@ def test_a_bad_invented_field_is_named_rather_than_crashing(tmp_path, args, expe
 
 
 def test_sweep_renders_the_grid_and_warns_about_noise(tmp_path):
-    from tests.test_backtest import SEASON, _seed
+    from tests.support.season import SEASON, seed_season
 
     path = tmp_path / "bt.db"
-    _seed(db.connect(path)).close()
+    seed_season(db.connect(path)).close()
     result = runner.invoke(
         app,
         [

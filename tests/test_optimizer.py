@@ -1,6 +1,7 @@
 import pytest
 
 from pool import optimizer as O
+from tests.support.frames import proj_row
 
 
 def test_each_player_used_once_and_stars_spent_in_best_week(make_proj):
@@ -122,6 +123,3 @@ def test_the_discount_is_read_from_config_at_call_time(make_proj, monkeypatch):
     monkeypatch.setattr(config, "FUTURE_DISCOUNT", 0.5)
     discounted = O.plan_slot(proj, "QB", 1, set(), {}).total
     assert discounted < undiscounted
-
-
-from tests.conftest import proj_row  # noqa: E402

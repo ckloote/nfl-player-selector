@@ -4,13 +4,7 @@ import pandas as pd
 import pytest
 
 from pool import results, scoring
-from tests import test_workflow as workflow
-from tests.test_workflow import end, play, record
-
-
-@pytest.fixture
-def local(tmp_path):
-    yield from workflow.local.__wrapped__(tmp_path)
+from tests.support.local import end, play, record
 
 
 @pytest.mark.parametrize(

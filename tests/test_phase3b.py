@@ -24,7 +24,7 @@ from pool.recommend import advise_slot
 from pool.research import backtest, benchmark, diagnostics, models
 from pool.research import calibration as cal
 from pool.research import evaluate as ev
-from tests.test_phase3a import _reference_mle
+from tests.support.fits import reference_mle
 
 HISTORY, SEASONS, APPLY = 2022, [2023, 2024, 2025], [2024, 2025]
 WEEKS = [1, 2, 3, 4]
@@ -262,7 +262,7 @@ def test_the_level_fit_recovers_a_known_scale():
     assert fit["intercept"] == pytest.approx(np.log(y.sum() / lam.sum()), abs=1e-12)
     # The same model as a two-parameter fit with the exponent pinned: profile the
     # reference likelihood at b = 1 by offsetting, which is what the family means.
-    reference = _reference_mle(y, np.log(lam))
+    reference = reference_mle(y, np.log(lam))
     assert fit["intercept"] == pytest.approx(reference[0], abs=0.05)
 
 
@@ -787,7 +787,7 @@ def test_a_level_rescale_can_flip_a_hold_against_the_fixed_premium():
     and the same alternative can commit at one scale and hold at another. A level
     calibration is therefore not a no-op for the recommender even when it changes no order.
     """
-    from tests.conftest import proj_row
+    from tests.support.frames import proj_row
 
     proj = pd.DataFrame(
         [
@@ -1292,7 +1292,7 @@ def test_the_primary_score_covers_every_eligible_positive_rate_not_only_the_tail
 def test_a_captured_decision_records_the_rate_it_was_made_on_and_the_one_before_it(tmp_path):
     """A decision that stored only one of the two could not say afterwards whether the
     calibrator or the base model moved."""
-    from tests.test_phase3a import _decide
+    from tests.support.decisions import decide
 
     conn = _seed_seasons(db.connect(tmp_path / "cap.db"), [HISTORY, SEASONS[0]])
     conn.close()
@@ -1354,4 +1354,4 @@ def test_a_captured_decision_records_the_rate_it_was_made_on_and_the_one_before_
     assert recorded["calibrator"] == "cal-level-pooled@2026"
     assert recorded["calibrator_artifact_hash"] == "abc123"
     conn.close()
-    assert _decide is not None
+    assert decide is not None

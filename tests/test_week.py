@@ -15,8 +15,8 @@ from pool import db, freshness, ingest, scoring, weekly
 from pool.cli import advice as shown
 from pool.cli import app
 from pool.recommend import advise_week
-from tests.conftest import proj_row
-from tests.test_workflow import end, play
+from tests.support.frames import proj_row
+from tests.support.local import end, play
 
 runner = CliRunner()
 EASTERN = ZoneInfo("America/New_York")
@@ -391,25 +391,10 @@ def test_the_pasted_line_starts_the_way_the_command_was_started(monkeypatch):
 # --- the pot share --------------------------------------------------------------------
 
 
-@pytest.fixture
-def local(tmp_path):
-    from tests import test_workflow as workflow
-
-    yield from workflow.local.__wrapped__(tmp_path)
-
-
-@pytest.fixture
-def seeded(local):
-    """Week 1's report imported over real projections, so week 2 has rivals."""
-    from tests import test_winprob
-
-    return test_winprob.seeded.__wrapped__(local)
-
-
-def test_the_pot_share_is_one_line_and_one_column(seeded):
+def test_the_pot_share_is_one_line_and_one_column(reported):
     from pool import config
 
-    conn, path = seeded
+    conn, path = reported
     conn.close()
     with config.override(WINPROB_SIMS=200):
         result = runner.invoke(app, ["week", "--no-refresh", "--db", str(path)])
@@ -420,12 +405,12 @@ def test_the_pot_share_is_one_line_and_one_column(seeded):
 
 
 def test_without_an_identity_the_share_is_withheld_with_its_fix(local, monkeypatch):
-    from tests import test_predictions as log
+    from tests.support import reports as log
 
     conn, path = local
     scoring.import_touchdowns(conn, 2026, pd.DataFrame([play(), end(), end("g2", 0, 0)]))
-    log._history(conn)
-    log._report(conn, 1, log.WEEK1, "2026-09-14T00:00:00+00:00", me=None)
+    log.history(conn)
+    log.report(conn, 1, log.WEEK1, "2026-09-14T00:00:00+00:00", me=None)
     conn.close()
     monkeypatch.setenv("COLUMNS", "200")
     result = runner.invoke(app, ["week", "--no-refresh", "--db", str(path)])
@@ -462,8 +447,8 @@ def weekly_run(path, when, *args):
         return run_week(path, when, *args)
 
 
-def test_a_prediction_is_saved_before_kickoff_and_not_again_until_it_changes(seeded):
-    conn, path = seeded
+def test_a_prediction_is_saved_before_kickoff_and_not_again_until_it_changes(reported):
+    conn, path = reported
     conn.close()
     first = weekly_run(path, BEFORE_KICKOFF)
     assert predicted(path) == ([2], [2])
@@ -474,16 +459,16 @@ def test_a_prediction_is_saved_before_kickoff_and_not_again_until_it_changes(see
     assert "unchanged since the last save" in again
 
 
-def test_a_changed_prediction_supersedes_the_earlier_one(seeded):
+def test_a_changed_prediction_supersedes_the_earlier_one(reported):
     from pool import predictions
 
-    conn, path = seeded
+    conn, path = reported
     weekly_run(path, BEFORE_KICKOFF)
     # Pat's week-1 report is corrected, which changes what Pat has left to spend.
-    from tests import test_predictions as log
+    from tests.support import reports as log
 
     corrected = dict(log.WEEK1, Pat=("Quarter Two", "", "Flex Two"))
-    log._report(conn, 1, corrected, "2026-09-19T16:10:00+00:00")
+    log.report(conn, 1, corrected, "2026-09-19T16:10:00+00:00")
     conn.close()
     weekly_run(path, "2026-09-19T12:30")
     assert predicted(path) == ([2, 2], [2, 2])
@@ -494,16 +479,16 @@ def test_a_changed_prediction_supersedes_the_earlier_one(seeded):
     conn.close()
 
 
-def test_after_kickoff_a_week_with_no_prediction_says_it_will_not_be_scored(seeded):
-    conn, path = seeded
+def test_after_kickoff_a_week_with_no_prediction_says_it_will_not_be_scored(reported):
+    conn, path = reported
     conn.close()
     missed = weekly_run(path, AFTER_KICKOFF)
     assert predicted(path) == ([], [])
     assert "No rival prediction was saved for week 2 before it could be seen" in missed
 
 
-def test_after_kickoff_a_saved_prediction_is_reported_and_not_added_to(seeded):
-    conn, path = seeded
+def test_after_kickoff_a_saved_prediction_is_reported_and_not_added_to(reported):
+    conn, path = reported
     conn.close()
     weekly_run(path, BEFORE_KICKOFF)
     kept = weekly_run(path, AFTER_KICKOFF)
@@ -511,8 +496,8 @@ def test_after_kickoff_a_saved_prediction_is_reported_and_not_added_to(seeded):
     assert "on record from before the week could be seen" in kept
 
 
-def test_nothing_is_predicted_for_a_week_that_is_not_current(seeded):
-    conn, path = seeded
+def test_nothing_is_predicted_for_a_week_that_is_not_current(reported):
+    conn, path = reported
     conn.close()
     output = weekly_run(path, BEFORE_KICKOFF, "--week", "1")
     assert predicted(path) == ([], [])
@@ -520,12 +505,12 @@ def test_nothing_is_predicted_for_a_week_that_is_not_current(seeded):
 
 
 def test_nothing_is_predicted_without_an_identity(local):
-    from tests import test_predictions as log
+    from tests.support import reports as log
 
     conn, path = local
     scoring.import_touchdowns(conn, 2026, pd.DataFrame([play(), end(), end("g2", 0, 0)]))
-    log._history(conn)
-    log._report(conn, 1, log.WEEK1, "2026-09-14T00:00:00+00:00", me=None)
+    log.history(conn)
+    log.report(conn, 1, log.WEEK1, "2026-09-14T00:00:00+00:00", me=None)
     conn.close()
     output = weekly_run(path, BEFORE_KICKOFF)
     assert predicted(path) == ([], [])
@@ -539,7 +524,7 @@ def test_recommend_keeps_names_whole_at_eighty_columns_even_with_the_pot_share(m
     """The review's smoke check found "Alternati…" and "Jaxon Smith-Nji…" at 80 columns.
     With the two pot-share columns there is the least room there will ever be."""
     from pool import config, rivals
-    from tests import test_winprob as winprob
+    from tests.support import frames as winprob
 
     long = {
         "qb": "Jaxon Smith-Njigba Junior",
@@ -566,13 +551,13 @@ def test_recommend_keeps_names_whole_at_eighty_columns_even_with_the_pot_share(m
 
 
 def test_a_prediction_that_cannot_be_saved_is_one_line_and_the_advice_still_prints(
-    seeded, monkeypatch
+    reported, monkeypatch
 ):
     def broken(*args, **kwargs):
         raise ValueError("No projection rows for 2026 week 2")
 
     monkeypatch.setattr(weekly, "save_predictions", broken)
-    conn, path = seeded
+    conn, path = reported
     conn.close()
     output = weekly_run(path, BEFORE_KICKOFF)
     assert "PICK " in output

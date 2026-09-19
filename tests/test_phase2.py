@@ -20,15 +20,8 @@ from pool.cli import app
 from pool.optimizer import plan_slot
 from pool.research import backtest, benchmark, models
 from pool.research import evaluate as ev
-from tests.conftest import proj_row
-from tests.test_backtest import PRIOR, SEASON, WEEKS
-
-
-def archive_all(conn, stamp="2024-09-01T00:00:00Z", optional=True):
-    for season in (PRIOR, SEASON):
-        for feed in snapshots.TABLES:
-            if optional or feed in ("schedule", "player_stats", "touchdowns"):
-                snapshots.archive(conn, season, feed, observed_at=stamp)
+from tests.support.frames import proj_row
+from tests.support.season import PRIOR, SEASON, WEEKS, archive_all
 
 
 @pytest.mark.parametrize("name", sorted(models.BUILDERS))

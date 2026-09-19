@@ -6,7 +6,7 @@ import pytest
 
 from pool import config, recommend, rivals, simulate
 from pool.research import backtest
-from tests.test_winprob import NOW, cell, frame, rival
+from tests.support.frames import NOW, cell, frame, rival
 
 
 def test_clustered_uncertainty_uses_block_sums_and_unequal_sizes():
@@ -95,22 +95,15 @@ def test_naive_invented_rivals_fill_eighteen_weeks_despite_candidate_cap():
     assert len(set(picks)) == 18
 
 
-@pytest.fixture
-def local(tmp_path):
-    from tests import test_workflow as workflow
-
-    yield from workflow.local.__wrapped__(tmp_path)
-
-
 def test_live_pool_keeps_finalized_current_results_separate_from_banked(local):
     from datetime import UTC, datetime
 
     from pool import predictions, scoring
-    from tests import test_predictions as log
-    from tests.test_workflow import end, play
+    from tests.support import reports as log
+    from tests.support.local import end, play
 
     conn, _ = local
-    log._report(conn, 1, log.WEEK1, "2026-09-09T12:00:00+00:00")
+    log.report(conn, 1, log.WEEK1, "2026-09-09T12:00:00+00:00")
     scoring.import_touchdowns(
         conn,
         2026,
@@ -283,11 +276,11 @@ def test_capture_stores_final_results_and_survives_later_corrections(local):
 
     from pool import capture, predictions, scoring
     from pool.research import verify
-    from tests import test_predictions as log
-    from tests.test_workflow import end, play
+    from tests.support import reports as log
+    from tests.support.local import end, play
 
     conn, _ = local
-    log._report(conn, 1, log.WEEK1, "2026-09-09T12:00:00+00:00")
+    log.report(conn, 1, log.WEEK1, "2026-09-09T12:00:00+00:00")
     scoring.import_touchdowns(
         conn,
         2026,
@@ -329,14 +322,14 @@ def test_pending_and_not_yet_reported_results_are_excluded(local):
     from datetime import UTC, datetime
 
     from pool import predictions, scoring
-    from tests import test_predictions as log
-    from tests.test_workflow import end, play
+    from tests.support import reports as log
+    from tests.support.local import end, play
 
     conn, _ = local
     scoring.import_touchdowns(conn, 2026, pd.DataFrame([play(pid="q1"), end()]))
     with conn:
         conn.execute("UPDATE game_results SET imported_at = '2026-09-11T12:00:00+00:00'")
-    log._report(conn, 1, log.WEEK1, "2026-09-13T12:00:00+00:00")
+    log.report(conn, 1, log.WEEK1, "2026-09-13T12:00:00+00:00")
     before = predictions.pool_state(conn, 2026, 1, at=datetime(2026, 9, 12, tzinfo=UTC))
     assert not before.finalized
     assert all(not r.known for r in before.rivals)

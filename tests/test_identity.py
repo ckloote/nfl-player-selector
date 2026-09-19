@@ -11,7 +11,7 @@ import pytest
 
 from pool import capture, db, identity
 from pool.research import benchmark
-from tests.test_backtest import SEASON, _seed
+from tests.support.season import SEASON, seed_season
 
 SOURCE = Path(identity.__file__).resolve().parent
 
@@ -65,7 +65,7 @@ def test_an_installed_copy_records_a_pick_outside_any_checkout(tmp_path):
     site = tmp_path / "site"
     shutil.copytree(SOURCE, site / "pool", ignore=shutil.ignore_patterns("__pycache__"))
     path = tmp_path / "pool.db"
-    _seed(db.connect(path)).close()
+    seed_season(db.connect(path)).close()
     env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "PYTHONPATH": str(site)}
 
     def run(*args):

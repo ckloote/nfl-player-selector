@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from pool import config, db, freshness, ingest, scoring, state
 from pool.cli import app
-from tests.test_workflow import end, play
+from tests.support.local import end, play
 
 runner = CliRunner()
 NOW = datetime(2026, 9, 1, tzinfo=UTC)

@@ -15,7 +15,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from scipy import optimize
 from typer.testing import CliRunner
 
 from pool import capture, config, db, snapshots, state
@@ -24,62 +23,34 @@ from pool.cli import app
 from pool.recommend import advise_week
 from pool.research import benchmark, diagnostics
 from pool.research import evaluate as ev
-from tests.test_backtest import PRIOR, SEASON, WEEKS, _seed
-from tests.test_phase2 import archive_all
+from tests.support.decisions import (
+    DECISION,
+    POST_SUN,
+    POST_THU,
+    PRE_WEEK3,
+    decide,
+    publish,
+    staged,
+)
+from tests.support.fits import reference_mle, reference_model_se
+from tests.support.season import PRIOR, SEASON, WEEKS, archive_all, seed_season
 
 STUDY = Path("data/experiments/roster-snapshot-repair")
 
 
 # --- trusted reference ------------------------------------------------------
-def _reference_mle(y, x):
-    """An independent Poisson MLE, sharing no code with `evaluate.poisson_glm`.
-
-    Minimising the negative log-likelihood with a general-purpose optimiser is a
-    different route to the same estimand; agreeing with it is evidence the IRLS
-    implementation is correct rather than merely self-consistent.
-    """
-    design = np.column_stack([np.ones_like(x), x])
-
-    def nll(beta):
-        eta = design @ beta
-        return float(np.sum(np.exp(eta) - y * eta))
-
-    return optimize.minimize(nll, np.zeros(2), method="BFGS", tol=1e-14).x
-
-
-def _reference_model_se(y, x, beta):
-    """Model-based SEs from a numerically differentiated Hessian of the same NLL."""
-    design = np.column_stack([np.ones_like(x), x])
-
-    def nll(b):
-        eta = design @ b
-        return float(np.sum(np.exp(eta) - y * eta))
-
-    step, hess = 1e-5, np.zeros((2, 2))
-    for i in range(2):
-        for j in range(2):
-            a, b = np.zeros(2), np.zeros(2)
-            a[i] = b[i] = step
-            a[j] += step
-            b[j] -= step
-            hess[i, j] = (nll(beta + a) - nll(beta + b) - nll(beta - b) + nll(beta - a)) / (
-                4 * step * step
-            )
-    return np.sqrt(np.diag(np.linalg.inv(hess)))
-
-
 def test_an_identifiable_fit_matches_an_independent_maximum_likelihood_estimate():
     rng = np.random.default_rng(11)
     x = rng.normal(-1.0, 0.8, 20000)
     y = rng.poisson(np.exp(0.2 + 0.75 * x))
     fit = ev.poisson_glm(y, x, np.arange(len(y)))
-    beta = _reference_mle(y, x)
+    beta = reference_mle(y, x)
     assert fit["fit_status"] == ev.FIT_OK and fit["converged"]
     assert fit["intercept"] == pytest.approx(beta[0], abs=1e-6)
     assert fit["slope"] == pytest.approx(beta[1], abs=1e-6)
     # With one row per cluster the sandwich is a robust SE; on a correctly specified
     # Poisson it should sit close to the model-based SE, not an order of magnitude off.
-    se = _reference_model_se(y, x, beta)
+    se = reference_model_se(y, x, beta)
     assert fit["se_intercept"] == pytest.approx(se[0], rel=0.10)
     assert fit["se_slope"] == pytest.approx(se[1], rel=0.10)
 
@@ -302,90 +273,6 @@ def test_a_population_with_no_positive_rates_reports_its_exclusions():
 
 
 # --- one same-week stats contract -------------------------------------------
-THU_KICK, SUN_KICK = "2024-09-19T20:15", "2024-09-22T13:00"
-PRE_WEEK3 = "2024-09-19T18:00:00+00:00"  # Thursday afternoon, before kickoff
-POST_THU = "2024-09-20T12:00:00+00:00"  # the Thursday result is in the feed
-DECISION = "2024-09-20T16:00:00+00:00"  # Friday: Thursday locked, Sunday open
-POST_SUN = "2024-09-23T12:00:00+00:00"  # everything else has been played
-
-
-def _dicts(conn, sql, params=()):
-    return [dict(r) for r in conn.execute(sql, params)]
-
-
-def _insert(conn, table, rows):
-    if not rows:
-        return
-    cols = list(rows[0])
-    conn.executemany(
-        f"INSERT INTO {table} ({','.join(cols)}) VALUES ({','.join('?' for _ in cols)})",
-        [tuple(r[c] for c in cols) for r in rows],
-    )
-
-
-def _staged(tmp_path):
-    """A week-3 decision with one game already played and the rest still to come.
-
-    The shared fixture kicks every game off at the same hour, which is precisely the
-    situation in which the live and snapshot stats rules cannot disagree. Give week 3
-    a Thursday game and a Sunday game, then withhold everything from week 3 on so the
-    feed can publish it in the order it really would.
-    """
-    conn = _seed(db.connect(tmp_path / "parity.db"))
-    with conn:
-        for week, kick in ((1, "2024-09-08T13:00"), (2, "2024-09-15T13:00")):
-            conn.execute(
-                "UPDATE games SET kickoff = ? WHERE season = ? AND week = ?", (kick, SEASON, week)
-            )
-        conn.execute("UPDATE games SET kickoff = ? WHERE game_id = ?", (THU_KICK, "g2024-3-AAA"))
-        conn.execute("UPDATE games SET kickoff = ? WHERE game_id = ?", (SUN_KICK, "g2024-3-CCC"))
-        conn.execute(
-            "UPDATE games SET kickoff = '2024-09-29T13:00' WHERE season = ? AND week = 4",
-            (SEASON,),
-        )
-    unplayed = {
-        "player_weeks": _dicts(
-            conn, "SELECT * FROM player_weeks WHERE season = ? AND week >= 3", (SEASON,)
-        ),
-        "rosters": _dicts(conn, "SELECT * FROM rosters WHERE season = ? AND week >= 4", (SEASON,)),
-        "game_results": _dicts(
-            conn, "SELECT * FROM game_results WHERE season = ? AND week >= 3", (SEASON,)
-        ),
-        "touchdown_credits": _dicts(
-            conn,
-            "SELECT t.* FROM touchdown_credits t JOIN games g USING(game_id) "
-            "WHERE g.season = ? AND g.week >= 3",
-            (SEASON,),
-        ),
-    }
-    with conn:
-        conn.execute("DELETE FROM player_weeks WHERE season = ? AND week >= 3", (SEASON,))
-        conn.execute("DELETE FROM rosters WHERE season = ? AND week >= 4", (SEASON,))
-        conn.execute(
-            "DELETE FROM touchdown_credits WHERE game_id IN "
-            "(SELECT game_id FROM games WHERE season = ? AND week >= 3)",
-            (SEASON,),
-        )
-        conn.execute("DELETE FROM game_results WHERE season = ? AND week >= 3", (SEASON,))
-    return conn, unplayed
-
-
-def _publish(conn, unplayed, which):
-    """Publish the Thursday game's rows, or everything that follows them.
-
-    Next week's roster is part of "everything that follows": a week-4 snapshot does not
-    exist on the Friday of week 3, and letting one path see it would make the parity
-    comparison pass for the wrong reason.
-    """
-    thursday = which == "thursday"
-    with conn:
-        for table in ("player_weeks", "game_results", "touchdown_credits"):
-            rows = [r for r in unplayed[table] if (r["game_id"] == "g2024-3-AAA") == thursday]
-            _insert(conn, table, rows)
-        if not thursday:
-            _insert(conn, "rosters", unplayed["rosters"])
-
-
 def _advice(proj, now):
     out = []
     for a in advise_week(proj, 3, set(), {slot: {} for slot in config.SLOTS}, now=now):
@@ -421,9 +308,9 @@ def test_an_observed_early_game_reaches_the_same_decision_live_and_from_snapshot
     """Live loading read every stat row it had, including Thursday's; snapshot replay
     cut at `week < W` and threw the same row away. Same instant, same archive, two
     different forecasts -- so nothing measured in replay described the live model."""
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
+    publish(conn, unplayed, "thursday")
     for feed in ("player_stats", "touchdowns"):
         snapshots.archive(conn, SEASON, feed, observed_at=POST_THU)
 
@@ -432,7 +319,7 @@ def test_an_observed_early_game_reaches_the_same_decision_live_and_from_snapshot
     live_advice = _advice(live, now)
 
     # Everything after the decision arrives before the replay is run.
-    _publish(conn, unplayed, "rest")
+    publish(conn, unplayed, "rest")
     for feed in ("player_stats", "touchdowns"):
         snapshots.archive(conn, SEASON, feed, observed_at=POST_SUN)
 
@@ -451,9 +338,9 @@ def test_an_observed_early_game_reaches_the_same_decision_live_and_from_snapshot
 def test_a_decision_before_the_feed_published_cannot_see_the_early_game(tmp_path):
     """Availability is the observation time, not the kickoff: one microsecond before
     the import, the Thursday result does not exist for the decision."""
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
+    publish(conn, unplayed, "thursday")
     for feed in ("player_stats", "touchdowns"):
         snapshots.archive(conn, SEASON, feed, observed_at=POST_THU)
 
@@ -467,16 +354,16 @@ def test_a_decision_before_the_feed_published_cannot_see_the_early_game(tmp_path
 def test_later_imports_cannot_change_an_earlier_decision(tmp_path):
     """A correction published after the pick was made must not rewrite the pick's
     inputs. Reconstructing the same instant twice, across an import, must not move."""
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
+    publish(conn, unplayed, "thursday")
     for feed in ("player_stats", "touchdowns"):
         snapshots.archive(conn, SEASON, feed, observed_at=POST_THU)
     before = P.build_projections(
         P.load_frames(conn, SEASON, 3, input_policy="snapshots", decision_at=DECISION), 3, "usage"
     )
 
-    _publish(conn, unplayed, "rest")
+    publish(conn, unplayed, "rest")
     with conn:
         conn.execute(
             "UPDATE player_weeks SET rec_td = rec_td + 3 WHERE season = ? AND week = 3", (SEASON,)
@@ -493,7 +380,7 @@ def test_later_imports_cannot_change_an_earlier_decision(tmp_path):
 def test_historical_replay_still_stops_at_the_previous_week(tmp_path):
     """The historical policy has no observation times to consult, so it cannot know
     which of week W's games had finished. It keeps its documented approximation."""
-    conn, _ = _staged(tmp_path)
+    conn, _ = staged(tmp_path)
     frames = P.load_frames(conn, SEASON, 3)
     assert sorted(frames.pw_cur.week.unique()) == [1, 2]
     assert P._stats_through("historical", 3) == 2
@@ -530,7 +417,7 @@ def _snapshot_spec(csv_path, **overrides):
 
 
 def _research_db(tmp_path, name):
-    conn = _seed(db.connect(tmp_path / f"{name}-source.db"))
+    conn = seed_season(db.connect(tmp_path / f"{name}-source.db"))
     archive_all(conn, "2024-09-01T00:00:00Z")
     out = tmp_path / name
     out.mkdir()
@@ -649,26 +536,14 @@ def test_resume_rejects_an_edited_decision_csv_at_the_same_path(tmp_path, monkey
 
 
 # --- append-only decision capture -------------------------------------------
-def _decide(conn, week, decided, used=None, locked=None):
-    used = set() if used is None else used
-    locked = {slot: {} for slot in config.SLOTS} if locked is None else locked
-    now = state.eastern_now(decided)
-    proj = P.projections_for(conn, SEASON, from_week=week)
-    advice = advise_week(proj, week, used, locked, now=now)
-    decision_id = capture.record_decision(
-        conn, SEASON, week, proj, advice, used, locked, decision_at=decided
-    )
-    return decision_id, proj, advice
-
-
 def test_the_capture_stores_the_whole_surface_not_the_shortlist(tmp_path):
     """The optimizer prunes to eighty candidates and the recommender shows six. A
     diagnostic asking about eligible zero rates, or about a player at a four-week
     horizon, has to find them here, because nothing downstream keeps them."""
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
-    decision_id, proj, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    publish(conn, unplayed, "thursday")
+    decision_id, proj, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
 
     frame, _, _, _ = capture.reconstruct(conn, decision_id)
     assert len(frame) == len(proj)
@@ -688,10 +563,10 @@ def test_the_capture_stores_the_whole_surface_not_the_shortlist(tmp_path):
 def test_a_captured_decision_reconstructs_its_advice_from_the_surface_alone(tmp_path):
     """The 3A acceptance case. If the re-derived advice differs from the recorded
     advice, something the decision depended on was never written down."""
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
-    decision_id, _, advice = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    publish(conn, unplayed, "thursday")
+    decision_id, _, advice = decide(conn, 3, datetime.fromisoformat(DECISION))
 
     _, redone, recorded, drift = capture.reconstruct(conn, decision_id)
     assert not drift["code_hash_changed"] and not drift["constants_changed"]
@@ -712,23 +587,23 @@ def test_a_captured_decision_reconstructs_its_advice_from_the_surface_alone(tmp_
 def test_hold_and_commit_are_events_in_their_own_right(tmp_path):
     """The early deadline is the decision the pool actually forces; recording only the
     pick would lose whether the tool said to wait for Sunday's news."""
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
+    publish(conn, unplayed, "thursday")
     # Before the Thursday kickoff, so its players are still live and early.
-    _decide(conn, 3, datetime.fromisoformat("2024-09-19T18:30:00+00:00"))
+    decide(conn, 3, datetime.fromisoformat("2024-09-19T18:30:00+00:00"))
     kinds = set(capture.events(conn, SEASON).kind)
     assert {"surface", "advice"} <= kinds
     assert kinds & {"hold", "commit"}
 
 
 def test_captured_inputs_name_the_observations_the_decision_could_see(tmp_path):
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
+    publish(conn, unplayed, "thursday")
     for feed in ("player_stats", "touchdowns"):
         snapshots.archive(conn, SEASON, feed, observed_at=POST_THU)
-    decision_id, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    decision_id, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
 
     inputs = db.read_df(conn, "SELECT * FROM decision_inputs WHERE decision_id = ?", (decision_id,))
     assert set(inputs.feed) == set(snapshots.TABLES)
@@ -747,7 +622,7 @@ def test_a_snapshot_transaction_holds_its_reads_before_the_body_runs(tmp_path):
     not when the savepoint opens. So a transaction that has not read yet is no defence
     at all, and a timestamp taken beside one describes data nobody has looked at."""
     path = tmp_path / "pool.db"
-    _seed(db.connect(path)).close()
+    seed_season(db.connect(path)).close()
     row = ("g-late", SEASON, 9, "REG", "2024-11-03T13:00", "Sun", "AAA", "BBB")
     insert = (
         "INSERT OR REPLACE INTO games (game_id, season, week, game_type, kickoff, weekday,"
@@ -785,7 +660,7 @@ def test_a_refresh_cannot_land_between_the_decision_clock_and_the_data_it_names(
     instant the clock is read, which is the worst case the ordering has to survive.
     """
     path = tmp_path / "pool.db"
-    conn = _seed(db.connect(path))
+    conn = seed_season(db.connect(path))
     archive_all(conn, PRE_WEEK3)
     conn.commit()
     conn.close()
@@ -844,13 +719,13 @@ def test_a_refresh_cannot_land_between_the_decision_clock_and_the_data_it_names(
 
 def test_a_decision_survives_a_later_feed_correction(tmp_path):
     """The reason outcomes are joined at read time and never stored on an event."""
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
-    decision_id, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    publish(conn, unplayed, "thursday")
+    decision_id, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
     before, advice_before, recorded, _ = capture.reconstruct(conn, decision_id)
 
-    _publish(conn, unplayed, "rest")
+    publish(conn, unplayed, "rest")
     with conn:
         conn.execute("UPDATE player_weeks SET rec_td = rec_td + 5 WHERE season = ?", (SEASON,))
     for feed in ("player_stats", "touchdowns"):
@@ -869,7 +744,7 @@ def test_a_pick_and_its_history_change_together_or_not_at_all(tmp_path, monkeypa
     correction event destroys the identity it replaced with no way back. Capture must
     not be able to fail after the pick has already moved."""
     path = tmp_path / "pool.db"
-    _seed(db.connect(path)).close()
+    seed_season(db.connect(path)).close()
     runner = CliRunner()
     args = ["--season", str(SEASON), "--db", str(path)]
     assert runner.invoke(app, ["record", "--week", "1", "--rb", "AAA RB1", *args]).exit_code == 0
@@ -890,7 +765,7 @@ def test_a_pick_and_its_history_change_together_or_not_at_all(tmp_path, monkeypa
 
 def test_removing_a_pick_and_recording_the_correction_are_one_write(tmp_path, monkeypatch):
     path = tmp_path / "pool.db"
-    _seed(db.connect(path)).close()
+    seed_season(db.connect(path)).close()
     runner = CliRunner()
     args = ["--season", str(SEASON), "--db", str(path)]
     assert runner.invoke(app, ["record", "--week", "1", "--rb", "AAA RB1", *args]).exit_code == 0
@@ -908,15 +783,15 @@ def test_two_decisions_under_different_settings_get_different_identities(tmp_pat
     """The identity cache keyed on model and calibrator while caching the constants,
     so two decisions made under different premiums recorded one premium between them --
     and it was the first one's, whichever decision you asked about."""
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
+    publish(conn, unplayed, "thursday")
     before_kickoff = datetime.fromisoformat("2024-09-19T18:30:00+00:00")
 
     identities, holds = {}, {}
     for premium in (0.10, 0.0001):
         with config.override(INFO_PREMIUM_TD=premium):
-            decision_id, _, advice = _decide(conn, 3, before_kickoff)
+            decision_id, _, advice = decide(conn, 3, before_kickoff)
         identities[premium] = capture.recorded_identity(conn, decision_id)
         holds[premium] = {a.slot: a.hold for a in advice}
 
@@ -931,13 +806,13 @@ def test_a_captured_hold_stays_a_hold_when_the_premium_moves(tmp_path):
     """Reconstruction re-derives advice, and `advise_slot` reads the premium when it is
     called. Under today's configuration a captured hold came back as a commit from
     byte-identical stored data."""
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
+    publish(conn, unplayed, "thursday")
     before_kickoff = datetime.fromisoformat("2024-09-19T18:30:00+00:00")
     now = state.eastern_now(before_kickoff)
     with config.override(INFO_PREMIUM_TD=0.10):
-        decision_id, _, advice = _decide(conn, 3, before_kickoff)
+        decision_id, _, advice = decide(conn, 3, before_kickoff)
     captured = {a.slot: a.hold for a in advice}
     assert any(captured.values()), "fixture must capture a hold"
 
@@ -963,11 +838,11 @@ def test_a_reconstructed_deadline_is_the_one_the_decision_was_made_under(tmp_pat
     is returned after the restoring override has ended, so every reconstructed deadline
     silently re-derived itself under today's policy -- 19:15 where 18:15 was recorded.
     The stored event was right the whole time, which is what makes it checkable."""
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
+    publish(conn, unplayed, "thursday")
     with config.override(PICK_DEADLINE_MINUTES=120):
-        decision_id, _, advice = _decide(conn, 3, datetime.fromisoformat(DECISION))
+        decision_id, _, advice = decide(conn, 3, datetime.fromisoformat(DECISION))
     assert config.PICK_DEADLINE_MINUTES == 60, "the fixture must reconstruct under a moved setting"
 
     _, redone, recorded, _ = capture.reconstruct(conn, decision_id)
@@ -991,10 +866,10 @@ def test_a_reconstructed_deadline_is_the_one_the_decision_was_made_under(tmp_pat
 def test_reconstruction_refuses_a_source_tree_it_was_not_captured_under(tmp_path):
     """The recommender's behaviour is not carried by the recorded constants alone, so a
     silent substitution of current code would answer a different question."""
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
-    decision_id, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    publish(conn, unplayed, "thursday")
+    decision_id, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
 
     capture._code_identity.cache_clear()
     try:
@@ -1118,10 +993,10 @@ def test_a_module_the_decision_does_not_depend_on_does_not_refuse_it(tmp_path):
     leaderboard or an ingestion command changes the tree and changes nothing the
     recommender did, and refusing to reconstruct on that would fail a capture nothing
     had touched -- which is what makes an unrelated feature cost six weeks of evidence."""
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
-    decision_id, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    publish(conn, unplayed, "thursday")
+    decision_id, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
     _code, decision_hash, revision, dirty = capture._code_identity()
 
     capture._code_identity.cache_clear()
@@ -1170,10 +1045,10 @@ def test_a_setting_this_version_cannot_rebuild_is_refused_not_guessed(tmp_path):
 
 @pytest.mark.parametrize("table", ["decision_events", "decision_inputs"])
 def test_captured_events_cannot_be_edited_or_deleted(tmp_path, table):
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
-    _decide(conn, 3, datetime.fromisoformat(DECISION))
+    publish(conn, unplayed, "thursday")
+    decide(conn, 3, datetime.fromisoformat(DECISION))
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         with conn:
             conn.execute(f"UPDATE {table} SET season = 1999")
@@ -1185,11 +1060,11 @@ def test_captured_events_cannot_be_edited_or_deleted(tmp_path, table):
 def test_repeating_a_decision_on_unchanged_inputs_stores_one_surface(tmp_path):
     """Content-addressed like the feed archive: re-running `recommend` should cost an
     event, not another copy of the whole surface."""
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
-    first, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
-    second, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    publish(conn, unplayed, "thursday")
+    first, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
+    second, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
 
     assert first != second
     hashes = {
@@ -1206,10 +1081,10 @@ def test_repeating_a_decision_on_unchanged_inputs_stores_one_surface(tmp_path):
 
 
 def test_outcomes_are_joined_separately_and_absence_is_not_a_zero(tmp_path):
-    conn, unplayed = _staged(tmp_path)
+    conn, unplayed = staged(tmp_path)
     archive_all(conn, PRE_WEEK3)
-    _publish(conn, unplayed, "thursday")
-    _decide(conn, 3, datetime.fromisoformat(DECISION))
+    publish(conn, unplayed, "thursday")
+    decide(conn, 3, datetime.fromisoformat(DECISION))
 
     joined = capture.outcomes(conn, SEASON)
     assert "actual_tds" in joined and "outcome_complete" in joined
@@ -1218,7 +1093,7 @@ def test_outcomes_are_joined_separately_and_absence_is_not_a_zero(tmp_path):
     assert not joined.outcome_complete.any()
     assert joined.actual_tds.isna().all()
 
-    _publish(conn, unplayed, "rest")
+    publish(conn, unplayed, "rest")
     complete = capture.outcomes(conn, SEASON)
     assert complete.outcome_complete.all()
     assert complete.actual_tds.notna().all()
@@ -1228,7 +1103,7 @@ def test_the_cli_records_submissions_and_corrections_without_editing_history(tmp
     """`my_picks` holds the current answer and is overwritten in place. The capture log
     has to hold every answer, or a corrected pick erases the one it replaced."""
     path = tmp_path / "pool.db"
-    conn = _seed(db.connect(path))
+    conn = seed_season(db.connect(path))
     conn.close()
     runner = CliRunner()
     for args in (
@@ -1252,7 +1127,7 @@ def test_the_cli_records_submissions_and_corrections_without_editing_history(tmp
 
 def test_the_cli_captures_a_recommendation_and_can_be_asked_not_to(tmp_path):
     path = tmp_path / "pool.db"
-    conn = _seed(db.connect(path))
+    conn = seed_season(db.connect(path))
     conn.close()
     runner = CliRunner()
     args = ["recommend", "--week", "1", "--season", str(SEASON), "--db", str(path)]
@@ -1284,7 +1159,7 @@ def _diagnosable_run(tmp_path, monkeypatch):
     monkeypatch.setattr(
         benchmark, "code_identity", lambda: dict(code_hash="t", revision="t", dirty=False)
     )
-    conn = _seed(db.connect(tmp_path / "diag-source.db"))
+    conn = seed_season(db.connect(tmp_path / "diag-source.db"))
     out = tmp_path / "run"
     out.mkdir()
     destination = sqlite3.connect(out / "research.db")
