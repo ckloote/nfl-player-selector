@@ -394,7 +394,9 @@ def prepare_dataset(output, spec, log):
             ):
                 continue
             log(f"Backfilling research data {season - 1}–{season}")
-            ingest.refresh(conn, season, log=log)
+            # Both seasons of the pair, settled or not: a research dataset is built
+            # once and frozen, so it takes everything the feeds have.
+            ingest.refresh(conn, season, log=log, full=True)
         apply_corrections(conn, spec, log)
         audit(conn, spec)
         tmp = output / "dataset.sqlite.tmp"

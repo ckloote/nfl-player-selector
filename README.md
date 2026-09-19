@@ -283,7 +283,11 @@ nonzero. Use plain `score` to explicitly recompute existing scores from the reta
 data.
 
 Refreshes bypass nflreadpy's cache, attempt independent feeds, and retain the previous
-dataset on download, parsing, or missing-file failures. `pool refresh` exits nonzero on a
+dataset on download, parsing, or missing-file failures. A refresh covers the current season
+and the one before it, whose statistics are the model's starting history. Once that prior
+season is settled (every game final with complete touchdown coverage, and every feed loaded
+at least once), a refresh records only its schedule and skips its other downloads;
+`pool refresh --full` downloads it again, for upstream stat corrections. `pool refresh` exits nonzero on a
 partial failure, while expected unpublished preseason results are informational; `pool week`
 reports a failure in one line and still advises from the data it has. Advice continues with
 warnings when usable schedule and player history exist. `status`, `recommend`, `week` and `plan`

@@ -273,6 +273,7 @@ class RefreshResult(dict):
     def __init__(self):
         super().__init__()
         self.failures: list[str] = []
+        self.skipped: list[int] = []  # settled seasons whose feeds were not re-downloaded
 
 
 @contextmanager
@@ -296,8 +297,46 @@ def _unpublished(conn, season: int, feed: str) -> bool:
     return bool(first and state.eastern_now() < datetime.fromisoformat(first))
 
 
-def refresh(conn: sqlite3.Connection, season: int, log=print) -> RefreshResult:
-    """Try independent feeds uncached; retain the last dataset on fetch/parse failures."""
+def settled(conn: sqlite3.Connection, season: int) -> bool:
+    """A finished season whose data is all in hand, so a routine refresh can skip it.
+
+    Every regular-season game has a final score and complete touchdown coverage, player
+    stats exist, and every feed has succeeded at least once. Anything short of that --
+    a season still being played, a gap in coverage, a feed that never loaded -- is fetched
+    as before. An upstream correction to a settled season is what `refresh --full` is for.
+    """
+    scheduled, unplayed = conn.execute(
+        "SELECT COUNT(*), SUM(home_score IS NULL OR away_score IS NULL) FROM games "
+        "WHERE season = ? AND game_type = 'REG'",
+        (season,),
+    ).fetchone()
+    if not scheduled or unplayed:
+        return False
+    if not scoring.coverage(conn, season).complete.all():
+        return False
+    if not conn.execute(
+        "SELECT 1 FROM player_weeks WHERE season = ? LIMIT 1", (season,)
+    ).fetchone():
+        return False
+    succeeded = {
+        row["feed"]
+        for row in conn.execute(
+            "SELECT feed FROM feed_status WHERE season = ? AND last_success IS NOT NULL",
+            (season,),
+        )
+    }
+    return set(freshness.FEEDS) <= succeeded
+
+
+def refresh(
+    conn: sqlite3.Connection, season: int, log=print, *, full: bool = False
+) -> RefreshResult:
+    """Try independent feeds uncached; retain the last dataset on fetch/parse failures.
+
+    The prior season supplies the model's starting history. Once it is settled, only the
+    shared schedule download is recorded for it, unless `full` asks for everything: the
+    rest of its feeds are the bulk of a refresh and cannot bring anything a decision uses.
+    """
     result = RefreshResult()
 
     def attempt(s, feed, fetch, transform=None, table=None, stamp=None):
@@ -375,7 +414,12 @@ def refresh(conn: sqlite3.Connection, season: int, log=print) -> RefreshResult:
                 "games",
                 stamp=schedule_stamp,
             )
-        for s in (season - 1, season):
+        seasons = [season - 1, season]
+        if not full and settled(conn, season - 1):
+            seasons.remove(season - 1)
+            result.skipped.append(season - 1)
+            log(f"  {season - 1} settled; not re-downloaded (`pool refresh --full` to re-fetch)")
+        for s in seasons:
             attempt(
                 s,
                 "player_stats",
