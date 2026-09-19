@@ -82,7 +82,8 @@ Nothing needs submitting before Sunday.
 Submit next: RB, FLEX (first deadline Sun 3:25PM). Once submitted, record with:
   uv run pool record --week 5 --rb "Kyren Williams" --flex "Trey McBride" --decision a653…
 Waiting: QB. Run `uv run pool week` again before Thu 7:15PM.
-Rival predictions for week 5 saved; they count until first kickoff, Thu 8:15PM.
+Rival rankings and distribution for week 5 saved; they count until first
+kickoff, Thu 8:15PM.
 Full detail: uv run pool recommend --week 5
 ```
 
@@ -121,9 +122,12 @@ and frees the player; `pool record` over the slot replaces him. Either way the h
 
 **What is saved without asking.** Each `pool week` run with an open slot saves the decision it
 showed — the inputs, the advice and the code that produced it — which is what the pasted
-`--decision` names. Before the week's first kickoff it also saves a prediction of every rival's
-picks, again only when it changed. A prediction counts only if it was saved before that
-kickoff, so a week whose first game is on a Wednesday (weeks 1 and 12) needs a run by then.
+`--decision` names. Before the week's first kickoff and report arrival it also saves rival
+rankings and the model's implied touchdown distribution. These are saved independently when
+their inputs change: a rate outside the top five or a change to simulation settings can
+update the distribution even when the rankings stay the same. A failed save is retried on
+the next eligible run without duplicating the other archive. Nothing is backfilled after
+either cutoff, so a week whose first game is on a Wednesday (weeks 1 and 12) needs a run by then.
 Nothing here needs managing; [`docs/RESEARCH.md`](docs/RESEARCH.md) covers reading it back.
 
 **More detail.** `pool recommend` is the same decision in full: matchups and multipliers, six
@@ -306,8 +310,12 @@ season is settled (every game final with complete touchdown coverage, and every 
 at least once), a refresh records only its schedule and skips its other downloads;
 `pool refresh --full` downloads it again, for upstream stat corrections. `pool refresh` exits nonzero on a
 partial failure, while expected unpublished preseason results are informational; `pool week`
-reports a failure in one line and still advises from the data it has. Advice continues with
-warnings when usable schedule and player history exist. `status`, `recommend`, `week` and `plan`
+reports a failure in one line and still advises from the data it has. Its automatic refresh
+continues at the usual freshness intervals until the current season is settled, including
+complete touchdown coverage, player statistics and a successful load of every feed. Final
+schedule scores alone do not stop retries. `week --refresh` and `week --no-refresh` still
+override the automatic choice. Advice continues with warnings when usable schedule and
+player history exist. `status`, `recommend`, `week` and `plan`
 distinguish missing coverage and model fallbacks from fetch age. Default age
 limits are 1 hour for schedule/lines and 24 hours for stats, rosters, injuries, depth charts,
 and touchdown feeds. Configure these through `POOL_FRESHNESS_SCHEDULE_HOURS`,
@@ -338,9 +346,13 @@ uv run pool export picks --csv picks.csv    # your picks and what each scored, a
 whole, and never overwrites a file (`--to` names another). Git ignores `data/backups/`, as it
 does the database, so copy that folder somewhere off this machine now and then. To restore,
 copy a backup over `data/pool.db` while no `pool` command is running.
+The destination filesystem must support hard links, which publish the verified copy
+without overwriting another file; otherwise the backup fails and removes its temporary copy.
 
 `export picks` writes one row per pick: week, slot, player, team and position, then the
 touchdowns, or why the pick is still pending. Without `--csv` it prints the same thing.
+The CSV destination must be a new file: exporting again requires another filename or
+manually removing the previous CSV. Existing files and symlinks are always refused.
 
 ## Development
 

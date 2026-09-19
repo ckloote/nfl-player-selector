@@ -11,7 +11,7 @@ import time_machine
 from rich.console import Console
 from typer.testing import CliRunner
 
-from pool import db, freshness, ingest, scoring, weekly
+from pool import capture, config, db, freshness, ingest, pit, predictions, scoring, weekly
 from pool.cli import advice as shown
 from pool.cli import app
 from pool.recommend import advise_week
@@ -282,11 +282,40 @@ def test_a_failed_refresh_is_one_line_and_the_advice_still_prints(week_db, monke
     assert "PICK Wednesday Passer" in result.output
 
 
-def test_a_finished_season_is_not_refreshed(week_db):
+def test_final_schedule_scores_alone_do_not_stop_refresh(week_db, refreshes):
     conn = db.connect(week_db)
     with conn:
         conn.execute("UPDATE games SET home_score = 7, away_score = 3")
+    assert not ingest.settled(conn, 2026)
+    assert weekly.needs_refresh(conn, 2026), "never-successful feeds still need loading"
+    with time_machine.travel(at("2026-09-15T12:00"), tick=False):
+        ingest.refresh(conn, 2026)
+        assert not weekly.needs_refresh(conn, 2026), "incomplete feeds still obey freshness limits"
+    with time_machine.travel(at("2026-09-15T13:01"), tick=False):
+        assert weekly.needs_refresh(conn, 2026), "retry delayed results once stale"
+    conn.close()
+
+
+def test_a_fully_settled_season_skips_automatic_refresh(reported, refreshes):
+    conn, path = reported
+    with conn:
+        conn.execute("UPDATE games SET home_score = 0, away_score = 0 WHERE game_id = 'g3'")
+        conn.execute(
+            "INSERT INTO player_weeks(season, week, season_type, player_id, player_name, "
+            "position, team) VALUES (2026, 1, 'REG', 'q1', 'Quarter One', 'QB', 'A')"
+        )
+    scoring.import_touchdowns(
+        conn, 2026, pd.DataFrame([play(), end(), end("g2", 0, 0), end("g3", 0, 0)])
+    )
+    for feed in freshness.FEEDS:
+        freshness.record_status(conn, 2026, feed, "success", "2026-09-15T16:00:00+00:00")
+    assert ingest.settled(conn, 2026)
     assert not weekly.needs_refresh(conn, 2026)
+    # Explicit choices still win even when the automatic decision is settled.
+    for args in ([], ["--no-refresh"], ["--refresh"]):
+        out = runner.invoke(app, ["week", "--db", str(path), *args])
+        assert out.exit_code == 0, out.output
+    assert refreshes == [2026]
     conn.close()
 
 
@@ -447,12 +476,137 @@ def weekly_run(path, when, *args):
         return run_week(path, when, *args)
 
 
+@pytest.fixture
+def prediction_frame():
+    return pd.DataFrame(
+        [
+            proj_row(
+                f"new_q{i}",
+                f"New Quarter {i}",
+                "QB",
+                2,
+                rate,
+                kickoff="2026-09-20T13:00",
+                team="A",
+                opp="B",
+            )
+            | {"game_id": "g3"}
+            for i, rate in enumerate([2.0, 1.8, 1.6, 1.4, 1.2, 0.7])
+        ]
+    )
+
+
+def save_week(conn, proj, when=BEFORE_KICKOFF):
+    with time_machine.travel(at(when), tick=False), config.override(WINPROB_SIMS=100):
+        return weekly.save_predictions(conn, 2026, 2, proj, at(when))[0]
+
+
+def test_a_sixth_ranked_rate_change_updates_only_the_distribution(reported, prediction_frame):
+    conn, path = reported
+    proj = prediction_frame
+    assert save_week(conn, proj) == "saved"
+    earlier = predictions.archived(conn, 2026)[-1]["payload"]
+    proj.loc[proj.player_id.eq("new_q5"), "lam"] = 0.1
+    assert predictions.predict(conn, 2026, 2, proj) == earlier
+    assert save_week(conn, proj, "2026-09-19T12:30") == "saved"
+    assert predicted(path) == ([2], [2, 2])
+    latest = pit.archived(conn, 2026)[-1]
+    stored = capture.load_surface(conn, latest["payload"]["surface_hash"])
+    assert stored.set_index("player_id").loc["new_q5", "lam"] == 0.1
+    assert latest["observed_at"] == "2026-09-19T16:30:00.000000+00:00"
+    assert save_week(conn, proj, "2026-09-19T12:45") == "unchanged"
+    assert predicted(path) == ([2], [2, 2])
+
+
+def test_a_failed_pit_archive_retries_despite_an_older_commitment(
+    reported, prediction_frame, monkeypatch
+):
+    conn, path = reported
+    proj = prediction_frame
+    assert save_week(conn, proj) == "saved"
+    proj.loc[0, "lam"] += 0.2  # changes both archives
+    archive = predictions.archive
+
+    def fail_pit(*args, **kwargs):
+        if kwargs.get("kind") == pit.KIND:
+            raise OSError("injected PIT archive failure")
+        return archive(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(predictions, "archive", fail_pit)
+        with pytest.raises(OSError, match="PIT archive failure"):
+            save_week(conn, proj, "2026-09-19T12:15")
+    assert predicted(path) == ([2, 2], [2])
+    assert save_week(conn, proj, "2026-09-19T12:30") == "saved"
+    assert predicted(path) == ([2, 2], [2, 2]), "successful rankings are not duplicated on retry"
+    assert save_week(conn, proj, "2026-09-19T12:45") == "unchanged"
+
+
+def test_a_failed_ranking_save_retries_without_duplicating_matching_pit(
+    reported, prediction_frame, monkeypatch
+):
+    from tests.support import reports as log
+
+    conn, path = reported
+    assert save_week(conn, prediction_frame) == "saved"
+    log.report(
+        conn, 1, dict(log.WEEK1, Pat=("Quarter Two", "", "Flex Two")), "2026-09-19T16:10:00+00:00"
+    )
+
+    def fail(*args, **kwargs):
+        raise OSError("injected ranking archive failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(predictions, "archive", fail)
+        with pytest.raises(OSError, match="ranking archive failure"):
+            save_week(conn, prediction_frame, "2026-09-19T12:15")
+    assert predicted(path) == ([2], [2])
+    assert save_week(conn, prediction_frame, "2026-09-19T12:30") == "saved"
+    assert predicted(path) == ([2, 2], [2])
+
+
+@pytest.mark.parametrize("cutoff", ["kickoff", "report"])
+def test_a_missing_distribution_is_not_backfilled_after_either_cutoff(
+    reported, prediction_frame, monkeypatch, cutoff
+):
+    from tests.support import reports as log
+
+    conn, path = reported
+
+    def fail(*args, **kwargs):
+        raise OSError("injected commitment failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(pit, "commit", fail)
+        with pytest.raises(OSError, match="commitment failure"):
+            save_week(conn, prediction_frame)
+    assert predicted(path) == ([2], [])
+    when = AFTER_KICKOFF
+    if cutoff == "report":
+        log.report(conn, 2, log.WEEK2, "2026-09-19T16:15:00+00:00")
+        when = "2026-09-19T12:30"
+    assert save_week(conn, prediction_frame, when) == "on record"
+    assert predicted(path) == ([2], [])
+
+
+def test_automatic_archives_use_the_save_time_not_the_decision_time(reported, prediction_frame):
+    conn, _ = reported
+    with time_machine.travel(at("2026-09-19T12:30"), tick=False), config.override(WINPROB_SIMS=100):
+        result = weekly.save_predictions(conn, 2026, 2, prediction_frame, at(BEFORE_KICKOFF))
+    assert result[0] == "saved"
+    for record in [*predictions.archived(conn, 2026), *pit.archived(conn, 2026)]:
+        assert record["observed_at"] == "2026-09-19T16:30:00.000000+00:00"
+
+
 def test_a_prediction_is_saved_before_kickoff_and_not_again_until_it_changes(reported):
     conn, path = reported
     conn.close()
     first = weekly_run(path, BEFORE_KICKOFF)
     assert predicted(path) == ([2], [2])
-    assert "Rival predictions for week 2 saved; they count until first kickoff" in first
+    assert (
+        "Rival rankings and distribution for week 2 saved; they count until first kickoff"
+        in " ".join(first.split())
+    )
     assert "Sun 1:00PM" in first
     again = weekly_run(path, "2026-09-19T12:30")
     assert predicted(path) == ([2], [2]), "the same prediction is not archived twice"
@@ -471,7 +625,7 @@ def test_a_changed_prediction_supersedes_the_earlier_one(reported):
     log.report(conn, 1, corrected, "2026-09-19T16:10:00+00:00")
     conn.close()
     weekly_run(path, "2026-09-19T12:30")
-    assert predicted(path) == ([2, 2], [2, 2])
+    assert predicted(path) == ([2, 2], [2]), "ranking-only changes do not duplicate PIT"
     conn = db.connect(path)
     with time_machine.travel(at(AFTER_KICKOFF), tick=False):
         chosen = predictions.scorable(conn, 2026, 2)
@@ -561,4 +715,4 @@ def test_a_prediction_that_cannot_be_saved_is_one_line_and_the_advice_still_prin
     conn.close()
     output = weekly_run(path, BEFORE_KICKOFF)
     assert "PICK " in output
-    assert "Could not save rival predictions for week 2: ValueError" in output
+    assert "Could not save rival rankings and distribution for week 2: ValueError" in output

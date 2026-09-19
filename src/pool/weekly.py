@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 
 import pandas as pd
 
-from . import config, freshness, pit, predictions, results, state
+from . import config, freshness, ingest, pit, predictions, results, state
 from .recommend import Candidate, SlotAdvice
 
 ALTERNATIVES = 3
@@ -29,16 +29,11 @@ def needs_refresh(conn: sqlite3.Connection, season: int, now: datetime | None = 
     """A feed older than the age `status` warns about, or never fetched.
 
     The same limits, so `pool week` refreshes exactly when the data would otherwise be
-    reported stale. A season whose games all have scores is settled: there is nothing left
-    for a refresh to bring that a decision could use.
+    reported stale. Automatic refresh stops only once the season's scores, touchdown
+    coverage, player stats and successful feeds satisfy `ingest.settled`.
     """
     instant = freshness.utc_now(now)
-    scheduled, unplayed = conn.execute(
-        "SELECT COUNT(*), SUM(home_score IS NULL OR away_score IS NULL) FROM games "
-        "WHERE season = ? AND game_type = 'REG'",
-        (season,),
-    ).fetchone()
-    if scheduled and not unplayed:
+    if ingest.settled(conn, season):
         return False
     fetched = {
         row["feed"]: row["last_success"]
@@ -241,14 +236,14 @@ def previous_advice(
 def save_predictions(
     conn: sqlite3.Connection, season: int, week: int, proj: pd.DataFrame, at: datetime
 ) -> tuple[str, datetime] | None:
-    """Archive this week's rival prediction while it can still count, once per change.
+    """Archive rival rankings and the PIT distribution independently, once per change.
 
     A prediction is scored only if it was archived before the week's first kickoff and
     before its report, so it is worth making on every run until then and worthless after.
     Saving again only when it changed keeps a run that learned nothing from adding a record
     that says nothing; the scorer reads the last one that beat both deadlines, so a changed
-    prediction supersedes the earlier one. The PIT commitment is the same claim about the
-    same week and goes with it.
+    prediction supersedes the earlier one. The PIT commitment compares its full projection
+    surface and sampling settings separately, so either archive can retry a failed save.
 
     Returns what happened -- saved, unchanged, on record, or missed -- with the week's first
     kickoff, or None when there is nothing to say: not the current week, no rivals, no
@@ -271,10 +266,7 @@ def save_predictions(
     same = bool(earlier) and json.dumps(earlier[-1]["payload"], sort_keys=True) == json.dumps(
         payload, sort_keys=True
     )
-    committed = any(r["week"] == week for r in pit.archived(conn, season))
-    if same and committed:
-        return "unchanged", kickoff
     if not same:
         predictions.archive(conn, season, week, payload)
-    pit.commit(conn, season, week, proj)
-    return "saved", kickoff
+    commitment = pit.commit(conn, season, week, proj, skip_unchanged=True)
+    return ("saved" if not same or commitment is not None else "unchanged"), kickoff
