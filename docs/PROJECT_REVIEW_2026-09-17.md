@@ -395,6 +395,10 @@ part of capture identity.
 4. **Add a simple backup/export path.** Picks, entrant aliases, and archived reports are
    more valuable than disposable downloaded feeds. A documented SQLite backup and
    human-readable pick export are sufficient initially.
+   **Status:** done on branch `claude/backup-export`. `pool backup` copies the database with
+   SQLite's online backup to `data/backups/`, checks the copy and never overwrites one;
+   `pool export picks` writes each pick and what it scored as CSV. The README's "Keeping
+   your data" section says when to back up and how to restore.
 5. **Improve probability estimates only through a bounded experiment.** The saved
    simulator report identifies inherited rate bias and imperfect dependence. Keep
    expected-TD advice primary while collecting useful opponent evidence. Do not
