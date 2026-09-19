@@ -1,18 +1,16 @@
-"""Phase 3A: evidence, capture and readiness repairs.
+"""Captured decisions: the whole surface a pick was advised from, written down once,
+re-derivable from that record alone, and linked to the picks that came from it.
 
-Each test states the failure it prevents. The guards here exist because the
-unguarded fit returned plausible numbers for populations that identify nothing,
-and a plausible number survives into a published table.
+Each test states the failure it prevents. The same-week tests come first: a decision made
+mid-week has to read the same inputs live as a replay of that instant reads from the
+archive, or nothing captured about it can be checked.
 """
 
 import contextlib
-import hashlib
 import json
 import sqlite3
 from datetime import datetime
-from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 from typer.testing import CliRunner
@@ -21,255 +19,17 @@ from pool import capture, config, db, snapshots, state
 from pool import projections as P
 from pool.cli import app
 from pool.recommend import advise_week
-from pool.research import benchmark, diagnostics
-from pool.research import evaluate as ev
 from tests.support.decisions import (
     DECISION,
     POST_SUN,
     POST_THU,
     PRE_WEEK3,
+    archived,
     decide,
     publish,
     staged,
 )
-from tests.support.fits import reference_mle, reference_model_se
-from tests.support.season import PRIOR, SEASON, WEEKS, archive_all, seed_season
-
-STUDY = Path("data/experiments/roster-snapshot-repair")
-
-
-# --- trusted reference ------------------------------------------------------
-def test_an_identifiable_fit_matches_an_independent_maximum_likelihood_estimate():
-    rng = np.random.default_rng(11)
-    x = rng.normal(-1.0, 0.8, 20000)
-    y = rng.poisson(np.exp(0.2 + 0.75 * x))
-    fit = ev.poisson_glm(y, x, np.arange(len(y)))
-    beta = reference_mle(y, x)
-    assert fit["fit_status"] == ev.FIT_OK and fit["converged"]
-    assert fit["intercept"] == pytest.approx(beta[0], abs=1e-6)
-    assert fit["slope"] == pytest.approx(beta[1], abs=1e-6)
-    # With one row per cluster the sandwich is a robust SE; on a correctly specified
-    # Poisson it should sit close to the model-based SE, not an order of magnitude off.
-    se = reference_model_se(y, x, beta)
-    assert fit["se_intercept"] == pytest.approx(se[0], rel=0.10)
-    assert fit["se_slope"] == pytest.approx(se[1], rel=0.10)
-
-
-def test_the_guards_do_not_move_a_supported_fit():
-    """The repair must add refusals, not new numbers. This is the unguarded
-    implementation inlined, so a future change to the fit itself is visible."""
-    rng = np.random.default_rng(12)
-    x = rng.normal(-1.0, 0.8, 5000)
-    y = rng.poisson(np.exp(0.1 + 0.9 * x))
-    cluster = np.repeat(np.arange(100), 50)
-
-    design = np.column_stack([np.ones_like(x), x])
-    beta = np.zeros(2)
-    for _ in range(50):
-        mu = np.exp(np.clip(design @ beta, -30, 30))
-        step = np.linalg.pinv(design.T @ (design * mu[:, None])) @ (design.T @ (y - mu))
-        beta = beta + step
-        if np.max(np.abs(step)) < 1e-10:
-            break
-
-    fit = ev.poisson_glm(y, x, cluster)
-    assert fit["intercept"] == pytest.approx(float(beta[0]), abs=1e-12)
-    assert fit["slope"] == pytest.approx(float(beta[1]), abs=1e-12)
-
-
-@pytest.mark.skipif(not STUDY.exists(), reason="saved study artifacts are not checked in")
-def test_a_published_calibration_row_reproduces_under_the_guards():
-    saved = pd.read_csv("experiments/results/roster-snapshot-repair/calibration.csv")
-    row = saved[saved.model.eq("shipped") & saved.season.eq(2019) & saved.seed.eq(-1)].iloc[0]
-    df = pd.read_parquet(STUDY / "2019" / "forecasts.parquet")
-    fit = ev.calibration(df[df.model.eq("shipped") & df.seed.eq(-1)])
-    assert fit["fit_status"] == ev.FIT_OK and fit["cluster_se"]
-    for key in ("intercept", "slope", "se_intercept", "se_slope"):
-        assert fit[key] == pytest.approx(float(row[key]), abs=5e-7)
-    for key in ("n", "clusters", "dropped_zero_lam"):
-        assert int(fit[key]) == int(row[key])
-
-
-# --- unsupported fits -------------------------------------------------------
-def _varied(n, seed=0):
-    rng = np.random.default_rng(seed)
-    x = rng.normal(-1.0, 0.8, n)
-    return rng.poisson(np.exp(0.2 + 0.75 * x)), x
-
-
-@pytest.mark.parametrize(
-    ("case", "reason"),
-    [
-        ("empty", "empty input"),
-        ("one_row", "n <= 2 for a two-parameter fit"),
-        ("two_rows", "n <= 2 for a two-parameter fit"),
-        ("constant_x", "design rank 1 (constant log rate)"),
-        ("all_zero_y", "all-zero outcomes"),
-        ("negative_y", "negative outcomes"),
-        ("nan_x", "non-finite inputs"),
-        ("neg_inf_x", "non-finite inputs"),
-        ("nan_y", "non-finite inputs"),
-    ],
-)
-def test_a_population_that_identifies_nothing_yields_a_reason_not_a_coefficient(case, reason):
-    """Each of these used to return a finite slope and a finite interval."""
-    y, x = _varied(200, seed=3)
-    if case == "empty":
-        y, x = np.array([]), np.array([])
-    elif case == "one_row":
-        y, x = y[:1], x[:1]
-    elif case == "two_rows":
-        y, x = y[:2], x[:2]
-    elif case == "constant_x":
-        x = np.full(len(y), 0.3)
-    elif case == "all_zero_y":
-        y = np.zeros(len(y))
-    elif case == "negative_y":
-        y = y.astype(float)
-        y[0] = -1.0
-    elif case == "nan_x":
-        x = x.copy()
-        x[5] = np.nan
-    elif case == "neg_inf_x":
-        x = x.copy()
-        x[5] = -np.inf  # what log(0) would supply for an eligible zero rate
-    elif case == "nan_y":
-        y = y.astype(float)
-        y[5] = np.nan
-
-    fit = ev.poisson_glm(y, x, np.arange(len(y)))
-    assert fit["fit_status"] == ev.FIT_UNSUPPORTED
-    assert fit["reason"] == reason
-    assert not fit["converged"] and not fit["cluster_se"]
-    for key in ("intercept", "slope", "se_intercept", "se_slope", "slope_lo", "slope_hi"):
-        assert np.isnan(fit[key]), key
-    assert set(ev.FIT_KEYS) <= set(fit)
-
-
-def test_separation_is_refused_rather_than_certified():
-    """Every outcome zero on one side of a threshold and positive on the other: the
-    likelihood climbs without bound and the estimate does not exist. IRLS still came to
-    rest -- against the clip that keeps `exp` from overflowing -- and reported slope
-    300 with `converged=True` and an interval of no width."""
-    y, x = np.tile([0.0, 1.0], 100), np.tile([-0.1, 0.0], 100)
-    fit = ev.poisson_glm(y, x, np.arange(len(y)))
-    assert fit["fit_status"] == ev.FIT_UNSUPPORTED
-    assert fit["reason"] == "no finite maximum-likelihood estimate (separation)"
-    assert np.isnan(fit["slope"]) and np.isnan(fit["se_slope"])
-    assert not fit["cluster_se"]
-
-
-def test_a_separated_population_is_refused_however_it_fails():
-    """A wider gap between the two levels diverges instead of settling on the clip, so
-    it is the iteration guard that catches it rather than the separation check. Either
-    way it must not come back as an estimate; the control proves the guards are
-    refusing separation and not merely any two-level design."""
-    rng = np.random.default_rng(21)
-    x = np.repeat([0.0, 2.0], 500)
-    separated = np.concatenate([np.zeros(500), rng.poisson(4.0, 500) + 1.0])
-    fit = ev.poisson_glm(separated, x, np.arange(len(x)))
-    assert fit["fit_status"] == ev.FIT_UNSUPPORTED
-    assert np.isnan(fit["slope"])
-
-    both_score = np.concatenate([rng.poisson(0.3, 500), rng.poisson(4.0, 500)])
-    control = ev.poisson_glm(both_score, x, np.arange(len(x)))
-    assert control["fit_status"] == ev.FIT_OK
-    assert np.isfinite(control["slope"])
-
-
-@pytest.mark.skipif(not STUDY.exists(), reason="saved study artifacts are not checked in")
-def test_an_interior_fit_is_nowhere_near_the_refusal_bounds():
-    """The guards must refuse a non-existent estimate without touching a real one. The
-    published season rests four log units from the clip and thirteen orders of
-    magnitude from the conditioning bound."""
-    df = pd.read_parquet(STUDY / "2019" / "forecasts.parquet")
-    sub = df[df.model.eq("shipped") & df.seed.eq(-1) & df.hard_eligible & df.lam.gt(0)]
-    x = np.log(sub.lam.to_numpy(dtype=float))
-    fit = ev.poisson_glm(
-        sub.actual_tds.to_numpy(dtype=float),
-        x,
-        (sub.player_id + "|" + sub.season.astype(str)).to_numpy(),
-    )
-    assert fit["fit_status"] == ev.FIT_OK
-    design = np.column_stack([np.ones_like(x), x])
-    eta = design @ np.array([fit["intercept"], fit["slope"]])
-    mu = np.exp(eta)
-    assert np.max(np.abs(eta)) < ev.LINEAR_PREDICTOR_BOUND / 3
-    condition = np.linalg.cond(design.T @ (design * mu[:, None]))
-    assert condition < ev.MAX_INFORMATION_CONDITION / 1e6
-
-
-def test_exhausted_iterations_are_a_refusal_not_a_partial_answer():
-    """A fit stopped mid-Newton is not an estimate; the old loop returned it silently."""
-    y, x = _varied(2000, seed=4)
-    fit = ev.poisson_glm(y, x, np.arange(len(y)), max_iter=1)
-    assert fit["fit_status"] == ev.FIT_UNSUPPORTED
-    assert fit["reason"] == "iterations exhausted before convergence"
-    assert fit["iterations"] == 1
-    assert np.isnan(fit["slope"])
-
-
-def test_a_converged_fit_reports_how_many_iterations_it_took():
-    y, x = _varied(2000, seed=5)
-    fit = ev.poisson_glm(y, x, np.arange(len(y)))
-    assert fit["converged"] and 0 < fit["iterations"] < 50
-
-
-# --- cluster-robust inference ----------------------------------------------
-@pytest.mark.parametrize("n_groups", [1, 2, config.MIN_INFERENCE_CLUSTERS - 1])
-def test_too_few_clusters_keeps_the_estimate_and_withholds_the_interval(n_groups):
-    """One cluster scores the sandwich at the MLE, where the gradient is zero, so the
-    interval had no width at all. Point estimates stay: they are still identified."""
-    y, x = _varied(600, seed=6)
-    fit = ev.poisson_glm(y, x, np.arange(len(y)) % n_groups)
-    assert fit["fit_status"] == ev.FIT_OK and fit["converged"]
-    assert fit["clusters"] == n_groups
-    assert not fit["cluster_se"]
-    assert str(n_groups) in fit["reason"] and str(config.MIN_INFERENCE_CLUSTERS) in fit["reason"]
-    assert np.isfinite(fit["intercept"]) and np.isfinite(fit["slope"])
-    for key in ("se_intercept", "se_slope", "slope_lo", "slope_hi"):
-        assert np.isnan(fit[key]), key
-
-
-def test_the_minimum_cluster_count_is_predeclared_and_met_by_the_saved_study():
-    """A threshold chosen after seeing a stratum's fit is not a threshold. It lives in
-    config, is recorded in every run's constants, and passes every published season."""
-    assert config.MIN_INFERENCE_CLUSTERS == 30
-    saved = pd.read_csv("experiments/results/roster-snapshot-repair/calibration.csv")
-    assert saved.clusters.min() >= config.MIN_INFERENCE_CLUSTERS
-
-
-def test_mismatched_input_lengths_are_a_caller_bug_not_a_data_state():
-    with pytest.raises(ValueError, match="equal length"):
-        ev.poisson_glm(np.zeros(5), np.zeros(4), np.zeros(5))
-
-
-# --- zero-rate accounting ---------------------------------------------------
-def test_eligible_zero_rates_are_counted_including_the_ones_that_scored():
-    """A zero forecast whose player scored is the most informative row the GLM cannot
-    take. Dropping it silently would hide exactly the population the fit misses."""
-    df = pd.DataFrame(
-        {
-            "hard_eligible": True,
-            "season": 2024,
-            "player_id": [f"p{i}" for i in range(8)],
-            "lam": [0.0, 0.0, 0.0, 0.4, 0.5, 0.6, 0.7, 0.8],
-            "actual_tds": [1.0, 0.0, 2.0, 0.0, 1.0, 0.0, 1.0, 0.0],
-        }
-    )
-    fit = ev.calibration(df)
-    assert fit["zero_lam_n"] == 3
-    assert fit["zero_lam_positive_outcome_n"] == 2
-    assert fit["dropped_zero_lam"] == 3
-    assert fit["n"] == 5
-
-
-def test_a_population_with_no_positive_rates_reports_its_exclusions():
-    fit = ev.calibration(pd.DataFrame(dict(hard_eligible=[True] * 3, lam=[0.0] * 3)))
-    assert fit["fit_status"] == ev.FIT_UNSUPPORTED
-    assert fit["reason"] == "no positive-rate rows"
-    assert fit["n"] == 0 and fit["zero_lam_n"] == 3
-    assert set(ev.FIT_KEYS) <= set(fit)
+from tests.support.season import SEASON, archive_all, seed_season
 
 
 # --- one same-week stats contract -------------------------------------------
@@ -387,152 +147,6 @@ def test_historical_replay_still_stops_at_the_previous_week(tmp_path):
     assert P._stats_through("legacy-closing", 3) == 2
     assert P._stats_through("snapshots", 3) == 3
     assert P._stats_through("live", None) is None
-
-
-# --- frozen decision-time inputs --------------------------------------------
-def _times_csv(path, weeks=WEEKS, stamp="2024-09-01T00:00:00Z"):
-    path.write_text("season,week,decision_at\n" + "".join(f"{SEASON},{w},{stamp}\n" for w in weeks))
-    return path
-
-
-def _snapshot_spec(csv_path, **overrides):
-    spec = benchmark.resolve(Path("experiments/phase2-validation.toml"))
-    spec.update(
-        seasons=[SEASON],
-        history_start=PRIOR,
-        models=["shipped", "random"],
-        baseline="shipped",
-        seeds=[0, 1],
-        random_trials=2,
-        workers=1,
-        eras={"test retrospective": [SEASON, SEASON]},
-        expected_games={str(PRIOR): 8, str(SEASON): 8},
-        input_policy="snapshots",
-        role_source="depth",
-        decision_times=str(csv_path),
-    )
-    spec.update(overrides)
-    spec["resolved_decision_times"] = benchmark.decision_time_records(spec)
-    return spec
-
-
-def _research_db(tmp_path, name):
-    conn = seed_season(db.connect(tmp_path / f"{name}-source.db"))
-    archive_all(conn, "2024-09-01T00:00:00Z")
-    out = tmp_path / name
-    out.mkdir()
-    destination = sqlite3.connect(out / "research.db")
-    conn.backup(destination)
-    destination.close()
-    return out
-
-
-def test_editing_the_decision_csv_in_place_changes_the_run_identity(tmp_path):
-    """The identity covered the path, so the same path with different timestamps was
-    the same run. The contents are the input; the path is where it happened to live."""
-    csv = _times_csv(tmp_path / "times.csv")
-    before = _snapshot_spec(csv)
-    _times_csv(csv, stamp="2024-09-02T00:00:00Z")
-    after = _snapshot_spec(csv)
-
-    assert before["decision_times"] == after["decision_times"]
-    assert before["resolved_decision_times"] != after["resolved_decision_times"]
-    digest = lambda spec: hashlib.sha256(benchmark.json_text(spec).encode()).hexdigest()  # noqa: E731
-    assert digest(before) != digest(after)
-
-
-@pytest.mark.parametrize(
-    ("contents", "match"),
-    [
-        ("season,week,decision_at\n2024,1,2024-09-01T00:00:00\n", "timezone"),
-        (
-            "season,week,decision_at\n2024,1,2024-09-01T00:00:00Z\n2024,1,2024-09-02T00:00:00Z\n",
-            "Duplicate",
-        ),
-        ("season,week\n2024,1\n", "decision_at"),
-    ],
-)
-def test_an_unusable_decision_csv_fails_while_resolving_the_configuration(
-    tmp_path, contents, match
-):
-    """These already failed -- inside a worker, after the manifest was written."""
-    csv = tmp_path / "times.csv"
-    csv.write_text(contents)
-    with pytest.raises(ValueError, match=match):
-        _snapshot_spec(csv)
-
-
-def test_a_missing_week_fails_before_any_worker_starts(tmp_path, monkeypatch):
-    """A fifteen-season run should not discover a gap in season eleven."""
-    spec = _snapshot_spec(_times_csv(tmp_path / "times.csv", weeks=[1, 2]))
-    monkeypatch.setattr(benchmark, "resolve", lambda path: spec)
-    monkeypatch.setattr(
-        benchmark, "code_identity", lambda: dict(code_hash="t", revision="t", dirty=False)
-    )
-    monkeypatch.setattr(
-        benchmark, "evaluate_season", lambda *a: pytest.fail("started a worker anyway")
-    )
-    out = _research_db(tmp_path, "gap")
-    with pytest.raises(ValueError, match="missing timestamps"):
-        benchmark.run("unused", out, log=lambda x: None)
-    assert not (out / "manifest.json").exists()
-
-
-@pytest.mark.parametrize(
-    ("policy", "path", "match"),
-    [
-        ("snapshots", None, "requires decision_times"),
-        ("historical", "times.csv", "requires input_policy"),
-    ],
-)
-def test_a_snapshot_policy_and_a_decision_csv_require_each_other(tmp_path, policy, path, match):
-    _times_csv(tmp_path / "times.csv")
-    spec = benchmark.resolve(Path("experiments/phase2-validation.toml"))
-    spec["input_policy"] = policy
-    spec["decision_times"] = None if path is None else str(tmp_path / path)
-    with pytest.raises(ValueError, match=match):
-        benchmark.decision_time_records(spec)
-
-
-def test_workers_read_the_frozen_timestamps_not_the_path(tmp_path, monkeypatch):
-    """Each worker is a spawned process with its own working directory, and re-read the
-    path there. The frozen records travel in the pickled specification instead."""
-    spec = _snapshot_spec(_times_csv(tmp_path / "times.csv"))
-    monkeypatch.setattr(benchmark, "resolve", lambda path: spec)
-    monkeypatch.setattr(
-        benchmark, "code_identity", lambda: dict(code_hash="t", revision="t", dirty=False)
-    )
-    monkeypatch.setattr(
-        snapshots, "decision_times", lambda path: pytest.fail("re-read the mutable path")
-    )
-    compact = benchmark.run("unused", _research_db(tmp_path, "frozen"), log=lambda x: None)
-    assert (compact.parent / "decision-times.csv").exists()
-    assert (compact / "EVALUATION.md").exists()
-
-
-def test_resume_rejects_an_edited_decision_csv_at_the_same_path(tmp_path, monkeypatch):
-    """The whole point: a run continued after its inputs changed under it."""
-    csv = _times_csv(tmp_path / "times.csv")
-    spec = _snapshot_spec(csv)
-    monkeypatch.setattr(benchmark, "resolve", lambda path: spec)
-    monkeypatch.setattr(
-        benchmark, "code_identity", lambda: dict(code_hash="t", revision="t", dirty=False)
-    )
-    out = _research_db(tmp_path, "resume")
-    benchmark.run("unused", out, log=lambda x: None)
-
-    unchanged = _snapshot_spec(csv)
-    monkeypatch.setattr(benchmark, "resolve", lambda path: unchanged)
-    monkeypatch.setattr(
-        benchmark, "evaluate_season", lambda *a: pytest.fail("recomputed a saved season")
-    )
-    benchmark.run("unused", out, resume=True, log=lambda x: None)
-
-    _times_csv(csv, stamp="2024-09-02T00:00:00Z")
-    edited = _snapshot_spec(csv)
-    monkeypatch.setattr(benchmark, "resolve", lambda path: edited)
-    with pytest.raises(ValueError, match="fingerprint"):
-        benchmark.run("unused", out, resume=True, log=lambda x: None)
 
 
 # --- append-only decision capture -------------------------------------------
@@ -884,110 +498,6 @@ def test_reconstruction_refuses_a_source_tree_it_was_not_captured_under(tmp_path
         capture._code_identity.cache_clear()
 
 
-# The closure is computed, so this test is what makes widening it a decision rather than
-# an accident: an import added to the decision path fails here and has to be looked at.
-DECISION_SOURCES = [
-    "src/pool/__init__.py",
-    "src/pool/config.py",
-    "src/pool/db.py",
-    "src/pool/freshness.py",
-    "src/pool/optimizer.py",
-    "src/pool/projections.py",
-    "src/pool/recommend.py",
-    "src/pool/rivals.py",
-    "src/pool/scoring.py",
-    "src/pool/simulate.py",
-    "src/pool/snapshots.py",
-    "src/pool/state.py",
-    "uv.lock",
-]
-
-
-def test_the_enforced_fingerprint_covers_the_decision_path_and_only_that():
-    """What a decision is a function of, pinned. A module that slipped out of this list
-    would leave the fingerprint matching while the recommender moved underneath it, and
-    one that slipped in would make an unrelated feature invalidate real captures."""
-    assert benchmark.decision_modules() == DECISION_SOURCES
-    identity = benchmark.code_identity()
-    assert identity["decision_sources"] == DECISION_SOURCES
-    assert identity["decision_hash"] != identity["code_hash"]
-    # The readers, the CLI and the research harness describe decisions; they do not make
-    # them, and the record keeps their hashes without enforcing them.
-    outside = {
-        "standings",
-        "predictions",
-        "cli",
-        "ingest",
-        "entrants",
-        "diagnostics",
-        "verify",
-        "capture",
-        "benchmark",
-    }
-    assert not outside & {Path(p).stem for p in DECISION_SOURCES}
-    assert set(identity["source_hashes"]) > set(DECISION_SOURCES) - {"uv.lock"}
-
-
-def _nested_tree(tmp_path, recommend_import, strategy_init):
-    """A synthetic package whose decision path reaches into a subpackage.
-
-    `src/pool` is flat today, so the real tree cannot exercise nested resolution at all --
-    and the day someone moves decision logic into a subpackage is the day a closure that
-    resolves it wrongly starts fingerprinting less than it claims to.
-    """
-    pool = tmp_path / "src" / "pool"
-    (pool / "strategy").mkdir(parents=True)
-    for name, body in (
-        ("__init__.py", ""),
-        ("recommend.py", recommend_import),
-        ("projections.py", "from . import config\n"),
-        ("snapshots.py", "from . import db\n"),
-        ("config.py", ""),
-        ("db.py", ""),
-    ):
-        (pool / name).write_text(body)
-    (pool / "strategy" / "__init__.py").write_text(strategy_init)
-    (pool / "strategy" / "model.py").write_text("def blend():\n    return 1\n")
-    (pool / "strategy" / "weights.py").write_text("DEPTH = 0.15\n")
-    return benchmark.decision_modules(root=tmp_path)
-
-
-def test_a_subpackage_initializer_is_part_of_the_decision(tmp_path):
-    """`from .strategy.model import blend` runs `strategy/__init__.py` on the way in.
-    Fingerprinting the leaf alone leaves that file able to change the decision without
-    changing the hash that is supposed to certify it."""
-    found = _nested_tree(
-        tmp_path,
-        recommend_import="from .strategy.model import blend\n",
-        strategy_init="",
-    )
-    assert "src/pool/strategy/model.py" in found
-    assert "src/pool/strategy/__init__.py" in found
-
-
-def test_an_initializer_resolves_its_own_relative_imports(tmp_path):
-    """Inside `strategy/__init__.py`, `from . import weights` means `strategy.weights`.
-    Resolving it the way a plain module's relative import resolves points at the package
-    root, finds nothing, and silently drops executable code from the closure."""
-    found = _nested_tree(
-        tmp_path,
-        recommend_import="from . import strategy\n",
-        strategy_init="from . import weights\n",
-    )
-    assert "src/pool/strategy/__init__.py" in found
-    assert "src/pool/strategy/weights.py" in found
-
-
-def test_a_subpackage_the_decision_path_never_reaches_stays_out(tmp_path):
-    """The closure is only worth narrowing if it still excludes what it should."""
-    found = _nested_tree(
-        tmp_path,
-        recommend_import="from . import config\n",
-        strategy_init="from . import weights\n",
-    )
-    assert not [p for p in found if "strategy" in p]
-
-
 def test_a_module_the_decision_does_not_depend_on_does_not_refuse_it(tmp_path):
     """The fingerprint the checks enforce covers what a decision is a function of. A
     leaderboard or an ingestion command changes the tree and changes nothing the
@@ -1141,449 +651,63 @@ def test_the_cli_captures_a_recommendation_and_can_be_asked_not_to(tmp_path):
     assert len(capture.events(conn, SEASON, 1)) == 4
 
 
-# --- descriptive diagnostics ------------------------------------------------
-def _diagnosable_run(tmp_path, monkeypatch):
-    spec = benchmark.resolve(Path("experiments/phase2-validation.toml"))
-    spec.update(
-        seasons=[SEASON],
-        history_start=PRIOR,
-        models=["shipped", "random"],
-        baseline="shipped",
-        seeds=[0],
-        random_trials=1,
-        workers=1,
-        eras={"test retrospective": [SEASON, SEASON]},
-        expected_games={str(PRIOR): 8, str(SEASON): 8},
+def test_a_submission_links_to_the_decision_it_names_not_the_latest(tmp_path):
+    """With a Thursday and a Sunday decision in one week, "the most recent advice for
+    this slot" is whichever happened last, which is not the same thing as the one the
+    pick came from."""
+    conn, _ = archived(tmp_path)
+    early, proj, _ = decide(conn, 3, datetime.fromisoformat(PRE_WEEK3))
+    late, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
+    player = proj[proj.week.eq(3) & proj.slot.eq("QB")].player_id.iloc[0]
+    capture.record_action(
+        conn, SEASON, 3, "QB", "submitted", player, {"player_name": "x"}, decision_id=early
     )
-    monkeypatch.setattr(benchmark, "resolve", lambda path: spec)
-    monkeypatch.setattr(
-        benchmark, "code_identity", lambda: dict(code_hash="t", revision="t", dirty=False)
+    events = capture.events(conn, SEASON)
+    detail = json.loads(events[events.kind.eq("submitted")].detail.iloc[0])
+    assert detail["linked_decision"] == early and detail["link_source"] == "named"
+    assert early != late
+
+
+def test_a_named_decision_that_does_not_exist_is_refused(tmp_path):
+    """Minting a fresh id for a typo would write an event that reconstructs against
+    nothing, and it would look exactly like a pick submitted without advice."""
+    conn, _ = archived(tmp_path)
+    decide(conn, 3, datetime.fromisoformat(DECISION))
+    with pytest.raises(ValueError, match="No captured decision"):
+        capture.record_action(
+            conn, SEASON, 3, "QB", "submitted", "AAA-QB1", {}, decision_id="not-an-id"
+        )
+
+
+def test_an_unnamed_submission_still_records_how_it_was_linked(tmp_path):
+    """The fallback is allowed -- a pick can be entered without running `recommend` --
+    but a later reader must not have to guess which of the two links this was."""
+    conn, _ = archived(tmp_path)
+    decide(conn, 3, datetime.fromisoformat(DECISION))
+    capture.record_action(conn, SEASON, 3, "QB", "submitted", "AAA-QB1", {})
+    events = capture.events(conn, SEASON)
+    detail = json.loads(events[events.kind.eq("submitted")].detail.iloc[0])
+    assert detail["link_source"] == "latest advice"
+
+
+def test_a_named_link_and_the_fallback_stay_distinguishable(tmp_path):
+    """A deliberate `--decision` link and the most-recent-advice fallback are different
+    claims about which decision a pick came from, and with two decisions in a week the
+    fallback is whichever happened last."""
+    conn, _ = archived(tmp_path)
+    early, proj, _ = decide(conn, 3, datetime.fromisoformat(PRE_WEEK3))
+    late, later, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
+    named = proj[proj.week.eq(3) & proj.slot.eq("QB")].player_id.iloc[0]
+    inferred = later[later.week.eq(3) & later.slot.eq("RB")].player_id.iloc[0]
+    capture.record_action(
+        conn, SEASON, 3, "QB", "submitted", named, {"player_name": "x"}, decision_id=early
     )
-    conn = seed_season(db.connect(tmp_path / "diag-source.db"))
-    out = tmp_path / "run"
-    out.mkdir()
-    destination = sqlite3.connect(out / "research.db")
-    conn.backup(destination)
-    destination.close()
-    benchmark.run("unused", out, log=lambda x: None)
-    return out
+    capture.record_action(conn, SEASON, 3, "RB", "submitted", inferred, {"player_name": "y"})
 
-
-def test_group_definitions_do_not_depend_on_any_outcome(tmp_path, monkeypatch):
-    """A stratum chosen after seeing which rows scored is not a diagnosis. Perturbing
-    every outcome must leave the groups, and their sizes, exactly where they were."""
-    run = _diagnosable_run(tmp_path, monkeypatch)
-    rows = diagnostics.load_run(run)
-    perturbed = rows.assign(actual_tds=rows.actual_tds * 7 + 3)
-
-    before = {name: mask.to_numpy() for name, mask in diagnostics.population_masks(rows).items()}
-    after = diagnostics.population_masks(perturbed)
-    assert sorted(before) == sorted(diagnostics.POPULATIONS)
-    for name, mask in before.items():
-        assert (mask == after[name].to_numpy()).all(), name
-
-    keys = ["population", "axis", "level", "horizon"]
-    a, _ = diagnostics.strata(rows)
-    b, _ = diagnostics.strata(perturbed)
-    pd.testing.assert_frame_equal(a[[*keys, "n", "players"]], b[[*keys, "n", "players"]])
-
-
-def _synthetic_rows():
-    """A surface with the cases the shipped study happens not to contain.
-
-    The saved study has no eligible zero rate at all and no tight end in the four-team
-    fixture, so the groups that matter most to a calibration diagnosis would go
-    untested against real data alone.
-    """
-    base = dict(
-        season=2024,
-        decision_week=1,
-        game_id="g",
-        baseline_spent=False,
-        rank_available=1.0,
-        picked_greedy=False,
-        picked_optimizer=False,
-        played=True,
-    )
-    rows = [
-        # A tight end and a wide receiver in the same FLEX slot, same week.
-        {
-            **base,
-            "week": 1,
-            "player_id": "te",
-            "slot": "FLEX",
-            "position": "TE",
-            "lam": 0.4,
-            "avail_mult": 1.0,
-            "hard_eligible": True,
-            "actual_tds": 1.0,
-        },
-        {
-            **base,
-            "week": 1,
-            "player_id": "wr",
-            "slot": "FLEX",
-            "position": "WR",
-            "lam": 0.5,
-            "avail_mult": 1.0,
-            "hard_eligible": True,
-            "actual_tds": 0.0,
-        },
-        # An eligible zero rate that scored anyway: selectable, forecast at zero.
-        {
-            **base,
-            "week": 1,
-            "player_id": "zero",
-            "slot": "RB",
-            "position": "RB",
-            "lam": 0.0,
-            "avail_mult": 1.0,
-            "hard_eligible": True,
-            "actual_tds": 1.0,
-        },
-        # A ruled-out player who played: a report error, not a calibration error.
-        {
-            **base,
-            "week": 1,
-            "player_id": "out",
-            "slot": "QB",
-            "position": "QB",
-            "lam": 0.0,
-            "avail_mult": 0.0,
-            "hard_eligible": False,
-            "actual_tds": 2.0,
-        },
-        # Excluded because his deadline has passed, not because anything was wrong with
-        # the forecast: available, positive rate, and unpickable all the same.
-        {
-            **base,
-            "week": 1,
-            "player_id": "late",
-            "slot": "QB",
-            "position": "QB",
-            "lam": 0.6,
-            "avail_mult": 1.0,
-            "hard_eligible": False,
-            "actual_tds": 1.0,
-        },
-        # Questionable, and a future row with no target to score against.
-        {
-            **base,
-            "week": 1,
-            "player_id": "q",
-            "slot": "RB",
-            "position": "RB",
-            "lam": 0.3,
-            "avail_mult": 0.85,
-            "hard_eligible": True,
-            "actual_tds": 0.0,
-        },
-        {
-            **base,
-            "week": 4,
-            "player_id": "gone",
-            "slot": "WR",
-            "position": None,
-            "lam": 0.2,
-            "avail_mult": 1.0,
-            "hard_eligible": True,
-            "actual_tds": None,
-        },
-    ]
-    return diagnostics.prepare(pd.DataFrame(rows))
-
-
-def test_wide_receivers_and_tight_ends_are_never_merged(tmp_path, monkeypatch):
-    """They share the FLEX slot, so a map fitted on them together can reorder them
-    against each other -- which is the one way a shared map changes a pick."""
-    assert "WR" in diagnostics.POSITIONS and "TE" in diagnostics.POSITIONS
-    described, _ = diagnostics.strata(_synthetic_rows())
-    positions = set(described[described.axis.eq("position")].level)
-    assert {"WR", "TE"} <= positions
-    assert not {"FLEX", "WR/TE"} & positions
-    per_position = described[
-        described.axis.eq("position") & described.population.eq("all_eligible")
-    ].set_index("level")
-    assert per_position.loc["WR", "n"] == 1 and per_position.loc["TE", "n"] == 1
-
-    run = _diagnosable_run(tmp_path, monkeypatch)
-    real, _ = diagnostics.strata(diagnostics.load_run(run))
-    assert set(real[real.axis.eq("position")].level) <= set(diagnostics.POSITIONS)
-
-
-def test_no_fit_pools_two_forecast_horizons(tmp_path, monkeypatch):
-    """A week-6 and a week-1 forecast of the same player-week are one outcome seen
-    twice. Every fit is inside one horizon bucket, and the far ones cluster on the
-    target they share rather than on the row."""
-    run = _diagnosable_run(tmp_path, monkeypatch)
-    rows = diagnostics.load_run(run)
-    _, fitted = diagnostics.strata(rows)
-    labels = {label for _, _, label in diagnostics.HORIZON_BUCKETS}
-    assert set(fitted.horizon) <= labels
-    assert fitted.horizon.notna().all()
-
-    current = rows[rows.lead_horizon.eq(0)]
-    future = rows[rows.lead_horizon.gt(0)]
-    assert (
-        len(set(diagnostics.cluster_key(current)))
-        == current.groupby(["player_id", "season"]).ngroups
-    )
-    assert (
-        len(set(diagnostics.cluster_key(future)))
-        == future.groupby(["player_id", "season", "week"]).ngroups
-    )
-    # The repetition is real: a target week is forecast from several decision weeks.
-    assert len(future) > future.groupby(["player_id", "season", "week"]).ngroups
-
-
-def test_a_stratum_too_small_to_fit_exports_its_reason(tmp_path, monkeypatch):
-    """The export must say which cells it could not fit and why, rather than leaving a
-    blank that reads as a missing measurement."""
-    run = _diagnosable_run(tmp_path, monkeypatch)
-    _, fitted = diagnostics.strata(diagnostics.load_run(run))
-    unsupported = fitted[fitted.fit_status.eq(ev.FIT_UNSUPPORTED)]
-    assert len(unsupported)
-    assert unsupported.reason.notna().all()
-    assert unsupported.slope.isna().all()
-    assert set(diagnostics.AXES) == set(fitted.axis)
-
-
-def test_zero_rates_are_split_by_what_the_zero_means():
-    """Three different things used to share one number. An eligible zero rate is a
-    forecast the fit cannot take, and one that scores is exactly the row it fails on.
-    A ruled-out player masked to zero who plays anyway is a report error. A player
-    excluded because his deadline passed keeps a perfectly good positive forecast --
-    calling his touchdowns a report error, as the note did, describes neither."""
-    rows = _synthetic_rows()
-    table = diagnostics.zero_accounting(rows)
-    assert set(table.zero_class) == {
-        "eligible_zero_rate",
-        "exclusion: ruled out",
-        "exclusion: deadline or kickoff",
-    }
-    # What a stratum contributes to no fit is a different count in the two cases. An
-    # eligible stratum loses its zero rates; an excluded one loses all of itself, rate
-    # or no rate. This assertion used to be `excluded_from_fit == zero_lam_n` for every
-    # row, which is the defect written down: a positive-rate exclusion then reported 0.
-    excluded = table.zero_class.str.startswith("exclusion")
-    assert (table.excluded_from_fit[excluded] == table.n[excluded]).all()
-    assert (table.excluded_from_fit[~excluded] == table.zero_lam_n[~excluded]).all()
-
-    eligible = table[table.population.eq("all_eligible")].set_index(["position", "horizon"])
-    assert eligible.loc[("RB", "0"), "zero_lam_n"] == 1
-    assert eligible.loc[("RB", "0"), "zero_lam_positive_outcome_n"] == 1
-    assert eligible.loc[("RB", "0"), "zero_lam_outcome_tds"] == 1.0
-
-    ruled_out = table[table.population.eq("excluded_unavailable")].set_index("position")
-    assert ruled_out.loc["QB", "zero_lam_n"] == 1
-    assert ruled_out.loc["QB", "zero_lam_positive_outcome_n"] == 1
-
-    # The deadline exclusion carries a positive rate, so it is not a zero at all and
-    # its touchdown is not evidence about the injury report.
-    late = table[table.population.eq("excluded_undecidable")].set_index("position")
-    assert late.loc["QB", "n"] == 1 and late.loc["QB", "zero_lam_n"] == 0
-    assert late.loc["QB", "outcome_tds"] == 1.0
-    # It is still excluded from every fit. Counting only zeros reported nothing here.
-    assert late.loc["QB", "excluded_from_fit"] == 1
-
-    # Neither exclusion is in any eligible population, so neither reaches a fit.
-    masks = diagnostics.population_masks(rows)
-    indexed = rows.reset_index(drop=True)
-    for pid in ("out", "late"):
-        where = int(indexed.index[indexed.player_id.eq(pid)][0])
-        assert not any(mask.iloc[where] for mask in masks.values())
-
-
-def test_an_eligible_zero_rate_never_reaches_a_fit_but_is_always_counted():
-    rows = _synthetic_rows()
-    described, fitted = diagnostics.strata(rows)
-    overall = described[
-        described.population.eq("all_eligible")
-        & described.axis.eq("overall")
-        & described.horizon.eq("0")
-    ].iloc[0]
-    assert overall.n == 4 and overall.zero_lam_n == 1
-    assert overall.zero_lam_positive_outcome_n == 1
-    fit = fitted[
-        fitted.population.eq("all_eligible") & fitted.axis.eq("overall") & fitted.horizon.eq("0")
-    ].iloc[0]
-    assert fit.n == 3  # the three positive rates with a known outcome
-
-
-@pytest.mark.skipif(not STUDY.exists(), reason="saved study artifacts are not checked in")
-def test_a_forecast_is_grouped_by_the_position_it_was_made_under():
-    """Position came from the target week, so a player who changed position had his
-    earlier forecasts reclassified using information that did not exist when they were
-    made. 563 rows of the saved study moved that way: B.J. Daniels was forecast as a
-    quarterback in 2015 and diagnosed as a receiver."""
-    rows = diagnostics.load_run(STUDY)
-    forecasts = pd.concat(
-        [
-            pd.read_parquet(STUDY / str(year) / "forecasts.parquet")[
-                ["model", "seed", "season", "week", "player_id", "position"]
-            ]
-            for year in sorted(int(p.name) for p in STUDY.iterdir() if p.name.isdigit())
-        ],
-        ignore_index=True,
-    )
-    at_decision = (
-        forecasts[forecasts.model.eq("shipped") & forecasts.seed.eq(-1)]
-        .drop_duplicates(["season", "week", "player_id"])
-        .rename(columns={"week": "decision_week", "position": "expected"})[
-            ["season", "decision_week", "player_id", "expected"]
-        ]
-    )
-    known = rows[rows.position.ne("unknown")]
-    check = known.merge(at_decision, on=["season", "decision_week", "player_id"], how="left")
-    assert check.expected.notna().all()
-    assert (check.position == check.expected).all()
-    # Forecast-time position is also the more complete join, not a trade for accuracy.
-    assert rows.position.eq("unknown").mean() < 0.06
-
-
-def test_available_means_not_yet_spent(tmp_path, monkeypatch):
-    """`avail_mult > 0` is already required by hard eligibility, so `available` was a
-    copy of `all_eligible` -- 962,332 identical rows in the saved study, every depleted
-    one included. The split that means something is against the baseline's own walk."""
-    run = _diagnosable_run(tmp_path, monkeypatch)
-    rows = diagnostics.load_run(run)
-    masks = diagnostics.population_masks(rows)
-    assert not masks["available"].equals(masks["all_eligible"])
-    assert not (masks["available"] & masks["depleted"]).any()
-
-    # Both are decision-week statements; a future cell has no depletion to report.
-    current = rows.lead_horizon.eq(0)
-    assert (masks["available"] | masks["depleted"]).loc[~current].sum() == 0
-    assert int((masks["available"] | masks["depleted"]).sum()) == int(
-        (masks["all_eligible"] & current).sum()
-    )
-
-
-def test_position_strata_account_for_every_row_in_their_population():
-    """Enumerating only QB/RB/WR/TE dropped the explicit `unknown` group, so at horizon
-    7+ of the saved study the position rows summed to 304,284 against an overall
-    363,276, each reporting full outcome coverage. The rows that vanished were exactly
-    the ones with no outcome to report."""
-    rows = _synthetic_rows()
-    assert "unknown" in set(rows.position), "fixture must contain a row with no position"
-    described, _ = diagnostics.strata(rows)
-    overall = described[described.axis.eq("overall")].set_index(["population", "horizon"]).n
-    by_position = (
-        described[described.axis.eq("position")].groupby(["population", "horizon"]).n.sum()
-    )
-    assert not overall.empty
-    pd.testing.assert_series_equal(
-        overall.sort_index(), by_position.sort_index(), check_names=False
-    )
-
-
-def test_a_zero_forecast_is_counted_whether_or_not_its_outcome_resolved():
-    """Counting zeros only among resolved outcomes made a stratum of one unscored zero
-    forecast report n=1 and zero_lam_n=0, contradicting the population it describes."""
-    rows = _synthetic_rows()
-    unresolved = rows[rows.player_id.eq("gone")].assign(lam=0.0, actual_tds=np.nan)
-    unresolved["outcome_known"] = False
-    combined = pd.concat([rows, unresolved], ignore_index=True)
-
-    described, _ = diagnostics.strata(combined)
-    horizon3 = described[
-        described.population.eq("all_eligible")
-        & described.axis.eq("overall")
-        & described.horizon.eq("2-3")
-    ].iloc[0]
-    assert horizon3.n == 2 and horizon3.outcomes_known == 0
-    assert horizon3.zero_lam_n == 1
-    assert horizon3.zero_lam_outcomes_known == 0
-    assert horizon3.zero_lam_positive_outcome_n == 0
-
-
-def test_a_forecast_with_no_target_week_is_missing_not_zero(tmp_path, monkeypatch):
-    """A player forecast for a week he had left the pool by has nothing to score
-    against. Counting that as a zero would score the roster feed, not the model."""
-    run = _diagnosable_run(tmp_path, monkeypatch)
-    rows = diagnostics.load_run(run)
-    assert rows.actual_tds[~rows.outcome_known].isna().all()
-    table = diagnostics.coverage(rows)
-    assert (table.rows == table.outcomes_known + table.outcomes_missing).all()
-    described, _ = diagnostics.strata(rows)
-    assert (described.outcomes_known <= described.n).all()
-
-
-def test_the_export_records_identities_and_states_no_conclusion(tmp_path, monkeypatch):
-    """Generated artifacts carry facts, methods and provenance. Choosing a correction,
-    or saying a result is good, belongs to a dated authored analysis."""
-    run = _diagnosable_run(tmp_path, monkeypatch)
-    out = diagnostics.export(run, tmp_path / "readiness", log=lambda x: None)
-    assert {p.name for p in out.iterdir()} == {
-        "strata.csv",
-        "fits.csv",
-        "fits-by-season.csv",
-        "reliability.csv",
-        "zero-accounting.csv",
-        "coverage.csv",
-        "identities.json",
-        "READINESS.md",
-    }
-    identities = json.loads((out / "identities.json").read_text())
-    manifest = json.loads((run / "manifest.json").read_text())
-    forecasts, computed = identities["forecast_provenance"], identities["diagnostic_provenance"]
-    assert forecasts["source_fingerprint"] == manifest["code"]["code_hash"]
-    assert forecasts["frozen_dataset"] == manifest["dataset_hash"]
-    assert forecasts["future_discount_source"] == "study"
-    assert computed["diagnostics_module"] == diagnostics.module_hash("diagnostics")
-    assert computed["evaluate_module"] == diagnostics.module_hash("evaluate")
-
-    note = (out / "READINESS.md").read_text()
-    assert "Production constants are unchanged" in note
-    assert "not fitted correction artifacts" in note
-    for claim in ("recommend", "should apply", "is well calibrated", "ready to ship", "improves"):
-        assert claim not in note
-
-
-def test_the_recorded_identity_follows_the_code_that_computes_the_metrics(tmp_path, monkeypatch):
-    """Only the study was fingerprinted, so changing an inference constant changed
-    whether intervals were reported at all while leaving `identities.json` byte for
-    byte identical. The implementation describing the forecasts is its own identity."""
-    run = _diagnosable_run(tmp_path, monkeypatch)
-    before = diagnostics.provenance(run, "shipped", -1)
-    with config.override(MIN_INFERENCE_CLUSTERS=config.MIN_INFERENCE_CLUSTERS + 1):
-        after = diagnostics.provenance(run, "shipped", -1)
-    assert before["forecast_provenance"] == after["forecast_provenance"]
-    assert before["diagnostic_provenance"] != after["diagnostic_provenance"]
-    assert (
-        after["diagnostic_provenance"]["min_inference_clusters"]
-        == before["diagnostic_provenance"]["min_inference_clusters"] + 1
-    )
-
-
-def test_planning_values_use_the_discount_the_study_ran_under(tmp_path, monkeypatch):
-    """The forecasts on disk were planned under the discount in force when the run
-    happened; a later edit to `config` must not restate them under a different one."""
-    run = _diagnosable_run(tmp_path, monkeypatch)
-    saved = diagnostics.study_constants(run)["FUTURE_DISCOUNT"]
-    with config.override(FUTURE_DISCOUNT=0.5):
-        rows = diagnostics.load_run(run)
-        recorded = diagnostics.provenance(run, "shipped", -1)["forecast_provenance"]
-    future = rows[rows.lead_horizon.gt(0)].iloc[0]
-    assert future.planning_lam == pytest.approx(future.lam * saved**future.lead_horizon)
-    assert recorded["future_discount"] == saved
-    assert recorded["future_discount_source"] == "study"
-
-
-def test_the_cli_reports_a_missing_surface_instead_of_a_traceback(tmp_path, monkeypatch):
-    run = _diagnosable_run(tmp_path, monkeypatch)
-    result = CliRunner().invoke(
-        app,
-        [
-            "research",
-            "diagnose",
-            "--run",
-            str(run),
-            "--out",
-            str(tmp_path / "x"),
-            "--model",
-            "no-such",
-        ],
-    )
-    assert result.exit_code == 1
-    assert "No saved surface" in result.output
+    events = capture.events(conn, SEASON)
+    submitted = events[events.kind.eq("submitted")].set_index("slot")
+    links = {slot: json.loads(detail) for slot, detail in submitted.detail.items()}
+    assert links["QB"]["link_source"] == "named"
+    assert links["QB"]["linked_decision"] == early
+    assert links["RB"]["link_source"] == "latest advice"
+    assert links["RB"]["linked_decision"] == late

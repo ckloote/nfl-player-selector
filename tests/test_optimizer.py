@@ -1,6 +1,8 @@
+import pandas as pd
 import pytest
 
 from pool import optimizer as O
+from pool.optimizer import plan_slot
 from tests.support.frames import proj_row
 
 
@@ -123,3 +125,16 @@ def test_the_discount_is_read_from_config_at_call_time(make_proj, monkeypatch):
     monkeypatch.setattr(config, "FUTURE_DISCOUNT", 0.5)
     discounted = O.plan_slot(proj, "QB", 1, set(), {}).total
     assert discounted < undiscounted
+
+
+def test_zero_is_eligible_and_pruning_uses_hard_mask():
+    frame = pd.DataFrame(
+        [
+            proj_row("b", "B", "QB", 1, 0),
+            proj_row("a", "A", "QB", 1, 0),
+            proj_row("out", "O", "QB", 1, 100, status="Out"),
+        ]
+    )
+    plan = plan_slot(frame, "QB", 1, set(), max_players=1)
+    assert plan.pick_for(1).player_id == "a"
+    assert plan.total == 0

@@ -1,4 +1,4 @@
-"""Phase 3B: the chronological calibration experiment.
+"""The chronological calibration experiment (Phase 3B).
 
 Every test states the failure it prevents. The failures worth preventing here are the
 ones that would make a favourable result meaningless rather than the ones that would

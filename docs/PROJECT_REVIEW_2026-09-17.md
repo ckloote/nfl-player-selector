@@ -359,6 +359,16 @@ misses some important handoffs.
 - Add focused tests for the findings above and one installed-package workflow test.
   These exercise boundaries the current suite misses, rather than mirroring functions.
 
+**Status of the test reorganisation:** done on branch `claude/tests-by-behaviour`. Shared
+builders live in `tests/support/`, and no test module imports another. Research tests are in
+`tests/research/` and marked `research`, so `uv run pytest -m "not research"` runs the 415
+everyday tests in about 40 seconds; CI still runs all 704. No suite is named after a phase:
+`test_phase3a` became `test_capture` plus research files for fits, benchmark decision times and
+diagnostics; `test_phase2` became replay isolation and publication; `test_phase3b` became
+calibration. Tests of everyday code found in research files moved to the quick run
+(`test_past_weeks`, `test_snapshots`, `test_config`, and the closure pins in `test_identity`).
+The collected test IDs are unchanged apart from their paths.
+
 A minimal CI check for lint, formatting, and the suite would prevent the documented
 format command from drifting again. No CI configuration is present in this checkout.
 Formatting should be a separate mechanical change because source hashes are currently

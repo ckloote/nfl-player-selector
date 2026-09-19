@@ -92,3 +92,20 @@ def record(conn, **slots):
         ],
         now=datetime(2026, 9, 14),
     )
+
+
+def schedule_only_db(tmp_path):
+    """A database holding an 18-week 2026 schedule and nothing else. Returns its path."""
+    path = tmp_path / "pool.db"
+    conn = db.connect(path)
+    with conn:
+        conn.executemany(
+            "INSERT INTO games(game_id, season, week, game_type, kickoff, home_team, away_team) "
+            "VALUES (?,?,?,?,?,?,?)",
+            [
+                (f"g{w}", 2026, w, "REG", f"2026-09-{12 + w:02d}T13:00", "A", "B")
+                for w in range(1, 19)
+            ],
+        )
+    conn.close()
+    return path

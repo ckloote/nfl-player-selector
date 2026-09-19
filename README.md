@@ -318,6 +318,19 @@ pull request (`.github/workflows/ci.yml`). `--locked` fails when `uv.lock` does 
 The suite runs as of 18 September 2026, week 2 of the season its fixtures describe, whatever
 today's date is: `tests/conftest.py` pins the clock with `time-machine`.
 
+Tests are grouped by what they cover. Everything under `tests/research/` exercises the research
+code — replays, benchmarks, calibration, diagnostics, published reports and the
+`verify-capture` checks — and is marked `research`. For the everyday code alone, which takes
+about 40 seconds rather than two and a half minutes:
+
+```bash
+uv run pytest -m "not research"
+```
+
+Shared builders (the synthetic seasons, the small 2026 database, reports and a captured
+Friday decision) live in `tests/support/`; test modules import from there, never from each
+other.
+
 `pytest`, `ruff` and `time-machine` live in the `dev` dependency group, which `uv sync`
 installs by default; `uv sync --no-dev` gives a runtime-only environment.
 

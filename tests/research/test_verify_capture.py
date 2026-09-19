@@ -1,5 +1,5 @@
-"""Captured decisions: re-derived from their own record, replayed from the archive,
-and linked to the picks that came from them.
+"""Captured decisions checked after the fact: re-derived from their own record, and
+replayed from the archive, by `pool research verify-capture`.
 
 Each test states the failure it prevents. These checks began as Phase 3C's evidence
 gates; the protocol closed without collecting and its window, floors and export were
@@ -7,7 +7,6 @@ retired, but a decision `pool week` writes down is still only worth keeping if i
 reconstructs, and every replay still assumes the live path and the archive agree.
 """
 
-import json
 from datetime import datetime
 
 import pytest
@@ -273,68 +272,6 @@ def test_the_reconstruction_wrapper_keeps_the_constants_diagnostic(tmp_path):
         drift = verify.reconstruction(conn, decision_id)["drift"]
     assert "HOME_MULT" in drift["constants_changed"]
     assert not drift["code_hash_changed"]  # a constant moving is not the source moving
-
-
-def test_a_submission_links_to_the_decision_it_names_not_the_latest(tmp_path):
-    """With a Thursday and a Sunday decision in one week, "the most recent advice for
-    this slot" is whichever happened last, which is not the same thing as the one the
-    pick came from."""
-    conn, _ = archived(tmp_path)
-    early, proj, _ = decide(conn, 3, datetime.fromisoformat(PRE_WEEK3))
-    late, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
-    player = proj[proj.week.eq(3) & proj.slot.eq("QB")].player_id.iloc[0]
-    capture.record_action(
-        conn, SEASON, 3, "QB", "submitted", player, {"player_name": "x"}, decision_id=early
-    )
-    events = capture.events(conn, SEASON)
-    detail = json.loads(events[events.kind.eq("submitted")].detail.iloc[0])
-    assert detail["linked_decision"] == early and detail["link_source"] == "named"
-    assert early != late
-
-
-def test_a_named_decision_that_does_not_exist_is_refused(tmp_path):
-    """Minting a fresh id for a typo would write an event that reconstructs against
-    nothing, and it would look exactly like a pick submitted without advice."""
-    conn, _ = archived(tmp_path)
-    decide(conn, 3, datetime.fromisoformat(DECISION))
-    with pytest.raises(ValueError, match="No captured decision"):
-        capture.record_action(
-            conn, SEASON, 3, "QB", "submitted", "AAA-QB1", {}, decision_id="not-an-id"
-        )
-
-
-def test_an_unnamed_submission_still_records_how_it_was_linked(tmp_path):
-    """The fallback is allowed -- a pick can be entered without running `recommend` --
-    but a later reader must not have to guess which of the two links this was."""
-    conn, _ = archived(tmp_path)
-    decide(conn, 3, datetime.fromisoformat(DECISION))
-    capture.record_action(conn, SEASON, 3, "QB", "submitted", "AAA-QB1", {})
-    events = capture.events(conn, SEASON)
-    detail = json.loads(events[events.kind.eq("submitted")].detail.iloc[0])
-    assert detail["link_source"] == "latest advice"
-
-
-def test_a_named_link_and_the_fallback_stay_distinguishable(tmp_path):
-    """A deliberate `--decision` link and the most-recent-advice fallback are different
-    claims about which decision a pick came from, and with two decisions in a week the
-    fallback is whichever happened last."""
-    conn, _ = archived(tmp_path)
-    early, proj, _ = decide(conn, 3, datetime.fromisoformat(PRE_WEEK3))
-    late, later, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
-    named = proj[proj.week.eq(3) & proj.slot.eq("QB")].player_id.iloc[0]
-    inferred = later[later.week.eq(3) & later.slot.eq("RB")].player_id.iloc[0]
-    capture.record_action(
-        conn, SEASON, 3, "QB", "submitted", named, {"player_name": "x"}, decision_id=early
-    )
-    capture.record_action(conn, SEASON, 3, "RB", "submitted", inferred, {"player_name": "y"})
-
-    events = capture.events(conn, SEASON)
-    submitted = events[events.kind.eq("submitted")].set_index("slot")
-    links = {slot: json.loads(detail) for slot, detail in submitted.detail.items()}
-    assert links["QB"]["link_source"] == "named"
-    assert links["QB"]["linked_decision"] == early
-    assert links["RB"]["link_source"] == "latest advice"
-    assert links["RB"]["linked_decision"] == late
 
 
 def test_an_observation_archived_afterwards_is_not_agreement(tmp_path):
