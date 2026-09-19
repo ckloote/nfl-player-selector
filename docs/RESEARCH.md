@@ -41,11 +41,13 @@ uv run pool research verify-capture --season 2026      # reconstruction and live
 
 The existing 2026 captures require `uv run pool research verify-capture --season 2026
 --allow-code-drift`, and have since stage 2. The
-enforced closure has moved three times: stage 2 extracted the shared pick-scoring core into
+enforced closure has moved four times: stage 2 extracted the shared pick-scoring core into
 `scoring.py`, a later review fix to the same file — scoring a pick with no game zero once its
-week is final — moved it again, and stage 3 added `rivals.py` and `simulate.py` when
-`recommend` gained the second objective. Each move was an isolated commit, with the pre-move
-output recorded first. Every capture still reconstructs and matches replay under the
+week is final — moved it again, stage 3 added `rivals.py` and `simulate.py` when
+`recommend` gained the second objective, and on 2026-09-19 pick scoring moved out of
+`scoring.py` into `results.py`, outside the closure, in the same PR as the rival fix below
+(fingerprint `be2b9bbb…` to `23c28ae1…`; revision `67ab143` is the last before it). Each move
+was an isolated change, with the pre-move output recorded first. Every capture still reconstructs and matches replay under the
 override, which explicitly reports that the fingerprint check was bypassed. The exceptions
 are the three captures that carry a pot share (`cf9cc9e5d64d`, `8edc0f08b08e`,
 `fd9c03a2946a`): a later fix changed the pot-share arithmetic, so current code re-derives

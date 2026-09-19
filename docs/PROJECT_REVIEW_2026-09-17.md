@@ -254,6 +254,13 @@ dataframe-engine rewrite to simplify this project.
 | Simplify | Personal cached scores versus computed entrant scores | Prefer one read-time scoring path. Consider retiring routine cache maintenance and making `score` a compatibility alias; preserve any explicitly desired “last scored” history separately. |
 | Archive in documentation | Completed phase plans, old review timelines, superseded result narratives | Keep provenance accessible from a history index. The main README should teach the current workflow. |
 
+**Status of the scoring consolidation:** done on branch `claude/one-scoring-path`. Pick
+scoring moved from `scoring.py` to `results.py`, and `pool picks` scores at read time like
+standings and `pool week`, writing nothing. `pool score` is a hidden alias, standings no longer
+mentions a stale cache, and `my_picks.tds` stays in the schema unread. No "last scored" history
+was kept: nothing used it, and a missing result is now simply pending. The decision
+fingerprint moved once for this, the `rivals.py` parity fix and the `db`/`state` renames.
+
 **Status of the CLI split:** done on branch `claude/split-cli`. `pool/cli/` holds `common`,
 `advice`, `week`, `picks` and `reports`, with every command registered in `__init__.py` in
 its existing help order; the research CLI shares `common` instead of copying it. The

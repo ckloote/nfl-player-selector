@@ -94,3 +94,18 @@ capture once per kickoff wave, and name that capture with `record --decision`. T
 and `pool week` replaced it: it refreshes when the data is stale, saves a decision only while a
 slot is open, and prints the `record` line with the decision already named. The
 [protocol](PHASE3C_PROTOCOL.md) that defined the old routine stands as written.
+
+## Stored pick scores, before 19 September 2026
+
+Until 19 September 2026 `pool picks` read each pick's touchdowns from `my_picks.tds`, a copy
+that only `pool score` wrote, so a finished game showed "not scored; run pool score" and
+standings warned when the copy was stale. Standings, `pool week` and the rival predictions
+already scored picks from the results each time. Now `pool picks` does too: pick scoring moved
+from `scoring.py` to `results.py`, the column stays in the schema unread, and `pool score` is a
+hidden name for `pool picks`.
+
+`scoring.py` is in the decision closure, so this moved the decision fingerprint, together with
+a fix in the same PR that lets rivals hold a player whose game has started. The fingerprint
+went from `be2b9bbb…` to `23c28ae1…`, and revision `67ab143` is the last with the old one.
+Decisions captured before verify with `pool research verify-capture --allow-code-drift`, and
+reconstruct exactly at the revision each one recorded.
