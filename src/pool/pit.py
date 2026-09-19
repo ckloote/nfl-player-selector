@@ -75,13 +75,20 @@ def commit(
     sims: int | None = None,
     seed: int | None = None,
     observed_at: str | datetime | None = None,
-) -> int:
-    """Pin this week's implied distribution. Nothing about the week is read here."""
+    skip_unchanged: bool = False,
+) -> int | None:
+    """Pin this week's implied distribution. Nothing about the week is read here.
+
+    With `skip_unchanged`, return None before sampling when the latest schema-2
+    commitment has stored outcomes and exactly the same current-week inputs.
+    """
     if conn.in_transaction:
         raise ValueError("Committing a PIT requires a connection with no open transaction")
     sims = config.WINPROB_SIMS if sims is None else sims
     seed = config.WINPROB_SEED if seed is None else seed
-    frame = proj[proj.week.eq(week)].reset_index(drop=True)
+    # Parquet infers numeric object columns on storage; prepare the same dtypes before
+    # comparing with a stored surface. Keep every column and the original row order.
+    frame = proj[proj.week.eq(week)].reset_index(drop=True).infer_objects()
     if not len(frame):
         raise ValueError(f"No projection rows for {season} week {week}")
     params = simulate.Params()
@@ -95,6 +102,19 @@ def commit(
         "surface_hash": None,
         "draws_hash": None,
     }
+    if skip_unchanged:
+        earlier = [r for r in archived(conn, season) if r["week"] == week]
+        previous = earlier[-1]["payload"] if earlier else {}
+        if (
+            all(previous.get(key) == payload[key] for key in payload if not key.endswith("_hash"))
+            and previous.get("draws_hash")
+            and conn.execute(
+                "SELECT 1 FROM input_payloads WHERE content_hash = ? AND codec = ?",
+                (previous["draws_hash"], DRAWS_CODEC),
+            ).fetchone()
+            and capture.load_surface(conn, previous["surface_hash"]).equals(frame)
+        ):
+            return None
     draws = simulate.sample(frame, [week], sims=int(sims), seed=int(seed), params=params)
     with db.transaction(conn):
         payload["surface_hash"] = capture.store_surface(conn, frame)

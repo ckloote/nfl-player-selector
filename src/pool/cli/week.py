@@ -116,11 +116,12 @@ def _render_week(d: Decided, season: int, refreshed, db_path, predicted=None) ->
 
 
 def _print_predicted(wk: int, what: str, kickoff) -> None:
-    """One line on the rival prediction, which only counts if saved before first kickoff."""
+    """The save status of the rival rankings and implied distribution."""
     if what == "failed":
         console.print(
-            f"Could not save rival predictions for week {wk}: {kickoff}. Run pool research "
-            f"predict record --week {wk} before first kickoff to save them by hand.",
+            f"Could not save rival rankings and distribution for week {wk}: {kickoff}. "
+            f"Run pool research predict record --week {wk} before first kickoff "
+            "to save them by hand.",
             style="yellow",
             markup=False,
         )
@@ -128,10 +129,10 @@ def _print_predicted(wk: int, what: str, kickoff) -> None:
     when = _short(state.eastern_now(kickoff))
     console.print(
         {
-            "saved": f"Rival predictions for week {wk} saved; they count until first "
+            "saved": f"Rival rankings and distribution for week {wk} saved; they count until first "
             f"kickoff, {when}.",
-            "unchanged": f"Rival predictions for week {wk} unchanged since the last save; "
-            f"they count until first kickoff, {when}.",
+            "unchanged": f"Rival rankings and distribution for week {wk} unchanged since "
+            f"the last save; they count until first kickoff, {when}.",
             "on record": f"Rival predictions for week {wk} are on record from before the "
             "week could be seen.",
             "missed": f"No rival prediction was saved for week {wk} before it could be seen, "

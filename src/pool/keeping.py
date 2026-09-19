@@ -7,7 +7,10 @@ for.
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import tempfile
+from contextlib import closing
 from pathlib import Path
 
 import pandas as pd
@@ -33,28 +36,29 @@ def backup(source: Path, target: Path) -> None:
 
     The online backup copies a consistent state even if another command writes during
     it, which a plain file copy does not promise. The copy is written beside its final name
-    and renamed only once it has passed `integrity_check`, so a failed backup never leaves a
-    file that looks like a good one.
+    and published only once it has passed `integrity_check`. Linking the verified copy to
+    its final name atomically refuses an existing destination.
     """
     if not source.is_file():
         raise FileNotFoundError(f"No database at {source}")
-    if target.exists():
+    if target.exists() or target.is_symlink():
         raise FileExistsError(f"{target} already exists; not overwritten")
     target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.with_name(target.name + ".partial")
-    partial.unlink(missing_ok=True)
-    src = sqlite3.connect(f"{source.resolve().as_uri()}?mode=ro", uri=True)
-    dst = sqlite3.connect(partial)
+    fd, name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".partial", dir=target.parent)
+    partial = Path(name)
     try:
-        src.backup(dst)
-        check = dst.execute("PRAGMA integrity_check").fetchone()[0]
+        os.close(fd)
+        with (
+            closing(sqlite3.connect(f"{source.resolve().as_uri()}?mode=ro", uri=True)) as src,
+            closing(sqlite3.connect(partial)) as dst,
+        ):
+            src.backup(dst)
+            check = dst.execute("PRAGMA integrity_check").fetchone()[0]
+            if check != "ok":
+                raise RuntimeError(f"The copy failed its integrity check: {check}")
+        os.link(partial, target)
     finally:
-        dst.close()
-        src.close()
-    if check != "ok":
         partial.unlink(missing_ok=True)
-        raise RuntimeError(f"The copy failed its integrity check: {check}")
-    partial.rename(target)
 
 
 def picks(conn: sqlite3.Connection, season: int) -> pd.DataFrame:

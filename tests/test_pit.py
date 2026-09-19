@@ -53,6 +53,79 @@ def test_the_frame_is_pinned_by_hash_so_a_later_refresh_cannot_move_it(reported)
     assert pit._draws(conn, record).values.sum() == before
 
 
+def test_conditional_commit_skips_sampling_and_all_writes_for_unchanged_inputs(
+    reported, monkeypatch
+):
+    conn, _ = reported
+    proj = _proj(conn)
+    first = pit.commit(conn, 2026, 1, proj, sims=100, seed=3)
+    assert isinstance(first, int)
+    # The default remains unconditional, including its observation ID return value.
+    second = pit.commit(conn, 2026, 1, proj, sims=100, seed=3)
+    assert second > first
+    before = conn.total_changes
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Unchanged inputs must be compared before sampling")
+
+    monkeypatch.setattr(simulate, "sample", forbidden)
+    proj.loc[proj.week.ne(1), "lam"] += 1  # future weeks do not enter this commitment
+    assert pit.commit(conn, 2026, 1, proj, sims=100, seed=3, skip_unchanged=True) is None
+    assert conn.total_changes == before
+
+
+@pytest.mark.parametrize("change", ["rate", "metadata", "order", "params", "seed", "sims"])
+def test_conditional_commit_compares_every_input_against_the_latest_record(
+    reported, monkeypatch, change
+):
+    conn, _ = reported
+    proj = _proj(conn, 2)
+    options = dict(sims=100, seed=3, skip_unchanged=True)
+    first = pit.commit(conn, 2026, 2, proj, **options)
+    original = proj.copy()
+    if change == "rate":
+        proj.loc[proj.index[0], "lam"] += 0.1
+    elif change == "metadata":
+        proj.loc[proj.index[0], "player_name"] = "Updated name"
+    elif change == "order":
+        proj = proj.iloc[::-1]
+    elif change == "params":
+        params = simulate.Params(k_game=2.0)
+        monkeypatch.setattr(simulate, "Params", lambda: params)
+    else:
+        options[change] += 1
+    second = pit.commit(conn, 2026, 2, proj, **options)
+    assert second > first
+    assert pit.commit(conn, 2026, 2, proj, **options) is None
+    if change in ("rate", "metadata", "order"):
+        assert pit.commit(conn, 2026, 2, original, **options) > second
+        assert len(pit.archived(conn, 2026)) == 3, "compare the latest, not any matching record"
+
+
+@pytest.mark.parametrize("frozen", [False, True])
+def test_a_legacy_commitment_never_suppresses_a_schema_two_commitment(reported, frozen):
+    conn, _ = reported
+    with config.override(WINPROB_SIMS=100):
+        _schema_one(conn, week=2)
+        legacy = pit.archived(conn, 2026)[0]
+        if frozen:
+            pit._freeze(conn, legacy)
+        saved = pit.commit(conn, 2026, 2, _proj(conn, 2), skip_unchanged=True)
+        assert saved > legacy["observation_id"]
+        assert pit.commit(conn, 2026, 2, _proj(conn, 2), skip_unchanged=True) is None
+    assert len(pit.archived(conn, 2026)) == 2
+
+
+def test_a_commitment_without_stored_outcomes_does_not_suppress_a_retry(reported):
+    conn, _ = reported
+    proj = _proj(conn, 2)
+    first = pit.commit(conn, 2026, 2, proj, sims=100)
+    payload = pit.archived(conn, 2026)[0]["payload"]
+    with conn:
+        conn.execute("DELETE FROM input_payloads WHERE content_hash = ?", (payload["draws_hash"],))
+    assert pit.commit(conn, 2026, 2, proj, sims=100, skip_unchanged=True) > first
+
+
 def test_the_two_claims_on_one_feed_do_not_read_each_other(reported):
     """Both are things the model said before the week; neither scorer may see the other."""
     conn, _ = reported

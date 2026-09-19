@@ -41,7 +41,7 @@ def backup(
 @export_app.command("picks")
 def export_picks(
     csv_path: Annotated[
-        Path | None, typer.Option("--csv", help="File to write (default: print it)")
+        Path | None, typer.Option("--csv", help="New file to write (default: print it)")
     ] = None,
     season: int = SeasonOpt,
     db_path: Path | None = DbOpt,
@@ -60,5 +60,10 @@ def export_picks(
         # Straight to stdout rather than through Rich, which would wrap long rows.
         typer.echo(text, nl=False)
         return
-    csv_path.write_text(text, encoding="utf-8")
+    try:
+        with csv_path.open("x", encoding="utf-8") as stream:
+            stream.write(text)
+    except OSError as exc:
+        console.print(str(exc), style="red", markup=False)
+        raise typer.Exit(1) from exc
     console.print(f"Wrote {len(frame)} picks for {season} to {csv_path}.", markup=False)
