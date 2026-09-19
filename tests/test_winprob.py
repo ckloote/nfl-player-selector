@@ -336,6 +336,29 @@ def test_contested_names_the_rivals_who_may_take_each_candidate():
     assert qb.contested["qb"] == (("Jamie", 1.0),)
 
 
+def test_a_game_that_has_kicked_off_is_still_open_to_a_rival():
+    """My deadline is not theirs: a rival may have taken a player before his game started.
+
+    Live loading leaves the deadline out of `hard_eligible` and the snapshot replay folds it
+    in, so the same instant used to simulate different rivals depending on which path built
+    the frame. A Friday decision, replayed, kept every Thursday player from them, and
+    `verify-capture` reported the replay's advice as differing from the record.
+    """
+    from pool import capture
+
+    live = frame()
+    live.loc[live.player_id.eq("qa"), "kickoff"] = "2026-09-10T20:15"  # Thursday
+    replayed = live.assign(hard_eligible=live.player_id.ne("qa"))
+    pool = rivals.PoolState((rival("pat", 0), rival("jamie", 0)), 0)
+    with config.override(WINPROB_SIMS=500, RIVAL_NOISE_TOP_N=1):
+        both = [advise_week(proj, 1, set(), {}, now=NOW, pool=pool) for proj in (live, replayed)]
+    detail = [capture.to_json({a.slot: capture.advice_detail(a) for a in one}) for one in both]
+    assert detail[0] == detail[1]
+    qb = next(a for a in both[0] if a.slot == "QB")
+    assert qb.recommended.player_id != "qa"  # closed to me
+    assert qb.contested["qa"] == (("Jamie", 1.0), ("Pat", 1.0))  # open to them
+
+
 def test_a_rival_whose_week_never_arrived_is_not_a_complete_pool():
     """Three more players are spent per missing week and none of them can be named, so the
     simulated rival is free to spend a player they have in fact already used. That is the

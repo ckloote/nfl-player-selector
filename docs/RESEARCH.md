@@ -52,11 +52,13 @@ are the three captures that carry a pot share (`cf9cc9e5d64d`, `8edc0f08b08e`,
 different shares from them. They reconstruct exactly at the revision they recorded,
 `89dca93`, and their expected-TD advice and replayed surfaces match today.
 
-One capture fails for a different reason, and it is open: `95ed0d28cbe6` (week 2, made
-2026-09-18) reconstructs, but its parity replay re-derives different RB pot-share fields.
-Its expected-TD advice and replayed surface match. The replay's rival sampling treats a
-player whose game had already kicked off differently from the live path, so the two paths
-disagree about which rivals might still take him. See the recorded verifications for [stage 2](PHASE4_STAGE2_PLAN.md#implementation-verification--2026-09-15)
+`95ed0d28cbe6` (week 2, made Friday 2026-09-18) used to fail parity for another reason. The
+snapshot replay folds the pick deadline into `hard_eligible` and the live path does not, and
+the rival simulation read that column, so on replay no rival could take a player from
+Thursday's game. The two paths then disagreed about which rivals might hold an RB. A rival
+may have made that pick before kickoff, so rivals now judge players by availability alone
+on both paths, and this capture verifies under the override like the others. See the
+recorded verifications for [stage 2](PHASE4_STAGE2_PLAN.md#implementation-verification--2026-09-15)
 and [stage 3](PHASE4_STAGE3_PLAN.md#implementation-verification--2026-09-17).
 
 Replay rebuilds the inputs a decision read, exactly as it read them. A week still being
