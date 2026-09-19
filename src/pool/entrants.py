@@ -142,7 +142,7 @@ def transform_report(
         dtype=object,
     )
     # Names remain exactly as delivered; only identifiers and slots are normalized.
-    work["entrant_id"] = work.entrant.map(state._norm)
+    work["entrant_id"] = work.entrant.map(state.normalize_name)
     if work.entrant_id.eq("").any():
         raise ValueError("Entrant names must contain letters or numbers")
     aliases = {"WR": "FLEX", "TE": "FLEX", "WR/TE": "FLEX"}
@@ -214,7 +214,7 @@ def resolve_players(
             )
             continue
         player = matches.iloc[0]
-        if state._norm(pick.player_name) != state._norm(player.player_name):
+        if state.normalize_name(pick.player_name) != state.normalize_name(player.player_name):
             inexact.append(
                 dict(
                     entrant_id=pick.entrant_id,
@@ -401,7 +401,7 @@ def _write_report(conn, result, entrant_rows, picks, totals, me_id):
             f"INSERT INTO {table} ({','.join(columns)}) "
             f"VALUES ({','.join('?' for _ in columns)}) "
             f"ON CONFLICT({','.join(keys)}) DO UPDATE SET {updates}",
-            db._rows(frame),
+            db.sql_rows(frame),
         )
 
 
@@ -490,7 +490,7 @@ def import_report(
                 )
         me_id = _surviving_me(conn, season, week, set(entrant_rows.entrant_id))
         if me is not None:
-            requested = state._norm(me)
+            requested = state.normalize_name(me)
             if requested not in set(entrant_rows.entrant_id):
                 raise ValueError(f"--me {me!r} does not identify an entrant in this report")
             if me_id is not None and me_id != requested:

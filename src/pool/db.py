@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS my_picks (
     player_id   TEXT NOT NULL,
     player_name TEXT NOT NULL,
     recorded_at TEXT NOT NULL,
-    tds         INTEGER,           -- filled in once scored
+    tds         INTEGER,           -- unread: picks are scored when read (results.py)
     PRIMARY KEY (season, week, slot)
 );
 
@@ -123,12 +123,12 @@ def replace_season(conn: sqlite3.Connection, table: str, season: int, df: pd.Dat
             placeholders = ",".join("?" for _ in df.columns)
             conn.executemany(
                 f"INSERT INTO {table} ({','.join(df.columns)}) VALUES ({placeholders})",
-                _rows(df),
+                sql_rows(df),
             )
     return len(df)
 
 
-def _rows(df: pd.DataFrame) -> Iterable[tuple]:
+def sql_rows(df: pd.DataFrame) -> Iterable[tuple]:
     clean = df.astype(object).where(pd.notna(df), None)
     for row in clean.itertuples(index=False, name=None):
         yield tuple(v.item() if hasattr(v, "item") else v for v in row)

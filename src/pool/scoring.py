@@ -162,7 +162,7 @@ def import_touchdowns(conn: sqlite3.Connection, season: int, raw: pd.DataFrame) 
             conn.executemany(
                 f"INSERT INTO {table} ({','.join(frame.columns)}) "
                 f"VALUES ({','.join('?' for _ in frame.columns)})",
-                db._rows(frame),
+                db.sql_rows(frame),
             )
     return len(credits)
 
