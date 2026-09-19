@@ -13,25 +13,29 @@ from typing import Annotated
 
 import pandas as pd
 import typer
-from rich.console import Console
 from rich.table import Table
 
-from .. import capture, config, db, entrants, pit, predictions, projections, scoring, snapshots
-
-app = typer.Typer(
-    help="Replay seasons, benchmark models, check captured decisions and score predictions.",
-    no_args_is_help=True,
+from .. import (
+    capture,
+    config,
+    db,
+    entrants,
+    pit,
+    predictions,
+    projections,
+    scoring,
+    snapshots,
+    state,
 )
+from ..cli.common import DbOpt, SeasonOpt, WeekOpt, _conn, _fmt_dt, _projections, _week, console
+from . import app
+
 predict_app = typer.Typer(
     help="Predict rival picks before a week can be seen, and score the record.",
     no_args_is_help=True,
 )
 app.add_typer(predict_app, name="predict")
-console = Console()
 
-SeasonOpt = typer.Option(config.DEFAULT_SEASON, "--season", "-s", help="Season year")
-DbOpt = typer.Option(None, "--db", help="SQLite path (default data/pool.db)")
-WeekOpt = typer.Option(None, "--week", "-w", help="Week (default: current)")
 SeasonsOpt = typer.Option(
     "2025", "--season", "-s", help="Season, list, or range: 2025 | 2024,2025 | 2017-2025"
 )
@@ -49,10 +53,6 @@ CsvOpt = typer.Option(None, "--csv", help="Write every cell to a CSV")
 ProjectionOpt = typer.Option(
     "shipped", "--projection", help="Projection model; see `pool research models` for the list"
 )
-
-
-def _conn(path: Path | None):
-    return db.connect(path)
 
 
 def _used_cell(block: dict) -> str:
@@ -73,8 +73,6 @@ def predict_record(
     because a record that cannot be scored is still evidence, but a scripted run has to be
     told that this week's observation was lost.
     """
-    from ..cli import _projections, _week
-
     conn = _conn(db_path)
     try:
         wk = _week(conn, season, week)
@@ -853,9 +851,6 @@ def captures(
 
 def _made(decision_at: str) -> str:
     """When a decision was made, on the Eastern clock its deadlines are read on."""
-    from .. import state
-    from ..cli import _fmt_dt
-
     return _fmt_dt(state.eastern_now(datetime.fromisoformat(decision_at)))
 
 

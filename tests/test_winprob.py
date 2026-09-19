@@ -536,7 +536,7 @@ def test_the_nudge_stops_once_the_week_can_be_seen(seeded):
     from datetime import timedelta
 
     from pool import predictions
-    from pool.cli import _prediction_nudge
+    from pool.cli.advice import _prediction_nudge
 
     conn, _ = seeded
     kickoff = predictions.first_kickoff(conn, 2026, 2)
@@ -616,7 +616,7 @@ def test_a_divergence_states_its_reason_in_the_terms_the_policy_used():
     """A divergence nobody can check is a bug report, not advice. The sentence has to name
     the rivals whose likely picks caused it, and it must come from the sampling sets the
     simulation drew from rather than from a second guess at them."""
-    from pool.cli import _divergence
+    from pool.cli.advice import _divergence
 
     proj = frame()
     pool = rivals.PoolState((rival("one", 0), rival("two", 0), rival("three", 0)), 0)
@@ -635,7 +635,7 @@ def test_a_divergence_states_its_reason_in_the_terms_the_policy_used():
 def test_the_reason_is_withheld_rather_than_invented_when_nothing_explains_it():
     """The guard that keeps the sentence honest: no overlap either way and level standings
     leave the policy with nothing to say, and it must say nothing rather than guess."""
-    from pool.cli import _divergence
+    from pool.cli.advice import _divergence
 
     proj = frame()
     pool = rivals.PoolState((rival("one", 0), rival("two", 0), rival("three", 0)), 0)
@@ -919,7 +919,7 @@ def test_a_withheld_decision_is_captured_and_replays_without_a_share(seeded):
 
 
 def _sweep(proj, pool, week=1, sims=1500):
-    from pool.cli import _sensitivity
+    from pool.cli.advice import _sensitivity
 
     with config.override(WINPROB_SIMS=sims, RIVAL_NOISE_TOP_N=1):
         advice = advise_week(proj, week, set(), {}, now=NOW, pool=pool)
@@ -966,7 +966,7 @@ def test_a_slot_where_nothing_separates_reports_as_tied_not_as_knob_sensitive():
 def test_the_sweep_does_not_touch_the_advice_it_was_given():
     """It is a diagnostic. If it mutated the advice, the printed pick would depend on
     whether the flag was passed."""
-    from pool.cli import _sensitivity
+    from pool.cli.advice import _sensitivity
 
     proj = frame()
     pool = rivals.PoolState((rival("one", 0), rival("two", 0), rival("three", 0)), 0)
@@ -986,7 +986,7 @@ def test_the_share_on_screen_is_a_simulation_estimate_not_a_certainty(monkeypatc
 
     from rich.console import Console
 
-    from pool import cli
+    from pool.cli import advice as shown
 
     pool = rivals.PoolState((rival("pat", 2, {"qa"}), rival("jo", 1)), 1)
     with config.override(WINPROB_SIMS=300):
@@ -994,8 +994,8 @@ def test_the_share_on_screen_is_a_simulation_estimate_not_a_certainty(monkeypatc
     same = [dataclasses.replace(s, share=0.25, se=0.0, delta=0.0, delta_se=0.0) for s in qb.shares]
     for advice in (qb, dataclasses.replace(qb, shares=same)):
         out = Console(width=120, record=True, file=io.StringIO())
-        monkeypatch.setattr(cli, "console", out)
-        cli._render_slot(advice, pool)
+        monkeypatch.setattr(shown, "console", out)
+        shown._render_slot(advice, pool)
         text = out.export_text()
         assert "simulation noise)" in text
         assert "decided" not in text
