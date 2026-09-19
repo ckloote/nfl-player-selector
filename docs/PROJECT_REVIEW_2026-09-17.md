@@ -254,6 +254,12 @@ dataframe-engine rewrite to simplify this project.
 | Simplify | Personal cached scores versus computed entrant scores | Prefer one read-time scoring path. Consider retiring routine cache maintenance and making `score` a compatibility alias; preserve any explicitly desired “last scored” history separately. |
 | Archive in documentation | Completed phase plans, old review timelines, superseded result narratives | Keep provenance accessible from a history index. The main README should teach the current workflow. |
 
+**Status of the Phase 3C retirement:** done on branch `claude/retire-phase3c`. Reconstruction
+and parity moved to `src/pool/verify.py`, still run by `captures` and `verify-capture`. The
+protocol resolver, event waves, populations, submission audit, fidelity floors and the
+`baseline` export were deleted, along with their tests. The protocol, its signed note and
+its outcome stay as history, and revision `bc57683` is the last with the tooling.
+
 Split `cli.py` by responsibility—weekly commands, reports/standings, research, and
 rendering—and keep orchestration thin. Extract package identity from `benchmark.py`
 before doing that split: currently capture drags research machinery back into the
