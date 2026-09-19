@@ -303,7 +303,7 @@ pool backtest --strategy winprob   # replay a season on pot share, against inven
 
 The initial report parser accepts one CSV row per entrant/slot, with optional reported
 totals. `--me` enables comparison against recorded picks; `--allow-roster-change`
-acknowledges entrant-set changes. See the [CSV format and examples](../README.md#importing-the-pools-weekly-report).
+acknowledges entrant-set changes. See the [CSV format and examples](../README.md#reports-and-standings).
 `standings --week N` selects displayed picks; its season ranking cutoff remains the last
 consecutive complete week. Computed TDs and shared ranks sit beside unchanged reported
 columns. A tie for first prints the equal pot split, qualified while totals are incomplete.

@@ -396,5 +396,28 @@ def refresh(conn: sqlite3.Connection, season: int, log=print) -> RefreshResult:
                 "depth_charts",
             )
             attempt(s, "touchdowns", lambda s=s: fetch_touchdowns(s))
+    for s in (season - 1, season):
+        _retire_legacy_stamp(conn, s)
     log("Refresh partially succeeded." if result.failures else "Refresh complete.")
     return result
+
+
+def _retire_legacy_stamp(conn: sqlite3.Connection, season: int) -> None:
+    """Drop the pre-`feed_status` refresh stamp once every feed has a success of its own.
+
+    Old databases kept one timestamp per season, with no timezone, under
+    `last_refresh_{season}`, and `freshness.report` warns that its zone is unknown. Nothing
+    has written it since each feed began recording its own UTC success, so the warning
+    printed on every run and never cleared. Once all of a season's feeds carry that record,
+    the stamp says nothing they do not.
+    """
+    succeeded = {
+        row["feed"]
+        for row in conn.execute(
+            "SELECT feed FROM feed_status WHERE season = ? AND last_success IS NOT NULL",
+            (season,),
+        )
+    }
+    if set(freshness.FEEDS) <= succeeded:
+        with db.transaction(conn):
+            conn.execute("DELETE FROM meta WHERE key = ?", (f"last_refresh_{season}",))
