@@ -681,11 +681,17 @@ def _render_standings(result: st.Board) -> None:
 
 
 @app.command()
-def refresh(season: int = SeasonOpt, db_path: Path | None = DbOpt):
+def refresh(
+    season: int = SeasonOpt,
+    full: bool = typer.Option(
+        False, "--full", help="Also re-download a finished prior season, for stat corrections"
+    ),
+    db_path: Path | None = DbOpt,
+):
     """Pull latest stats, schedule, rosters, injuries from nflverse."""
     conn = _conn(db_path)
     console.print(f"Refreshing {season} (prior season {season - 1})...")
-    counts = ingest.refresh(conn, season, log=console.print)
+    counts = ingest.refresh(conn, season, log=console.print, full=full)
     for k, v in counts.items():
         console.print(f"  {k}: {v} rows")
     if counts.failures:

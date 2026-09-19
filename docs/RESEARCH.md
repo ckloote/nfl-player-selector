@@ -159,7 +159,7 @@ is what reads these pools.
 ## Backtesting
 
 ```bash
-uv run pool refresh --season 2025          # imports 2024 (prior) and 2025
+uv run pool refresh --season 2025          # 2025, and 2024 (prior) until it is settled
 uv run pool backtest --season 2025         # replay one season against the baselines
 uv run pool backtest --season 2017-2025 --detail
 uv run pool sweep --season 2017-2025       # grid-search the discount and prior weight

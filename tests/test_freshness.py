@@ -156,7 +156,8 @@ def test_failures_retain_previous_data_and_success_time_attempt_other_feeds(
     monkeypatch.setattr(
         ingest, "fetch_depth_charts", lambda s: calls.append(s) or original_depth(s)
     )
-    result = ingest.refresh(conn, 2026, log=lambda _: None)
+    # A settled prior season is skipped by default, and this is about its failures.
+    result = ingest.refresh(conn, 2026, log=lambda _: None, full=True)
     assert result.failures and calls == [2025, 2026]
     pd.testing.assert_frame_equal(
         before, db.read_df(conn, "SELECT * FROM player_weeks ORDER BY season, player_id")
@@ -403,3 +404,91 @@ def test_a_complete_refresh_retires_the_legacy_stamp_and_a_partial_one_keeps_it(
     ingest.refresh(conn, 2026, log=lambda _: None)
     assert db.get_meta(conn, "last_refresh_2026") is None
     assert not any("Legacy refresh timestamp" in w for w in freshness.report(conn, 2026, 1)[1])
+
+
+def _fetched(monkeypatch):
+    """Record which season each per-season feed was downloaded for."""
+    calls = []
+    for name in (
+        "fetch_player_stats",
+        "fetch_weekly_rosters",
+        "fetch_injuries",
+        "fetch_depth_charts",
+        "fetch_touchdowns",
+    ):
+        original = getattr(ingest, name)
+        monkeypatch.setattr(
+            ingest, name, lambda s, f=original, n=name: calls.append((n, s)) or f(s)
+        )
+    return calls
+
+
+def test_a_settled_prior_season_is_not_downloaded_again(tmp_path, feeds, monkeypatch):
+    """The fixture's 2025 is final and fully covered once loaded, so after the first refresh
+    only the shared schedule is recorded for it."""
+    conn = db.connect(tmp_path / "settled.db")
+    first = _fetched(monkeypatch)
+    assert not ingest.refresh(conn, 2026, log=lambda _: None).failures
+    assert {s for _, s in first} == {2025, 2026}, "nothing is settled before it is loaded"
+    before = conn.execute(
+        "SELECT feed, last_success FROM feed_status WHERE season = 2025 AND feed != 'schedule'"
+    ).fetchall()
+    first.clear()
+    lines = []
+    result = ingest.refresh(conn, 2026, log=lines.append)
+    assert not result.failures and result.skipped == [2025]
+    assert {s for _, s in first} == {2026}
+    assert any("2025 settled; not re-downloaded" in line for line in lines)
+    assert "games_2025" in result and "player_weeks_2025" not in result
+    after = conn.execute(
+        "SELECT feed, last_success FROM feed_status WHERE season = 2025 AND feed != 'schedule'"
+    ).fetchall()
+    assert [tuple(r) for r in after] == [tuple(r) for r in before]
+
+
+def test_full_downloads_a_settled_prior_season(tmp_path, feeds, monkeypatch):
+    path = tmp_path / "full.db"
+    ingest.refresh(db.connect(path), 2026, log=lambda _: None)
+    calls = _fetched(monkeypatch)
+    out = runner.invoke(app, ["refresh", "--full", "--db", str(path)])
+    assert out.exit_code == 0, out.stdout
+    assert "settled" not in out.stdout and "player_weeks_2025" in out.stdout
+    assert {s for _, s in calls} == {2025, 2026}
+    calls.clear()
+    out = runner.invoke(app, ["refresh", "--db", str(path)])
+    assert out.exit_code == 0 and "2025 settled" in out.stdout
+    assert {s for _, s in calls} == {2026}
+
+
+@pytest.mark.parametrize("gap", ["coverage", "score", "feed"])
+def test_a_prior_season_with_anything_missing_is_downloaded(tmp_path, feeds, monkeypatch, gap):
+    conn = db.connect(tmp_path / "gap.db")
+    ingest.refresh(conn, 2026, log=lambda _: None)
+    with conn:
+        if gap == "coverage":
+            conn.execute("UPDATE game_results SET complete = 0 WHERE game_id = 'g2025'")
+        elif gap == "score":
+            feeds.loc[feeds.season.eq(2025), ["home_score", "away_score"]] = None
+        else:
+            conn.execute("DELETE FROM feed_status WHERE season = 2025 AND feed = 'depth_charts'")
+    calls = _fetched(monkeypatch)
+    result = ingest.refresh(conn, 2026, log=lambda _: None)
+    assert not result.failures and not result.skipped
+    assert {s for _, s in calls} == {2025, 2026}
+    if gap == "coverage":
+        assert scoring.coverage(conn, 2025).complete.all(), "the gap is filled"
+
+
+def test_a_current_season_failure_is_still_reported_when_the_prior_is_skipped(
+    tmp_path, feeds, monkeypatch
+):
+    path = tmp_path / "current-failure.db"
+    ingest.refresh(db.connect(path), 2026, log=lambda _: None)
+
+    def offline(season):
+        raise ConnectionError("offline")
+
+    monkeypatch.setattr(ingest, "fetch_touchdowns", offline)
+    out = runner.invoke(app, ["refresh", "--db", str(path)])
+    assert out.exit_code == 1
+    assert "2025 settled" in out.stdout and "touchdowns 2026: FAILED" in out.stdout
