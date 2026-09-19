@@ -215,6 +215,11 @@ identify its displayed error as Monte Carlo precision, not overall forecast accu
 Also replace the categorical “the season is decided” in `cli._share_notes`: identical
 outcomes in 2,000 samples do not establish mathematical certainty.
 
+**Status:** resolved on branch `claude/review-display-notes`. `recommend` calls the pot share
+a model estimate and labels its ± as simulation noise. The identical-draws note says there
+was no variation across the simulated seasons rather than that the season is decided. The
+roadmap's Phase 3 status now says 3C closed without collection.
+
 **Where the size comes from**
 
 Counts include comments and docstrings; they measure maintenance surface, not executable

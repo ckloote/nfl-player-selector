@@ -1142,7 +1142,7 @@ def _render_slot(a: SlotAdvice, pool=None) -> None:
     )
     shares = {s.player_id: s for s in a.shares}
     own = shares.get(r.player_id)
-    share = f" · pot share {own.share:.1%} ± {own.se:.1%}" if own else ""
+    share = f" · pot share {own.share:.1%} (±{own.se:.1%} simulation noise)" if own else ""
     console.print(f"  Expected TDs {r.lam:.2f}{share} · deadline {_fmt_dt(r.deadline)}")
     if r.early:
         if a.hold and a.hold_alternative:
@@ -1337,7 +1337,7 @@ def _print_pool(pool, season: int, nudge: str | None, uncertain=()) -> None:
         # Both leave a season total unknown, so both now withhold the view instead.
         leader = max(pool.rivals, key=lambda r: r.season_tds)
         console.print(
-            f"[dim]Pot share vs {len(pool.rivals)} rivals: you {pool.my_tds} TD, "
+            f"[dim]Pot share (model estimate) vs {len(pool.rivals)} rivals: you {pool.my_tds} TD, "
             f"best rival {leader.display_name} {leader.season_tds}. "
             f"{config.WINPROB_SIMS} paired simulations, seed {config.WINPROB_SEED}.[/dim]"
         )
@@ -1413,8 +1413,8 @@ def _share_notes(a: SlotAdvice, pool) -> None:
         return
     if best.se == 0 and all(s.share == best.share for s in a.shares):
         console.print(
-            f"  [dim]Every remaining line gives the same {best.share:.0%} share: the season "
-            "is decided here and nothing in this slot changes it.[/dim]"
+            f"  [dim]Every remaining line gives the same {best.share:.0%} share, with no "
+            f"variation across {a.sims} simulated seasons: nothing in this slot moves it.[/dim]"
         )
         return
     if a.divergent:
