@@ -323,6 +323,25 @@ offensive-TD estimates with a warning where touchdown coverage is incomplete; fi
 and replay comparisons require complete coverage. Report archives appear in `status` but are
 excluded from projection inputs, snapshot replay, and feed freshness checks.
 
+## Keeping your data
+
+The nflverse feeds can be downloaded again, but your recorded picks, the pool's archived
+reports and the decisions `pool week` saved exist only in `data/pool.db`. Back it up after
+each report import:
+
+```bash
+uv run pool backup                          # data/backups/pool-20260920-2215.db
+uv run pool export picks --csv picks.csv    # your picks and what each scored, as CSV
+```
+
+`backup` copies the database with SQLite's online backup, checks that the copy reads back
+whole, and never overwrites a file (`--to` names another). Git ignores `data/backups/`, as it
+does the database, so copy that folder somewhere off this machine now and then. To restore,
+copy a backup over `data/pool.db` while no `pool` command is running.
+
+`export picks` writes one row per pick: week, slot, player, team and position, then the
+touchdowns, or why the pick is still pending. Without `--csv` it prints the same thing.
+
 ## Development
 
 ```bash

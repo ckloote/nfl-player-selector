@@ -15,3 +15,6 @@ data/experiments/
 
 # Delivered pool reports name every entrant; keep them out of the repository.
 data/reports/
+
+# Backups are copies of the database, and hold everything it does.
+data/backups/
