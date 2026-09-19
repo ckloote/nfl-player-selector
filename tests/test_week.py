@@ -11,7 +11,8 @@ import time_machine
 from rich.console import Console
 from typer.testing import CliRunner
 
-from pool import cli, db, freshness, ingest, scoring, weekly
+from pool import db, freshness, ingest, scoring, weekly
+from pool.cli import advice as shown
 from pool.cli import app
 from pool.recommend import advise_week
 from tests.conftest import proj_row
@@ -95,7 +96,7 @@ def week_db(tmp_path, monkeypatch):
         )
     conn.close()
     proj = frame(HOLD_WEEK)
-    monkeypatch.setattr(cli, "_projections", lambda conn, season, wk: proj[proj.week >= wk])
+    monkeypatch.setattr(shown, "_projections", lambda conn, season, wk: proj[proj.week >= wk])
     return path
 
 
@@ -556,8 +557,8 @@ def test_recommend_keeps_names_whole_at_eighty_columns_even_with_the_pot_share(m
     # A console of its own: setting `width` on the shared one would pin it for every test
     # after this, and those that widen it through COLUMNS would stop being able to.
     narrow = Console(width=80, record=True, file=io.StringIO())
-    monkeypatch.setattr(cli, "console", narrow)
-    cli._render_slot(qb, pool)
+    monkeypatch.setattr(shown, "console", narrow)
+    shown._render_slot(qb, pool)
     output = narrow.export_text()
     assert "…" not in output
     for name in long.values():

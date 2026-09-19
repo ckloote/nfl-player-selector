@@ -254,6 +254,13 @@ dataframe-engine rewrite to simplify this project.
 | Simplify | Personal cached scores versus computed entrant scores | Prefer one read-time scoring path. Consider retiring routine cache maintenance and making `score` a compatibility alias; preserve any explicitly desired “last scored” history separately. |
 | Archive in documentation | Completed phase plans, old review timelines, superseded result narratives | Keep provenance accessible from a history index. The main README should teach the current workflow. |
 
+**Status of the CLI split:** done on branch `claude/split-cli`. `pool/cli/` holds `common`,
+`advice`, `week`, `picks` and `reports`, with every command registered in `__init__.py` in
+its existing help order; the research CLI shares `common` instead of copying it. The
+cross-module private calls named above now have public names. `db._rows` and `state._norm`
+are the exceptions: their modules are fingerprinted, so they are renamed with the scoring
+consolidation, which moves the fingerprint once anyway.
+
 **Status of the research isolation:** done on branch `claude/research-group`. `backtest`,
 `benchmark`, `calibration`, `diagnostics`, `evaluate`, `models` and `verify` live in
 `src/pool/research/`, and their commands (with `captures`, `verify-capture` and the

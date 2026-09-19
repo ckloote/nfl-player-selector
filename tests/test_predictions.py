@@ -244,7 +244,7 @@ def test_the_last_prediction_that_beat_both_deadlines_is_the_one_scored(pool):
     _record(conn, BEFORE_ALL)
     _record(conn, AFTER_KICKOFF)
     _report(conn, 2, WEEK2, REPORT_AT)
-    chosen, _ = predictions._eligible(predictions.archived(conn, 2026), KICKOFF, REPORT_AT)
+    chosen, _ = predictions.eligible(predictions.archived(conn, 2026), KICKOFF, REPORT_AT)
     assert datetime.fromisoformat(chosen["observed_at"]) == datetime.fromisoformat(BEFORE_ALL)
 
 

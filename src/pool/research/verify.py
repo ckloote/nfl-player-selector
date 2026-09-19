@@ -55,7 +55,7 @@ def _advice_details(advice) -> dict:
     numpy scalars into plain numbers; comparing the live objects against the stored
     record reports every decision as differing in the encoding rather than the answer.
     """
-    return json.loads(capture._json({a.slot: capture._advice_detail(a) for a in advice}))
+    return json.loads(capture.to_json({a.slot: capture.advice_detail(a) for a in advice}))
 
 
 def _claims_hold(derived: dict | None, recorded: dict | None) -> bool:
@@ -296,7 +296,7 @@ def parity(conn: sqlite3.Connection, decision_id: str, *, allow_code_drift: bool
                     # Restored from the record for the same reason `reconstruct` restores
                     # it: rebuilding the opposition from today's standings would replay the
                     # decision against a pool that has since spent more weeks.
-                    pool=capture._pool_from_detail(detail.get("pool")),
+                    pool=capture.pool_from_detail(detail.get("pool")),
                 )
                 recorded = {
                     r["slot"]: json.loads(r["detail"])

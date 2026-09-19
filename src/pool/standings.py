@@ -114,7 +114,7 @@ def _optional(value):
     return None if pd.isna(value) else value
 
 
-def _score_rows(conn, season, rows, scores) -> list[EntrantPick]:
+def score_rows(conn, season, rows, scores) -> list[EntrantPick]:
     result = []
     for row in rows.itertuples():
         name, pid = _optional(row.player_name), _optional(row.player_id)
@@ -154,7 +154,7 @@ def entrant_scores(conn: sqlite3.Connection, season: int, *, weeks=None) -> list
         rows = entrants.entrant_picks(conn, season)
         if weeks is not None:
             rows = rows[rows.week.isin(weeks)]
-        return _score_rows(conn, season, rows, scoring.score_board(conn, season))
+        return score_rows(conn, season, rows, scoring.score_board(conn, season))
 
 
 def used_pools(
@@ -229,7 +229,7 @@ def _board(conn, season, week) -> Board:
     shown = week if week is not None else latest
     scores = scoring.score_board(conn, season)
     as_of = scoring.resolved_through(conn, season)
-    picks = _score_rows(conn, season, raw, scores)
+    picks = score_rows(conn, season, raw, scores)
     used = used_pools(conn, season)
     identities = entrants.members(conn, season)
     reported = {r.entrant_id: r for r in entrants.reported_totals(conn, season, shown).itertuples()}
