@@ -18,6 +18,7 @@ from . import config, db, scoring, state
 
 SCHEMA_VERSION = 1
 TOTAL_COLUMNS = ["reported_week", "reported_total", "reported_rank"]
+SLOT_ALIASES = {"WR": "FLEX", "TE": "FLEX", "WR/TE": "FLEX"}
 META_PREFIX = "pool_report:"
 IDENTITY_PROMPT = (
     "No entrant in the imported reports is marked as you, so the pot-share view and rival "
@@ -114,14 +115,55 @@ def _report_week(frame: pd.DataFrame, week: int | None) -> int:
     return week
 
 
+def _slot(name: str) -> str | None:
+    """The slot a column header or a `slot` value names, or None if it names none."""
+    upper = str(name).strip().upper()
+    upper = SLOT_ALIASES.get(upper, upper)
+    return upper if upper in config.SLOTS else None
+
+
+def _long(frame: pd.DataFrame) -> pd.DataFrame:
+    """One row per entrant and slot, from either layout a report may be typed in.
+
+    Reports arrive as a picture and are typed in by hand, and one row per entrant --
+    `entrant,QB,RB,FLEX` -- is a third of the rows to type. Everything after this reads the
+    long layout, so a wide file becomes exactly the rows it stands for and is checked like
+    any other. An empty cell is a no-pick, as an empty `player_name` is, and every other
+    column is carried to each of the entrant's rows.
+    """
+    columns = {c: slot for c in frame.columns if (slot := _slot(c))}
+    if not columns:
+        return frame
+    if {"slot", "player_name"} & set(frame.columns):
+        raise ValueError(
+            "Report mixes layouts: use slot and player_name columns, or one column per slot"
+        )
+    if len(set(columns.values())) != len(columns):
+        raise ValueError("Report has two columns for one slot (WR, TE and WR/TE all mean FLEX)")
+    if missing := set(config.SLOTS) - set(columns.values()):
+        raise ValueError(f"Report missing slot columns: {sorted(missing)}")
+    by_slot = {slot: column for column, slot in columns.items()}
+    rest = [c for c in frame.columns if c not in columns]
+    rows = [
+        {**{c: row[c] for c in rest}, "slot": slot, "player_name": row[by_slot[slot]]}
+        for _, row in frame.iterrows()
+        for slot in config.SLOTS
+    ]
+    return pd.DataFrame(rows, columns=[*rest, "slot", "player_name"])
+
+
 def transform_report(
     frame: pd.DataFrame, season: int, week: int
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Validate one complete week, separating pick and standing grains."""
+    frame = _long(frame)
     required = {"entrant", "slot", "player_name"}
     allowed = required | {"season", "week", *TOTAL_COLUMNS}
     if missing := required - set(frame.columns):
-        raise ValueError(f"Report missing required columns: {sorted(missing)}")
+        raise ValueError(
+            f"Report missing required columns: {sorted(missing)} "
+            "(or give one row per entrant: entrant,QB,RB,FLEX)"
+        )
     if extra := set(frame.columns) - allowed:
         raise ValueError(f"Unknown report columns: {sorted(extra)}")
     if frame.empty:
@@ -145,8 +187,7 @@ def transform_report(
     work["entrant_id"] = work.entrant.map(state.normalize_name)
     if work.entrant_id.eq("").any():
         raise ValueError("Entrant names must contain letters or numbers")
-    aliases = {"WR": "FLEX", "TE": "FLEX", "WR/TE": "FLEX"}
-    work["slot"] = work.slot.str.strip().str.upper().replace(aliases)
+    work["slot"] = work.slot.str.strip().str.upper().replace(SLOT_ALIASES)
     if unknown := set(work.slot) - set(config.SLOTS):
         raise ValueError(f"Unknown slots: {sorted(unknown)}; expected {list(config.SLOTS)}")
     if work.duplicated(["entrant_id", "slot"]).any():
@@ -405,6 +446,46 @@ def _write_report(conn, result, entrant_rows, picks, totals, me_id):
         )
 
 
+def _nearest_week(conn: sqlite3.Connection, season: int, week: int) -> int | None:
+    """The imported week an import of `week` is compared with: the latest before it, else
+    `week` itself, else the earliest after it."""
+    row = conn.execute(
+        "SELECT DISTINCT week FROM pool_picks WHERE season = ? "
+        "ORDER BY CASE WHEN week < ? THEN 0 WHEN week = ? THEN 1 ELSE 2 END, "
+        "CASE WHEN week < ? THEN -week ELSE week END LIMIT 1",
+        (season, week, week, week),
+    ).fetchone()
+    return None if row is None else int(row[0])
+
+
+def template(conn: sqlite3.Connection, season: int, week: int) -> tuple[str, int | None]:
+    """A report for `week` to type into, and the imported week its names came from.
+
+    One row per entrant with the names already written, taken from the week an import
+    of `week` will be compared with, so a filled-in template never trips the roster
+    check by a misspelling. The player cells are left empty, your own included: typing
+    your row from the report is what lets the import catch the pool registering a
+    different pick from the one you recorded.
+    """
+    source = _nearest_week(conn, season, week)
+    names = []
+    if source is not None:
+        names = [
+            row[0]
+            for row in conn.execute(
+                "SELECT e.display_name FROM pool_entrants e WHERE e.season = ? AND "
+                "e.entrant_id IN (SELECT entrant_id FROM pool_picks WHERE season = ? AND week = ?)",
+                (season, season, source),
+            )
+        ]
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow(["week", "entrant", *config.SLOTS])
+    for name in sorted(names, key=str.casefold):
+        writer.writerow([week, name, *("" for _ in config.SLOTS)])
+    return out.getvalue(), source
+
+
 def import_report(
     conn: sqlite3.Connection,
     season: int,
@@ -466,14 +547,9 @@ def import_report(
                 f"Week {week}: {int(games.complete.eq(1).sum())}/{len(games)} games complete; "
                 "report retained despite incomplete scoring coverage."
             )
-        previous = conn.execute(
-            "SELECT DISTINCT week FROM pool_picks WHERE season = ? "
-            "ORDER BY CASE WHEN week < ? THEN 0 WHEN week = ? THEN 1 ELSE 2 END, "
-            "CASE WHEN week < ? THEN -week ELSE week END LIMIT 1",
-            (season, week, week, week),
-        ).fetchone()
-        if previous:
-            result.previous_week = int(previous[0])
+        previous = _nearest_week(conn, season, week)
+        if previous is not None:
+            result.previous_week = previous
             old = {
                 r[0]
                 for r in conn.execute(

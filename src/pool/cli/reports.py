@@ -11,13 +11,59 @@ import pandas as pd
 import typer
 from rich.table import Table
 
-from .. import config, entrants
+from .. import config, entrants, weekly
 from .. import standings as st
 from .common import DbOpt, SeasonOpt, _conn, _week, console
 
 report_app = typer.Typer(
     help="Archive and read official weekly pool reports.", no_args_is_help=True
 )
+
+
+@report_app.command("template")
+def report_template(
+    week: int = typer.Option(..., "--week", "-w", help="Week the report covers"),
+    season: int = SeasonOpt,
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            "--out", help="File to write (default: reports/weekN.csv beside the database)"
+        ),
+    ] = None,
+    db_path: Path | None = DbOpt,
+):
+    """Write a report to type into: one row per entrant, names already filled in."""
+    conn = _conn(db_path)
+    try:
+        _week(conn, season, week)
+        text, source = entrants.template(conn, season, week)
+    finally:
+        conn.close()
+    path = out or (db_path or config.DB_PATH).parent / "reports" / f"week{week}.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x", encoding="utf-8", newline="") as stream:
+            stream.write(text)
+    except FileExistsError as exc:
+        console.print(f"{path} already exists; not overwritten.", style="red", markup=False)
+        raise typer.Exit(1) from exc
+    rows = text.count("\n") - 1
+    if source is None:
+        console.print(
+            f"Wrote {path} with no names: no report is imported for {season} yet, so add "
+            "one row per entrant.",
+            markup=False,
+        )
+    else:
+        console.print(
+            f"Wrote {path}: {rows} entrants, as in the week {source} report.", markup=False
+        )
+    console.print(
+        f"Type each pick under {', '.join(config.SLOTS)}; leave a cell empty for a no-pick. "
+        "Then check it:",
+        markup=False,
+    )
+    console.print(f"  {weekly.program()} report import {path} --check", markup=False)
 
 
 @report_app.command("import")
