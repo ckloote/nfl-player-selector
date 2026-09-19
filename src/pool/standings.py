@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from . import config, db, entrants, scoring, state
+from . import config, db, entrants, results, state
 
 
 @dataclass(frozen=True)
@@ -77,7 +77,6 @@ class Board:
     rows: tuple[Standing, ...]
     in_progress: tuple[EntrantPick, ...]
     leaders: tuple[Standing, ...]
-    cache_stale: bool
     report_conflicts: bool
     used_through: int | None
     season_weeks: int | None = None
@@ -125,8 +124,8 @@ def score_rows(conn, season, rows, scores) -> list[EntrantPick]:
         elif pid is None:
             value, status, reason = None, "unresolved", "name unresolved; re-import pool report"
         else:
-            gid = scoring.resolve_pick_game(conn, season, int(row.week), pid, gid)
-            score = scoring.score_pick(scores, int(row.week), pid, gid)
+            gid = results.resolve_pick_game(conn, season, int(row.week), pid, gid)
+            score = results.score_pick(scores, int(row.week), pid, gid)
             value, reason, note = score.tds, score.pending, score.note
             status = "pending" if reason else "final"
         result.append(
@@ -154,7 +153,7 @@ def entrant_scores(conn: sqlite3.Connection, season: int, *, weeks=None) -> list
         rows = entrants.entrant_picks(conn, season)
         if weeks is not None:
             rows = rows[rows.week.isin(weeks)]
-        return score_rows(conn, season, rows, scoring.score_board(conn, season))
+        return score_rows(conn, season, rows, results.score_board(conn, season))
 
 
 def used_pools(
@@ -227,8 +226,8 @@ def _board(conn, season, week) -> Board:
     raw = entrants.entrant_picks(conn, season)
     latest = int(raw.week.max()) if len(raw) else None
     shown = week if week is not None else latest
-    scores = scoring.score_board(conn, season)
-    as_of = scoring.resolved_through(conn, season)
+    scores = results.score_board(conn, season)
+    as_of = results.resolved_through(conn, season)
     picks = score_rows(conn, season, raw, scores)
     used = used_pools(conn, season)
     identities = entrants.members(conn, season)
@@ -297,12 +296,10 @@ def _board(conn, season, week) -> Board:
     imported_weeks = set(raw.week)
     mine = state.picks(conn, season)
     me = next((r for r in rows if r.is_me), None)
-    cache_stale, conflicts = False, False
+    conflicts = False
     for pick in mine.itertuples():
-        gid = scoring.resolve_pick_game(conn, season, int(pick.week), pick.player_id, pick.game_id)
-        score = scoring.score_pick(scores, int(pick.week), pick.player_id, gid)
-        if not score.pending and (pd.isna(pick.tds) or pick.tds != score.tds):
-            cache_stale = True
+        gid = results.resolve_pick_game(conn, season, int(pick.week), pick.player_id, pick.game_id)
+        score = results.score_pick(scores, int(pick.week), pick.player_id, gid)
         supplied = indexed.get((me.entrant_id, pick.week, pick.slot)) if me else None
         if supplied and supplied.status != "unresolved" and supplied.player_id != pick.player_id:
             conflicts = True
@@ -330,7 +327,6 @@ def _board(conn, season, week) -> Board:
         tuple(rows),
         tuple(sorted(in_progress, key=lambda p: (p.week, p.display_name.casefold(), p.slot))),
         tuple(r for r in rows if r.share),
-        cache_stale,
         conflicts,
         latest,
         _season_weeks(conn, season),

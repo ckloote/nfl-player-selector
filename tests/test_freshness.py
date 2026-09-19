@@ -281,23 +281,22 @@ def test_coverage_and_fallback_warnings_independent_of_recent_fetch(tmp_path, fe
     assert "legacy offensive-TD" in text
 
 
-def test_refresh_failure_returns_nonzero_and_score_refresh_preserves_previous_scores(
+def test_refresh_failure_returns_nonzero_and_score_refresh_still_shows_picks(
     tmp_path, feeds, monkeypatch
 ):
     path = tmp_path / "failure.db"
     conn = db.connect(path)
     ingest.refresh(conn, 2026, log=lambda _: None)
     state.record_pick(conn, 2026, 1, "QB", "q1", "Quarter One", "QB")
-    with conn:
-        conn.execute("UPDATE my_picks SET tds=4")
 
     def fail():
         raise ConnectionError("schedule download failed")
 
     monkeypatch.setattr(ingest, "fetch_schedules", fail)
     out = runner.invoke(app, ["score", "--refresh", "--db", str(path)])
-    assert out.exit_code == 1 and "stored scores retained" in out.stdout
-    assert state.picks(conn, 2026).tds.iloc[0] == 4
+    # Scored from the data the failed refresh kept, and still reported as a failure.
+    assert out.exit_code == 1 and "previous data retained" in out.stdout
+    assert "Quarter One" in out.stdout and "Season 2026 subtotal" in out.stdout
     assert runner.invoke(app, ["refresh", "--db", str(path)]).exit_code == 1
     assert (
         conn.execute(

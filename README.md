@@ -134,7 +134,6 @@ uv run pool recommend --week 5          # the full view of the same advice
 uv run pool plan                        # rest-of-season assignment
 uv run pool players --pos RB            # projection table for a slot
 uv run pool picks                       # your picks, scores, pending reasons and subtotals
-uv run pool score --week 3              # recompute recorded scores; --refresh fetches first
 uv run pool status --week 3             # feed attempts, coverage, freshness, fallbacks
 uv run pool unrecord 3 QB               # remove an incorrect entry
 uv run pool research predict score      # how the saved rival predictions have done
@@ -258,10 +257,8 @@ describes a split at the end, not a settled result. A reported no-pick is a fina
 unresolved name needs re-importing. Used players
 include every imported week, even one still being played; each entrant has an independent set,
 unresolved names add an unknown count, and repeated players are counted once with their weeks
-reported. Your own cached pick scores update only with `pool score`; standings prompts for it
-when the cache is empty or stale for a finished game. With matching recorded and reported picks
-and a current cache, `pool picks` and standings use the same scoring function and show the same
-TD count.
+reported. Your own picks are scored from the results each time they are read, so with matching
+recorded and reported picks, `pool picks` and standings show the same TD count.
 
 ## Scoring and data
 
@@ -277,11 +274,10 @@ final, a pick with no game of its own also scores **0** — the pool treats a pi
 player who is not playing as worth nothing — and says so, because the other way to reach
 that state is a team the schedule does not match. Missing or incomplete feeds remain
 **pending**, and so does a missing game while its week is still unfinished. Weekly and season
-subtotals are labeled incomplete while any picks remain pending. Stored scores survive missing
-results and appear as “last scored” while pending. If `score --refresh` partially fails, it
-retains existing scores, scores completed unscored picks from available local results, and exits
-nonzero. Use plain `score` to explicitly recompute existing scores from the retained local
-data.
+subtotals are labeled incomplete while any picks remain pending. Nothing is stored: a pick's
+touchdowns are read from the results whenever it is shown, so a correction upstream appears
+after the next refresh. `pool score`, which used to fill a stored copy, is kept as another
+name for `pool picks`.
 
 Refreshes bypass nflreadpy's cache, attempt independent feeds, and retain the previous
 dataset on download, parsing, or missing-file failures. A refresh covers the current season

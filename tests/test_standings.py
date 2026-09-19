@@ -3,7 +3,7 @@
 import pandas as pd
 import pytest
 
-from pool import scoring
+from pool import results, scoring
 from tests import test_workflow as workflow
 from tests.test_workflow import end, play, record
 
@@ -21,10 +21,10 @@ def test_shared_score_matches_personal_pick(local, rows, pid, slot, expected):
     conn, _ = local
     record(conn, **{slot: pid})
     scoring.import_touchdowns(conn, 2026, pd.DataFrame(rows))
-    board = scoring.score_board(conn, 2026)
-    game = scoring.resolve_pick_game(conn, 2026, 1, pid, "g1")
-    shared = scoring.score_pick(board, 1, pid, game)
-    mine = scoring.pick_results(conn, 2026, recompute=True).iloc[0]
+    board = results.score_board(conn, 2026)
+    game = results.resolve_pick_game(conn, 2026, 1, pid, "g1")
+    shared = results.score_pick(board, 1, pid, game)
+    mine = results.pick_results(conn, 2026).iloc[0]
     assert shared.tds == expected
     assert shared.pending == mine.pending_reason
     if expected is None:
@@ -96,7 +96,7 @@ def test_entrant_scores_share_counts_reasons_and_actual_game(pool):
 
     conn, _ = pool
     record(conn, QB="q1", RB="r1", FLEX="f1")
-    personal = scoring.pick_results(conn, 2026, recompute=True).set_index("slot")
+    personal = results.pick_results(conn, 2026).set_index("slot")
     reported = standings.entrant_scores(conn, 2026, weeks=[1])
     for pick in reported:
         if pick.entrant_id == "chris":
@@ -115,7 +115,7 @@ def test_entrant_scores_share_counts_reasons_and_actual_game(pool):
     )
     with conn:
         conn.execute("UPDATE games SET home_score = 29 WHERE game_id = 'g1'")
-    personal = scoring.pick_results(conn, 2026).set_index("slot")
+    personal = results.pick_results(conn, 2026).set_index("slot")
     for pick in standings.entrant_scores(conn, 2026):
         if pick.entrant_id == "chris":
             assert pick.tds is None
@@ -229,7 +229,7 @@ def test_resolved_prefix_cannot_skip_a_week(pool):
         )
         conn.execute("INSERT INTO game_results VALUES ('g4',2026,3,1,'complete',0,0,'now')")
     assert scoring.complete_weeks(conn, 2026) == [1, 3]
-    assert scoring.resolved_through(conn, 2026) == 1
+    assert results.resolved_through(conn, 2026) == 1
     report(conn, 3)
     assert standings.board(conn, 2026).as_of == 1
     with conn:
@@ -240,13 +240,13 @@ def test_resolved_prefix_cannot_skip_a_week(pool):
     assert all(r.season_total.missing == 3 for r in result.rows)
     with conn:
         conn.execute("DELETE FROM game_results WHERE week=1")
-    assert scoring.resolved_through(conn, 2026) is None
+    assert results.resolved_through(conn, 2026) is None
     result = standings.board(conn, 2026)
     assert result.as_of is None and not result.leaders and not result.final
     assert all(r.rank is None and r.share == 0 for r in result.rows)
 
 
-def test_recorded_future_picks_and_cache_nudge_without_writing(pool):
+def test_recorded_future_picks_show_in_progress_without_writing(pool):
     from datetime import datetime
 
     from pool import standings, state
@@ -262,17 +262,12 @@ def test_recorded_future_picks_and_cache_nudge_without_writing(pool):
     )
     before = state.picks(conn, 2026).copy()
     result = standings.board(conn, 2026)
-    assert result.cache_stale and len(result.in_progress) == 1
+    assert len(result.in_progress) == 1
     pick = result.in_progress[0]
     assert pick.source == "recorded" and pick.player_id == "q2" and pick.week == 2
     pd.testing.assert_frame_equal(state.picks(conn, 2026), before)
-    personal = scoring.pick_results(conn, 2026, week=1, recompute=True)
-    result = standings.board(conn, 2026)
-    assert not result.cache_stale
+    personal = results.pick_results(conn, 2026, week=1)
     assert result.rows[0].season_total.tds == int(personal.tds.sum())
-    with conn:
-        conn.execute("UPDATE my_picks SET tds=9 WHERE week=1 AND slot='QB'")
-    assert standings.board(conn, 2026).cache_stale
     report(conn, 2)
     result = standings.board(conn, 2026)
     assert result.report_conflicts
@@ -326,13 +321,10 @@ def test_cli_computed_and_reported_columns_final_tie_and_score_parity(pool, invo
     assert "Reported week TDs" in shown and "Reported total TDs" in shown
     assert "99" in shown and "123" in shown
     assert "Totals are touchdown counts, not points." in shown
-    assert "Run pool score" in shown
-    assert "pending: not scored; run pool score" in invoke("picks")
-    assert "Week 1 subtotal: 2 TDs; 0 pending" in invoke("score")
+    # Your picks are scored when they are read, so both views agree with no step between.
+    assert "pool score" not in shown
     assert "Season 2026 subtotal: 2 TDs; 0 pending" in invoke("picks")
-    shown = invoke("standings")
-    assert "Run pool score" not in shown
-    assert "Chris and Pat are tied for first with 2 TDs." in shown
+    assert "Week 1 subtotal: 2 TDs; 0 pending" in invoke("score")
 
 
 def test_cli_provisional_tie_distinguishes_unresolved_names(pool, invoke):

@@ -68,7 +68,7 @@ def archive(
         if table == "game_results":
             frame = frame.drop(columns="imported_at")
         frame = frame.sort_values(list(frame.columns), na_position="first").reset_index(drop=True)
-        payload[table] = {"columns": list(frame.columns), "rows": list(db._rows(frame))}
+        payload[table] = {"columns": list(frame.columns), "rows": list(db.sql_rows(frame))}
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
     digest = hashlib.sha256(raw).hexdigest()
     with db.transaction(conn):
@@ -159,7 +159,7 @@ def restore(
                         restored.executemany(
                             f"INSERT INTO {table} ({','.join(frame.columns)}) "
                             f"VALUES ({','.join('?' for _ in frame.columns)})",
-                            db._rows(frame),
+                            db.sql_rows(frame),
                         )
                 age = (
                     datetime.fromisoformat(stamp) - datetime.fromisoformat(row["observed_at"])

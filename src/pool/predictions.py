@@ -31,7 +31,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from . import config, db, entrants, rivals, scoring, standings
+from . import config, db, entrants, results, rivals, standings
 from .state import picks as personal_picks
 
 SCHEMA_VERSION = 1
@@ -257,7 +257,7 @@ def _decision_outcomes(conn, season, week, at, members):
     account for it, and a season total missing a score is indistinguishable from one that
     scored nothing. Gaps are (who, week, slot, status), with me as "you".
     """
-    scores = scoring.score_board(conn, season)
+    scores = results.score_board(conn, season)
     imports = {
         row["game_id"]: datetime.fromisoformat(row["imported_at"])
         for row in conn.execute(
@@ -282,8 +282,8 @@ def _decision_outcomes(conn, season, week, at, members):
     for pick in personal_picks(conn, season).itertuples():
         if datetime.fromisoformat(pick.recorded_at) > at:
             continue
-        gid = scoring.resolve_pick_game(conn, season, pick.week, pick.player_id, pick.game_id)
-        result = scoring.score_pick(scores, pick.week, pick.player_id, gid)
+        gid = results.resolve_pick_game(conn, season, pick.week, pick.player_id, pick.game_id)
+        result = results.score_pick(scores, pick.week, pick.player_id, gid)
         if pick.week < week:
             # What I recorded is what I submitted, so it stands in for the report's copy.
             cells[(me, pick.week, pick.slot)] = (
@@ -360,7 +360,7 @@ def predict(conn: sqlite3.Connection, season: int, week: int, proj: pd.DataFrame
         "season": season,
         "week": week,
         "top_n": rivals.TOP_N,
-        "as_of_week": scoring.resolved_through(conn, season),
+        "as_of_week": results.resolved_through(conn, season),
         "rivals": {},
     }
     for state in states:

@@ -184,7 +184,7 @@ def remove_pick(conn: sqlite3.Connection, season: int, week: int, slot: str) -> 
 
 
 # --- name lookup ------------------------------------------------------------
-def _norm(s: str) -> str:
+def normalize_name(s: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", s.lower()).strip()
 
 
@@ -193,8 +193,8 @@ def find_player(
 ) -> pd.DataFrame:
     """Match a typed name against the player pool. Returns 0, 1, or several rows."""
     cand = pool if positions is None else pool[pool.position.isin(positions)]
-    names = cand.player_name.map(_norm)
-    q = _norm(query)
+    names = cand.player_name.map(normalize_name)
+    q = normalize_name(query)
     exact = cand[names == q]
     if len(exact):
         return exact

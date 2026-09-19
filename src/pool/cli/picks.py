@@ -1,16 +1,15 @@
-"""Recording picks and reading them back: `record`, `unrecord`, `picks`, `score`, and the
-`status` and `refresh` of the data they are scored from.
+"""Recording picks and reading them back: `record`, `unrecord`, `picks`, and the `status`
+and `refresh` of the data they are scored from. `score` is the old name for `picks`.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import pandas as pd
 import typer
 from rich.table import Table
 
-from .. import capture, db, ingest, projections, scoring, snapshots, state
+from .. import capture, db, ingest, projections, results, snapshots, state
 from .common import DbOpt, SeasonOpt, WeekOpt, _conn, _status, _week, console
 
 
@@ -146,33 +145,21 @@ def unrecord(week: int, slot: str, season: int = SeasonOpt, db_path: Path | None
 
 
 def picks(season: int = SeasonOpt, db_path: Path | None = DbOpt):
-    """Show recorded picks."""
+    """Show recorded picks with their touchdowns as the results stand."""
     conn = _conn(db_path)
     _render_scores(conn, season)
 
 
-def _pick_results(
-    conn,
-    season: int,
-    week: int | None = None,
-    recompute: bool = False,
-    preserve_existing: bool = False,
-):
+def _render_scores(conn, season: int, week: int | None = None):
     try:
-        return scoring.pick_results(conn, season, week, recompute, preserve_existing)
+        all_picks = results.pick_results(conn, season)
     except state.PickError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1) from e
-
-
-def _render_scores(conn, season: int, week: int | None = None):
-    all_picks = _pick_results(conn, season)
     shown = all_picks if week is None else all_picks[all_picks.week == week]
     t = Table("Week", "Slot", "Player", "TDs / pending reason", "Recorded")
     for r in shown.itertuples():
-        value = str(int(r.tds)) if pd.notna(r.tds) else ""
-        if r.pending_reason:
-            value = f"pending: {r.pending_reason}" + (f" (last scored {value})" if value else "")
+        value = f"pending: {r.pending_reason}" if r.pending_reason else str(int(r.tds))
         recorded = r.recorded_at
         if "+" not in recorded and not recorded.endswith("Z"):
             recorded += " (legacy; timezone unknown)"
@@ -192,24 +179,17 @@ def _render_scores(conn, season: int, week: int | None = None):
 def score(
     week: int | None = typer.Option(None, "--week", "-w", help="Week (default: all picks)"),
     season: int = SeasonOpt,
-    refresh: bool = typer.Option(False, "--refresh", help="Refresh all feeds before scoring"),
+    refresh: bool = typer.Option(False, "--refresh", help="Refresh all feeds first"),
     db_path: Path | None = DbOpt,
 ):
-    """Recompute recorded picks with complete game results; defaults to local data."""
+    """Show recorded picks, as `pool picks` does; kept so the old name still works.
+
+    Picks are scored whenever they are read, so there is nothing left for this to do.
+    """
     conn = _conn(db_path)
     if week is not None:
         _week(conn, season, week)
-    failed = False
-    if refresh:
-        result = ingest.refresh(conn, season, log=console.print)
-        failed = bool(result.failures)
-    if failed:
-        console.print(
-            "[yellow]Refresh partially failed; stored scores retained. "
-            "Scoring completed unscored picks from available local results. "
-            "Run pool score without --refresh to recompute existing scores.[/yellow]"
-        )
-    _pick_results(conn, season, week, recompute=True, preserve_existing=failed)
+    failed = refresh and bool(ingest.refresh(conn, season, log=console.print).failures)
     _render_scores(conn, season, week)
     if failed:
         raise typer.Exit(1)

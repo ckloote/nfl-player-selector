@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 
 import pandas as pd
 
-from . import config, freshness, pit, predictions, scoring, state
+from . import config, freshness, pit, predictions, results, state
 from .recommend import Candidate, SlotAdvice
 
 ALTERNATIVES = 3
@@ -193,18 +193,18 @@ def record_command(
 def locked_results(conn: sqlite3.Connection, season: int, week: int) -> dict[str, tuple[str, str]]:
     """Each recorded pick this week, by slot: the player's name and his score so far.
 
-    Scored from the shared board rather than the `my_picks.tds` cache, which only `pool
-    score` updates, so a Thursday pick shows its touchdowns on Sunday without that step.
+    Scored the way `pool picks` and standings score it, from the results as they stand, so
+    a Thursday pick shows its touchdowns on Sunday.
     """
     picks = state.picks(conn, season)
     picks = picks[picks.week.eq(week)]
     if picks.empty:
         return {}
-    board = scoring.score_board(conn, season)
+    board = results.score_board(conn, season)
     out = {}
     for pick in picks.itertuples():
-        game = scoring.resolve_pick_game(conn, season, week, pick.player_id, pick.game_id)
-        score = scoring.score_pick(board, week, pick.player_id, game)
+        game = results.resolve_pick_game(conn, season, week, pick.player_id, pick.game_id)
+        score = results.score_pick(board, week, pick.player_id, game)
         out[pick.slot] = (
             pick.player_name,
             "pending" if score.pending else f"{score.tds} TD, final",

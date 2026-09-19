@@ -112,13 +112,30 @@ class Ranked:
     score: float  # the predictor's own ordering value; equals lam for greedy and naive
 
 
+def _open(proj: pd.DataFrame) -> pd.DataFrame:
+    """Every cell a rival may still hold: each available player, whether or not his game
+    has kicked off.
+
+    My pick deadline is not theirs. A game that has started may already hold their pick,
+    made before it did, and until a report says so that pick is unknown rather than
+    impossible. Live loading leaves the deadline out of `hard_eligible` and the snapshot
+    replay folds it in, so reading the column as given simulated different rivals at the
+    same instant: a Friday decision, replayed, kept every Thursday player from them.
+    Availability, which `projections` builds `hard_eligible` from before any deadline, is
+    the part both paths agree on.
+    """
+    if "avail_mult" not in proj:
+        return proj
+    return proj.assign(hard_eligible=proj.avail_mult.gt(0))
+
+
 def _column(proj: pd.DataFrame, slot: str, week: int, used_ids):
     """This week's candidates through the optimizer's own matrix builder.
 
     Going through `build_matrix` rather than filtering by hand is what makes a predictor
     comparable to the tool's own advice: same candidate pool, same eligibility, same cap.
     """
-    players, values, _ = build_matrix(proj, slot, [week], week, set(used_ids))
+    players, values, _ = build_matrix(_open(proj), slot, [week], week, set(used_ids))
     if not len(players):
         return None, None, None
     column = values[:, 0]
@@ -167,7 +184,7 @@ def predict_optimizer(proj, slot, week, state: RivalState, *, top_n: int = TOP_N
     modelled as running this program, which is the most sophisticated opponent worth
     positing and a useful ceiling even if nobody is actually doing it.
     """
-    plan = plan_slot(proj, slot, week, set(state.used_ids))
+    plan = plan_slot(_open(proj), slot, week, set(state.used_ids))
     if not len(plan.players) or week not in plan.weeks:
         return []
     col = plan.weeks.index(week)
@@ -189,7 +206,7 @@ def remaining_matrix(proj, slot: str, week: int, weeks, used_ids):
     Rolling a season out scenario by scenario would otherwise rebuild this matrix for every
     draw; it is the expensive part and it does not change between them.
     """
-    players, values, _ = build_matrix(proj, slot, list(weeks), week, set(used_ids))
+    players, values, _ = build_matrix(_open(proj), slot, list(weeks), week, set(used_ids))
     return players, values
 
 
