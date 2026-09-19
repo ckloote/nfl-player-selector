@@ -17,19 +17,16 @@ from pool import capture, config, snapshots
 from pool import projections as P
 from pool.cli import app
 from pool.research import verify
-from tests.support.decisions import DECISION, POST_SUN, POST_THU, PRE_WEEK3, decide, publish, staged
+from tests.support.decisions import (
+    DECISION,
+    POST_SUN,
+    PRE_WEEK3,
+    archived,
+    decide,
+    publish,
+    staged,
+)
 from tests.support.season import SEASON, archive_all
-
-
-def _archived(tmp_path):
-    """A week-3 decision on Friday, with the Thursday game played and archived."""
-    conn, unplayed = staged(tmp_path)
-    archive_all(conn, PRE_WEEK3)
-    publish(conn, unplayed, "thursday")
-    for feed in ("player_stats", "touchdowns"):
-        snapshots.archive(conn, SEASON, feed, observed_at=POST_THU)
-    return conn, unplayed
-
 
 BACKDATED = "2024-09-20T14:00:00+00:00"  # after every archived feed, before the decision
 
@@ -38,7 +35,7 @@ def test_two_decisions_in_one_week_are_two_decisions(tmp_path):
     """One decision per week is the replay's convention, not the pool's. Both events
     have to survive as separate decisions or the Thursday-to-Sunday news change is not
     in the record at all."""
-    conn, _ = _archived(tmp_path)
+    conn, _ = archived(tmp_path)
     early, _, _ = decide(conn, 3, datetime.fromisoformat(PRE_WEEK3))
     late, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
     found = verify.decisions(conn, SEASON)
@@ -52,7 +49,7 @@ def test_a_captured_decision_matches_a_snapshot_replay_of_the_same_instant(tmp_p
     """Every replay assumes the live path and the archive are the same function of the
     same inputs. Until now that was checked only inside one process on a staged
     database, never against a decision that had actually been captured."""
-    conn, unplayed = _archived(tmp_path)
+    conn, unplayed = archived(tmp_path)
     decision_id, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
     # Everything after the decision arrives before the check is run.
     publish(conn, unplayed, "rest")
@@ -71,7 +68,7 @@ def test_the_deadline_is_reconciled_rather_than_compared(tmp_path):
     recommender; snapshot replay folds it in. Comparing the two columns would report the
     contract as a defect, so the captured status is reconciled against the replay's
     exclusion instead -- which is the same fact, stated where it is true."""
-    conn, _ = _archived(tmp_path)
+    conn, _ = archived(tmp_path)
     decision_id, proj, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
 
     stored = capture.load_surface(conn, capture.events(conn, SEASON).surface_hash.iloc[0])
@@ -89,7 +86,7 @@ def test_the_deadline_is_reconciled_rather_than_compared(tmp_path):
 def test_parity_names_the_column_that_moved(tmp_path, monkeypatch):
     """A silent divergence is the failure this exists to catch, so the report has to say
     which column moved and by how much rather than returning a bare false."""
-    conn, _ = _archived(tmp_path)
+    conn, _ = archived(tmp_path)
     decision_id, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
     real = P.build_projections
 
@@ -112,7 +109,7 @@ def test_a_decision_made_while_an_earlier_week_was_unfinished_reaches_parity(tmp
     never did, so a faithfully archived decision could not be checked -- and because the
     archive is immutable, no later refresh could ever change that. Replay now rebuilds
     what the live path read. Research runs keep the stricter gate by asking for it."""
-    conn, unplayed = _archived(tmp_path)
+    conn, unplayed = archived(tmp_path)
     decision_id, _, _ = decide(conn, 4, datetime.fromisoformat(DECISION))
     # Everything after the decision arrives before the check is run.
     publish(conn, unplayed, "rest")
@@ -145,7 +142,7 @@ def test_reconstruction_refuses_a_source_tree_it_was_not_captured_under(tmp_path
     """The recommender's behaviour is not carried by the recorded constants alone, so a
     reconstruction under different code is reported as unverified rather than as a
     matching decision."""
-    conn, _ = _archived(tmp_path)
+    conn, _ = archived(tmp_path)
     decision_id, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
     assert verify.reconstruction(conn, decision_id)["ok"]
     capture._code_identity.cache_clear()
@@ -159,7 +156,7 @@ def test_drift_outside_the_decision_path_is_reported_and_still_verifies(tmp_path
     about it is not. A verified row indistinguishable from a clean one hides the tolerance
     -- and hides it in the CLI, which is itself outside the closure, so its silence is not
     evidence of anything."""
-    conn, unplayed = _archived(tmp_path)
+    conn, unplayed = archived(tmp_path)
     decision_id, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
     publish(conn, unplayed, "rest")
 
@@ -206,7 +203,7 @@ def test_an_overridden_fingerprint_is_not_reported_as_harmless_drift(tmp_path, m
     """`--allow-code-drift` lets a decision pass with the enforced fingerprint moved. That
     is an override, not the narrow fingerprint doing its job, and reporting it as code
     moving outside the decision path asserts the opposite of what happened."""
-    conn, unplayed = _archived(tmp_path)
+    conn, unplayed = archived(tmp_path)
     decision_id, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
     publish(conn, unplayed, "rest")
     _moved(monkeypatch, decision_hash="the decision path moved too")
@@ -268,7 +265,7 @@ def test_the_reconstruction_wrapper_keeps_the_constants_diagnostic(tmp_path):
     """The drift record said which settings had moved before the fingerprint work wrapped
     it. Returning only the fingerprint comparison drops that silently, and a diagnostic
     nothing reads yet is exactly the kind that rots unnoticed."""
-    conn, _ = _archived(tmp_path)
+    conn, _ = archived(tmp_path)
     decision_id, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
     assert verify.reconstruction(conn, decision_id)["drift"]["constants_changed"] == {}
 
@@ -282,7 +279,7 @@ def test_a_submission_links_to_the_decision_it_names_not_the_latest(tmp_path):
     """With a Thursday and a Sunday decision in one week, "the most recent advice for
     this slot" is whichever happened last, which is not the same thing as the one the
     pick came from."""
-    conn, _ = _archived(tmp_path)
+    conn, _ = archived(tmp_path)
     early, proj, _ = decide(conn, 3, datetime.fromisoformat(PRE_WEEK3))
     late, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
     player = proj[proj.week.eq(3) & proj.slot.eq("QB")].player_id.iloc[0]
@@ -298,7 +295,7 @@ def test_a_submission_links_to_the_decision_it_names_not_the_latest(tmp_path):
 def test_a_named_decision_that_does_not_exist_is_refused(tmp_path):
     """Minting a fresh id for a typo would write an event that reconstructs against
     nothing, and it would look exactly like a pick submitted without advice."""
-    conn, _ = _archived(tmp_path)
+    conn, _ = archived(tmp_path)
     decide(conn, 3, datetime.fromisoformat(DECISION))
     with pytest.raises(ValueError, match="No captured decision"):
         capture.record_action(
@@ -309,7 +306,7 @@ def test_a_named_decision_that_does_not_exist_is_refused(tmp_path):
 def test_an_unnamed_submission_still_records_how_it_was_linked(tmp_path):
     """The fallback is allowed -- a pick can be entered without running `recommend` --
     but a later reader must not have to guess which of the two links this was."""
-    conn, _ = _archived(tmp_path)
+    conn, _ = archived(tmp_path)
     decide(conn, 3, datetime.fromisoformat(DECISION))
     capture.record_action(conn, SEASON, 3, "QB", "submitted", "AAA-QB1", {})
     events = capture.events(conn, SEASON)
@@ -321,7 +318,7 @@ def test_a_named_link_and_the_fallback_stay_distinguishable(tmp_path):
     """A deliberate `--decision` link and the most-recent-advice fallback are different
     claims about which decision a pick came from, and with two decisions in a week the
     fallback is whichever happened last."""
-    conn, _ = _archived(tmp_path)
+    conn, _ = archived(tmp_path)
     early, proj, _ = decide(conn, 3, datetime.fromisoformat(PRE_WEEK3))
     late, later, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
     named = proj[proj.week.eq(3) & proj.slot.eq("QB")].player_id.iloc[0]
@@ -345,7 +342,7 @@ def test_an_observation_archived_afterwards_is_not_agreement(tmp_path):
     Both sides then move together, so an observation stamped before the decision but
     written after it changes what the replay reads while the comparison goes on
     reporting agreement -- and identical bytes are still two different readings."""
-    conn, _ = _archived(tmp_path)
+    conn, _ = archived(tmp_path)
     decision_id, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
     assert verify.parity(conn, decision_id)["ok"]
 
@@ -362,7 +359,7 @@ def test_parity_survives_a_constant_that_moved_after_the_decision(tmp_path):
     today's would report a configuration change as a live/archive divergence -- and would
     report it while reconstruction passed, because the stored surface already has the old
     multiplier in it."""
-    conn, _ = _archived(tmp_path)
+    conn, _ = archived(tmp_path)
     decision_id, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
     assert verify.parity(conn, decision_id)["ok"]
 
@@ -375,7 +372,7 @@ def test_parity_survives_a_constant_that_moved_after_the_decision(tmp_path):
 def test_the_cli_lists_and_verifies_what_it_captured(tmp_path):
     """The read side existed only as a library API, so nothing a person could run said
     whether a captured decision was any good."""
-    conn, unplayed = _archived(tmp_path)
+    conn, unplayed = archived(tmp_path)
     decide(conn, 3, datetime.fromisoformat(DECISION))
     publish(conn, unplayed, "rest")
     conn.commit()
@@ -426,7 +423,7 @@ def test_the_cli_fails_loudly_when_a_decision_cannot_be_verified(tmp_path):
 def test_verifying_a_season_with_no_decisions_is_not_a_verification(tmp_path):
     """Exiting zero with nothing checked would tell a caller the season's decisions verify
     when there are none."""
-    conn, _ = _archived(tmp_path)
+    conn, _ = archived(tmp_path)
     conn.commit()
     conn.close()
     result = CliRunner().invoke(
@@ -451,7 +448,7 @@ def test_the_listed_id_is_enough_to_name_a_decision(tmp_path):
 
     from pool.research import cli as research_cli
 
-    conn, _ = _archived(tmp_path)
+    conn, _ = archived(tmp_path)
     early, _, _ = decide(conn, 3, datetime.fromisoformat(PRE_WEEK3))
     late, _, _ = decide(conn, 3, datetime.fromisoformat(DECISION))
     assert research_cli._decision_id(conn, early[:12]) == early

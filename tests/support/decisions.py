@@ -2,11 +2,11 @@
 Sunday games still to come, and a way to capture a decision at any instant.
 """
 
-from pool import capture, config, db, state
+from pool import capture, config, db, snapshots, state
 from pool import projections as P
 from pool.recommend import advise_week
 
-from .season import SEASON, seed_season
+from .season import SEASON, archive_all, seed_season
 
 THU_KICK, SUN_KICK = "2024-09-19T20:15", "2024-09-22T13:00"
 PRE_WEEK3 = "2024-09-19T18:00:00+00:00"  # Thursday afternoon, before kickoff
@@ -104,3 +104,13 @@ def decide(conn, week, decided, used=None, locked=None):
         conn, SEASON, week, proj, advice, used, locked, decision_at=decided
     )
     return decision_id, proj, advice
+
+
+def archived(tmp_path):
+    """A week-3 decision on Friday, with the Thursday game played and archived."""
+    conn, unplayed = staged(tmp_path)
+    archive_all(conn, PRE_WEEK3)
+    publish(conn, unplayed, "thursday")
+    for feed in ("player_stats", "touchdowns"):
+        snapshots.archive(conn, SEASON, feed, observed_at=POST_THU)
+    return conn, unplayed
