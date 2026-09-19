@@ -485,7 +485,7 @@ def test_recommend_prints_a_share_beside_every_expected_touchdown(seeded, wide):
     assert result.exit_code == 0, result.output
     assert "Pot share" in result.output and "vs EV" in result.output
     assert "pot share" in result.output, "the recommended pick carries its own share"
-    assert "Pot share vs 2 rivals" in result.output
+    assert "Pot share (model estimate) vs 2 rivals" in result.output
 
 
 def test_recommend_without_reports_says_so_rather_than_printing_zeroes(local, wide):
@@ -525,7 +525,7 @@ def test_recommend_without_an_identity_still_advises_and_says_what_turns_the_vie
     assert result.exit_code == 0, result.output
     assert "PICK:" in result.output
     assert "Pot share withheld" in result.output and '--me "Your Name"' in result.output
-    assert "Pot share vs" not in result.output and "vs EV" not in result.output
+    assert "Pot share (model estimate) vs" not in result.output and "vs EV" not in result.output
     assert "predict record" not in result.output
 
 
@@ -873,7 +873,7 @@ def test_recommend_says_why_the_share_is_withheld_and_still_advises(seeded, wide
     assert "PICK:" in result.output
     assert "Pot share withheld; the expected-TD advice below is unaffected." in result.output
     assert "Week 1: 5 picks are not final yet." in result.output
-    assert "Pot share vs" not in result.output, "no partial totals"
+    assert "Pot share (model estimate) vs" not in result.output, "no partial totals"
     assert "vs EV" not in result.output
 
 
@@ -972,3 +972,27 @@ def test_the_sweep_does_not_touch_the_advice_it_was_given():
         _sensitivity(proj, 1, advice, pool, {})
         after = [(a.slot, [s.player_id for s in a.shares], a.sims) for a in advice]
     assert before == after
+
+
+def test_the_share_on_screen_is_a_simulation_estimate_not_a_certainty(monkeypatch):
+    """The review's wording notes: the ± is Monte Carlo precision, and identical draws are
+    not proof that the season is settled."""
+    import dataclasses
+    import io
+
+    from rich.console import Console
+
+    from pool import cli
+
+    pool = rivals.PoolState((rival("pat", 2, {"qa"}), rival("jo", 1)), 1)
+    with config.override(WINPROB_SIMS=300):
+        qb = advise_week(frame(), 1, set(), {}, now=NOW, pool=pool)[0]
+    same = [dataclasses.replace(s, share=0.25, se=0.0, delta=0.0, delta_se=0.0) for s in qb.shares]
+    for advice in (qb, dataclasses.replace(qb, shares=same)):
+        out = Console(width=120, record=True, file=io.StringIO())
+        monkeypatch.setattr(cli, "console", out)
+        cli._render_slot(advice, pool)
+        text = out.export_text()
+        assert "simulation noise)" in text
+        assert "decided" not in text
+    assert "no variation across 300 simulated seasons" in text
