@@ -556,7 +556,7 @@ def test_a_decision_made_against_rivals_reconstructs_from_its_own_record(seeded)
     """The capture is sufficient or it is decoration. Re-deriving the advice from the
     stored surface has to reproduce the shares too, which it can only do if the rival
     state behind them was written down beside them."""
-    from pool import capture, predictions, prospective, state
+    from pool import capture, predictions, state, verify
 
     conn, _ = seeded
     now = state.eastern_now(datetime(2026, 9, 19, 12, 0, tzinfo=UTC))
@@ -578,14 +578,14 @@ def test_a_decision_made_against_rivals_reconstructs_from_its_own_record(seeded)
             decision_at=state.decision_instant(now),
             pool=pool,
         )
-        rebuilt = prospective.reconstruction(conn, decision_id)
+        rebuilt = verify.reconstruction(conn, decision_id)
     assert rebuilt["ok"], rebuilt
 
 
 def test_a_capture_that_forgets_the_opposition_cannot_re_derive_its_own_shares(seeded):
     """The negative of the test above: without the pool on the surface, reconstruction
     reports the decision as differing from itself. This is what pins the storage."""
-    from pool import capture, predictions, prospective, state
+    from pool import capture, predictions, state, verify
 
     conn, _ = seeded
     now = state.eastern_now(datetime(2026, 9, 19, 12, 0, tzinfo=UTC))
@@ -605,7 +605,7 @@ def test_a_capture_that_forgets_the_opposition_cannot_re_derive_its_own_shares(s
             decision_at=state.decision_instant(now),
             pool=None,
         )
-        rebuilt = prospective.reconstruction(conn, decision_id)
+        rebuilt = verify.reconstruction(conn, decision_id)
     assert not rebuilt["ok"] and rebuilt["reason"] == "re-derived advice differs"
 
 
@@ -654,7 +654,7 @@ def test_a_record_is_checked_on_what_it_claims_not_on_what_it_never_stored(seede
     a key it never had it makes no claim.
     """
     from pool import predictions, state
-    from pool.prospective import _advice_details, _claims_hold
+    from pool.verify import _advice_details, _claims_hold
 
     conn, _ = seeded
     now = state.eastern_now(datetime(2026, 9, 19, 12, 0, tzinfo=UTC))
@@ -881,7 +881,7 @@ def test_a_withheld_decision_is_captured_and_replays_without_a_share(seeded):
     """The refusal changes the advice, so the capture has to carry it: replayed without
     it, the decision would compute a share the original declined to. A complete state
     stores nothing extra, so it hashes as it did before the field existed."""
-    from pool import capture, predictions, prospective, state
+    from pool import capture, predictions, state, verify
 
     conn, _ = seeded
     assert "withheld" not in capture._pool_detail(predictions.pool_state(conn, 2026, 2))
@@ -907,7 +907,7 @@ def test_a_withheld_decision_is_captured_and_replays_without_a_share(seeded):
             decision_at=state.decision_instant(now),
             pool=pool,
         )
-        rebuilt = prospective.reconstruction(conn, decision_id)
+        rebuilt = verify.reconstruction(conn, decision_id)
     assert rebuilt["ok"], rebuilt
 
 

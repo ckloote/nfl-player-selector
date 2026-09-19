@@ -1044,7 +1044,7 @@ def test_the_enforced_fingerprint_covers_the_decision_path_and_only_that():
         "ingest",
         "entrants",
         "diagnostics",
-        "prospective",
+        "verify",
         "capture",
         "benchmark",
     }

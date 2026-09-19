@@ -29,11 +29,11 @@ from . import (
     pit,
     predictions,
     projections,
-    prospective,
     scoring,
     simulate,
     snapshots,
     state,
+    verify,
     weekly,
 )
 from . import evaluate as ev
@@ -2285,30 +2285,6 @@ def diagnose(
         raise typer.Exit(1) from exc
 
 
-def _capture_weeks(conn, season: int, week: int | None) -> list[int]:
-    if week is not None:
-        return [week]
-    rows = conn.execute(
-        "SELECT DISTINCT week FROM decision_events WHERE season = ? ORDER BY week", (season,)
-    ).fetchall()
-    return [int(r["week"]) for r in rows]
-
-
-def _adhoc_window(conn, season: int, week: int | None) -> dict:
-    """A window for checking captures directly, outside any protocol.
-
-    It carries the season, the weeks that have captures and the live role source, which
-    is all the mechanical checks read. It declares no floors and evaluates none: a
-    reconstruction or parity result is a fact about one decision, and reading it against
-    a threshold is what the dated protocol is for.
-    """
-    return {
-        "season": season,
-        "collection_weeks": _capture_weeks(conn, season, week),
-        "role_source": prospective.ROLE_SOURCE,
-    }
-
-
 @app.command()
 def captures(
     season: int = SeasonOpt,
@@ -2321,13 +2297,15 @@ def captures(
     if decision:
         _one_capture(conn, decision)
         return
-    spec = _adhoc_window(conn, season, week)
-    found = prospective.decisions(conn, spec)
+    found = verify.decisions(conn, season, week)
     if not len(found):
         console.print(f"[yellow]No captured decisions for {season}.[/yellow]")
         return
     events = capture.events(conn, season)
-    t = Table("Decision", "Week", "Event", "Decision time (UTC)", "Events", "Submitted")
+    t = Table("Decision", "Week")
+    t.add_column("Made", no_wrap=True)
+    t.add_column("Events")
+    t.add_column("Submitted")
     for row in found.itertuples():
         mine = events[events.decision_id.eq(row.decision_id)]
         kinds = mine.kind.value_counts().to_dict()
@@ -2335,12 +2313,16 @@ def captures(
         t.add_row(
             row.decision_id[:12],
             str(row.week),
-            row.event,
-            row.decision_at,
+            _made(row.decision_at),
             ", ".join(f"{k}x{v}" for k, v in sorted(kinds.items())),
             ", ".join(f"{r.slot}:{r.player_id}" for r in submitted.itertuples()) or "-",
         )
     console.print(t)
+
+
+def _made(decision_at: str) -> str:
+    """When a decision was made, on the Eastern clock its deadlines are read on."""
+    return _fmt_dt(state.eastern_now(datetime.fromisoformat(decision_at)))
 
 
 def _one_capture(conn, decision_id: str) -> None:
@@ -2427,28 +2409,27 @@ def verify_capture(
     path and replay are not the same function, which is what every replay assumes.
     """
     conn = _conn(db_path)
-    spec = _adhoc_window(conn, season, week)
-    found = prospective.decisions(conn, spec)
+    found = verify.decisions(conn, season, week)
     if decision:
         found = found[found.decision_id.eq(decision)]
         if not len(found):
             console.print(f"[red]No captured decision {decision} in {season}[/red]")
             raise typer.Exit(1)
     if not len(found):
-        # Nothing verified is not verification. A caller running this command on its own
-        # gets no completeness check anywhere else, and an exit code of zero here would
-        # tell it the window is sound when the window is empty.
+        # Nothing verified is not verification: exiting zero here would tell a caller the
+        # season's decisions check out when there are none to check.
         console.print(f"[red]No captured decisions for {season}; nothing was verified.[/red]")
         raise typer.Exit(1)
-    t = Table("Decision", "Week", "Event", "Reconstructs", "Parity", "Detail")
+    t = Table("Decision", "Week")
+    t.add_column("Made", no_wrap=True)
+    for name in ("Reconstructs", "Parity", "Detail"):
+        t.add_column(name)
     failed = 0
     overridden = 0
     tolerated = 0
     for row in found.itertuples():
-        rebuilt = prospective.reconstruction(
-            conn, row.decision_id, allow_code_drift=allow_code_drift
-        )
-        matched = prospective.parity(conn, row.decision_id, spec, allow_code_drift=allow_code_drift)
+        rebuilt = verify.reconstruction(conn, row.decision_id, allow_code_drift=allow_code_drift)
+        matched = verify.parity(conn, row.decision_id, allow_code_drift=allow_code_drift)
         ok = rebuilt["ok"] and matched["ok"]
         failed += not ok
         notes = [n for n in (rebuilt.get("reason"), matched.get("reason")) if n]
@@ -2472,7 +2453,7 @@ def verify_capture(
         t.add_row(
             row.decision_id[:12],
             str(row.week),
-            row.event,
+            _made(row.decision_at),
             "[green]yes[/green]" if rebuilt["ok"] else "[red]no[/red]",
             "[green]yes[/green]" if matched["ok"] else "[red]no[/red]",
             "; ".join(notes) or "-",
@@ -2498,30 +2479,6 @@ def verify_capture(
     console.print(
         f"[green]All {len(found)} captured decisions reconstruct and match replay.[/green]"
     )
-
-
-@app.command()
-def baseline(
-    config_path: Annotated[Path, typer.Option("--config", help="Phase 3C protocol TOML")],
-    out: Annotated[Path, typer.Option("--out", help="Where to write the baseline export")],
-    db_path: Path | None = DbOpt,
-    allow_code_drift: bool = typer.Option(
-        False, help="Describe decisions captured under a different source tree"
-    ),
-):
-    """Describe the captured prospective decisions under a dated collection protocol.
-
-    Descriptive only: it fits no correction, promotes no candidate and changes nothing.
-    The protocol declares the window, the populations and the floors before any decision
-    is captured, so none of them can be chosen once the numbers exist.
-    """
-    try:
-        spec = prospective.resolve(config_path)
-        conn = _conn(db_path)
-        prospective.export(conn, spec, out, allow_code_drift=allow_code_drift, log=console.print)
-    except (ValueError, OSError, KeyError) as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1) from exc
 
 
 @app.command()
