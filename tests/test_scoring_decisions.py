@@ -280,7 +280,7 @@ def test_capture_stores_final_results_and_survives_later_corrections(local):
     from dataclasses import replace
     from datetime import UTC, datetime
 
-    from pool import capture, predictions, prospective, scoring
+    from pool import capture, predictions, scoring, verify
     from tests import test_predictions as log
     from tests.test_workflow import end, play
 
@@ -319,7 +319,7 @@ def test_capture_stores_final_results_and_survives_later_corrections(local):
             conn, 2026, 1, proj, advice, set(), {}, decision_at=now, pool=pool
         )
     scoring.import_touchdowns(conn, 2026, pd.DataFrame([end(), end("g2", 0, 0)]))
-    result = prospective.reconstruction(conn, decision)
+    result = verify.reconstruction(conn, decision)
     assert result["ok"], result
 
 

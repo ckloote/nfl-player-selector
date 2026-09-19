@@ -35,8 +35,6 @@ decision path, an unrelated feature does not make yesterday's captures unverifia
 ```bash
 uv run pool captures --season 2026 --week 1          # captured decisions, or one in full
 uv run pool verify-capture --season 2026             # reconstruction and live/snapshot parity
-uv run pool baseline --config experiments/phase3c-baseline.toml \
-  --out experiments/results/phase3c-baseline         # the descriptive export and dated note
 ```
 
 The existing 2026 captures require
@@ -50,8 +48,13 @@ override, which explicitly reports that the fingerprint check was bypassed. The 
 are the three captures that carry a pot share (`cf9cc9e5d64d`, `8edc0f08b08e`,
 `fd9c03a2946a`): a later fix changed the pot-share arithmetic, so current code re-derives
 different shares from them. They reconstruct exactly at the revision they recorded,
-`89dca93`, and their expected-TD advice and replayed surfaces match today. See the
-recorded verifications for [stage 2](PHASE4_STAGE2_PLAN.md#implementation-verification--2026-09-15)
+`89dca93`, and their expected-TD advice and replayed surfaces match today.
+
+One capture fails for a different reason, and it is open: `95ed0d28cbe6` (week 2, made
+2026-09-18) reconstructs, but its parity replay re-derives different RB pot-share fields.
+Its expected-TD advice and replayed surface match. The replay's rival sampling treats a
+player whose game had already kicked off differently from the live path, so the two paths
+disagree about which rivals might still take him. See the recorded verifications for [stage 2](PHASE4_STAGE2_PLAN.md#implementation-verification--2026-09-15)
 and [stage 3](PHASE4_STAGE3_PLAN.md#implementation-verification--2026-09-17).
 
 Replay rebuilds the inputs a decision read, exactly as it read them. A week still being
@@ -66,17 +69,20 @@ rebuilds the same instant from the archived feeds and compares the model columns
 rebuild runs under the constants the decision recorded, so a setting that has moved since
 is not reported as a live/archive divergence. The archive is written by `refresh`, so a
 decision made without one cannot be verified and is reported as unverified rather than
-skipped; a window with no captures at all exits nonzero, because nothing verified is not
+skipped; a season with no captures at all exits nonzero, because nothing verified is not
 verification. The fingerprint it compares covers what a decision is a function of — the
 import closure of `recommend`, `projections` and `snapshots`, plus the installed version of
 every runtime dependency — and not the whole tree. It is read from the package itself, so it
 works installed, and captures made before it replaced `uv.lock` report the decision path as
 moved; the whole-tree hash is still recorded beside it, so drift stays visible without
-an unrelated module invalidating a capture it could not have changed. `baseline` describes
-the captures under the dated [3C protocol](../experiments/phase3c-baseline.toml), which
-declares the window, the decision events, the populations and the floors; a missing floor
-blocks the export. That window was closed without being run, and the command is kept
-against a future one. It promotes nothing and changes nothing.
+an unrelated module invalidating a capture it could not have changed. Both checks live in
+`src/pool/verify.py`.
+
+The [3C protocol](../experiments/phase3c-baseline.toml) that these checks were built for
+declared a collection window, decision events, populations and floors, and `pool baseline`
+described captures under it. The window closed without being run, and the protocol
+machinery and `baseline` were removed on 2026-09-19. Revision `bc57683` is the last one
+that has them, for anyone reproducing that tooling exactly.
 
 ## The prediction log
 

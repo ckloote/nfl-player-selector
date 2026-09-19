@@ -54,6 +54,12 @@ Artifact schema version 1:
 | `coverage.csv` | Each scheduled game in every required history/evaluation season, with completion and reason |
 | `presentation.json` | Publication-only source hashes for the report/figure renderers, plus the original metric source and dataset identities; does not replace the metric manifest |
 
+**Phase 3C tooling retired 2026-09-19.** The collection window closed on 2026-09-07 without
+being run, so no baseline was ever exported, and `pool baseline` and `prospective.py` have
+been removed. Revision `bc57683` is the last one that has them; check it out to run what
+follows exactly. The reconstruction and parity checks remain, as `pool verify-capture`
+(`src/pool/verify.py`). The rest of this section describes the tooling as it was.
+
 `phase3c-baseline.toml` is the dated Phase 3C collection protocol. It is not a benchmark
 specification: no run reads a frozen research dataset and nothing is fitted. It declares
 the collection window, the two weekly decision events, the live input policy, the
@@ -63,6 +69,7 @@ the collection the way a missing margin blocks Phase 3B. The file's text is hash
 the window identity, so an edit to its reasoning starts a new window.
 
 ```bash
+# at revision bc57683
 uv run pool baseline --config experiments/phase3c-baseline.toml \
   --out experiments/results/phase3c-baseline
 ```

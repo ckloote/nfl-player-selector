@@ -32,7 +32,7 @@ DISTRIBUTION = "nfl-pool"
 PREFIX = "src/pool"
 
 # What a captured decision is a function of: the advice `capture.reconstruct` re-derives
-# from a stored surface, and the surface `prospective.parity` rebuilds from the archive.
+# from a stored surface, and the surface `verify.parity` rebuilds from the archive.
 # Everything reachable from these by import is part of that function; nothing else is.
 DECISION_ROOTS = ("recommend", "projections", "snapshots")
 
