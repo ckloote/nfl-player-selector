@@ -8,59 +8,21 @@ from typer.testing import CliRunner
 
 from pool import capture, db, freshness, predictions, scoring, snapshots
 from pool.cli import app
-from tests import test_workflow as workflow
-from tests.conftest import proj_row
-from tests.test_workflow import end, play
+from tests.support.frames import proj_row
+from tests.support.local import end, play
+from tests.support.reports import (
+    AFTER_KICKOFF,
+    AFTER_REPORT,
+    BEFORE_ALL,
+    KICKOFF,
+    REPORT_AT,
+    WEEK1,
+    WEEK2,
+    history,
+    report,
+)
 
 runner = CliRunner()
-
-# g3 kicks off 2026-09-20T13:00 Eastern, which is 17:00 UTC. Every deadline below is
-# stated against that instant, because it is the moment week 2 stops being unobservable.
-KICKOFF = datetime(2026, 9, 20, 17, 0, tzinfo=UTC)
-BEFORE_ALL = "2026-09-19T12:00:00+00:00"
-AFTER_REPORT = "2026-09-19T16:00:00+00:00"
-AFTER_KICKOFF = "2026-09-20T18:00:00+00:00"
-REPORT_AT = "2026-09-19T15:00:00+00:00"
-
-WEEK1 = {
-    "Chris": ("Quarter One", "Runner One", "Flex One"),
-    "Pat": ("Quarter One", "", "Flex Two"),
-    "Jamie": ("Quarter Two", "", "Flex One"),
-}
-# Pat spent q1/f2 and Jamie spent q2/f1, so greedy and naive must disagree at QB and FLEX.
-WEEK2 = {
-    "Chris": ("Quarter One", "Runner One", "Flex One"),
-    "Pat": ("Quarter Two", "Runner One", "Flex One"),
-    "Jamie": ("Quarter One", "Runner One", "Flex Two"),
-}
-
-
-@pytest.fixture
-def local(tmp_path):
-    yield from workflow.local.__wrapped__(tmp_path)
-
-
-def _report(conn, week, picks, observed_at, me="Chris"):
-    from pool import entrants
-
-    frame = pd.DataFrame(
-        [
-            dict(week=week, entrant=name, slot=slot, player_name=player)
-            for name, players in picks.items()
-            for slot, player in zip(("QB", "RB", "FLEX"), players, strict=True)
-        ]
-    )
-    result = entrants.import_report(
-        conn,
-        2026,
-        week,
-        frame.to_csv(index=False).encode(),
-        me=me,
-        allow_roster_change=True,
-        observed_at=observed_at,
-    )
-    assert result.written, result.errors
-    return result
 
 
 def _proj():
@@ -78,62 +40,12 @@ def _proj():
     )
 
 
-PLAYERS = [
-    ("q1", "Quarter One", "QB", "A"),
-    ("q2", "Quarter Two", "QB", "A"),
-    ("r1", "Runner One", "RB", "A"),
-    ("f1", "Flex One", "WR", "C"),
-    ("f2", "Flex Two", "TE", "A"),
-]
-
-
-def _history(conn):
-    """A prior season behind the fixture, so `pool predict record` can build real
-    projections. The predictors themselves are tested on synthetic frames; this exists
-    only so the command has something to run on."""
-    with conn:
-        conn.executemany(
-            "INSERT INTO player_weeks(season, week, season_type, player_id, player_name, "
-            "position, team, opponent, pass_td, rush_td, rec_td, attempts, carries, targets) "
-            "VALUES (2025, ?, 'REG', ?, ?, ?, ?, 'Z', ?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    week,
-                    pid,
-                    name,
-                    pos,
-                    team,
-                    *(
-                        (2, 0, 0, 30, 2, 0)
-                        if pos == "QB"
-                        else (0, 1, 0, 0, 15, 2)
-                        if pos == "RB"
-                        else (0, 0, 1, 0, 0, 8)
-                    ),
-                )
-                for week in range(1, 10)
-                for pid, name, pos, team in PLAYERS
-            ],
-        )
-        conn.executemany(
-            "INSERT INTO games(game_id, season, week, game_type, kickoff, home_team, "
-            "away_team, home_score, away_score, kickoff_known) "
-            "VALUES (?, 2025, ?, 'REG', '2025-09-14T13:00', ?, 'Z', 21, 17, 1)",
-            [(f"p{week}", week, "A") for week in range(1, 10)],
-        )
-        conn.executemany(
-            "INSERT INTO rosters(season, week, player_id, player_name, position, team, status) "
-            "VALUES (2026, 2, ?, ?, ?, ?, 'ACT')",
-            PLAYERS,
-        )
-
-
 @pytest.fixture
 def pool(local):
     conn, path = local
     scoring.import_touchdowns(conn, 2026, pd.DataFrame([play(), end(), end("g2", 0, 0)]))
-    _history(conn)
-    _report(conn, 1, WEEK1, "2026-09-14T00:00:00+00:00")
+    history(conn)
+    report(conn, 1, WEEK1, "2026-09-14T00:00:00+00:00")
     return conn, path
 
 
@@ -174,7 +86,7 @@ def test_spending_is_counted_through_the_week_before_not_every_imported_week(poo
     the leak stage 2 closed in `remaining_counts`, arriving through a different door."""
     conn, _ = pool
     before = predictions.rival_states(conn, 2026, 2)
-    _report(conn, 2, WEEK2, REPORT_AT)
+    report(conn, 2, WEEK2, REPORT_AT)
     assert predictions.rival_states(conn, 2026, 2) == before
     later = {s.entrant_id: s.used_ids for s in predictions.rival_states(conn, 2026, 3)}
     assert later["pat"] == frozenset({"q1", "f2", "q2", "r1", "f1"})
@@ -229,7 +141,7 @@ def test_a_prediction_that_missed_either_deadline_is_kept_but_not_scored(pool, a
     """Both deadlines, because a prediction made after the week's games ran on projections
     rebuilt from that week's own statistics even though the report had not landed."""
     conn, _ = pool
-    _report(conn, 2, WEEK2, REPORT_AT)
+    report(conn, 2, WEEK2, REPORT_AT)
     _record(conn, at)
     scored, notes = predictions.score(conn, 2026)
     assert scored.empty
@@ -243,7 +155,7 @@ def test_the_last_prediction_that_beat_both_deadlines_is_the_one_scored(pool):
     _record(conn, "2026-09-18T00:00:00+00:00")
     _record(conn, BEFORE_ALL)
     _record(conn, AFTER_KICKOFF)
-    _report(conn, 2, WEEK2, REPORT_AT)
+    report(conn, 2, WEEK2, REPORT_AT)
     chosen, _ = predictions.eligible(predictions.archived(conn, 2026), KICKOFF, REPORT_AT)
     assert datetime.fromisoformat(chosen["observed_at"]) == datetime.fromisoformat(BEFORE_ALL)
 
@@ -251,7 +163,7 @@ def test_the_last_prediction_that_beat_both_deadlines_is_the_one_scored(pool):
 def test_hit_rates_separate_the_predictors(pool):
     conn, _ = pool
     _record(conn)
-    _report(conn, 2, WEEK2, REPORT_AT)
+    report(conn, 2, WEEK2, REPORT_AT)
     scored, _ = predictions.score(conn, 2026)
     assert set(scored.entrant_id) == {"pat", "jamie"}, "only rivals are scored"
     rates = predictions.hit_rates(scored).set_index("predictor")
@@ -266,7 +178,7 @@ def test_an_unresolved_reported_name_is_unscorable_rather_than_a_miss(pool):
     those two rates are not the same number."""
     conn, _ = pool
     _record(conn)
-    _report(conn, 2, WEEK2, REPORT_AT)
+    report(conn, 2, WEEK2, REPORT_AT)
     with conn:
         conn.execute(
             "UPDATE pool_picks SET player_id = NULL WHERE week = 2 AND entrant_id = 'pat' "
@@ -283,7 +195,7 @@ def test_a_reported_no_pick_is_not_called_an_unresolved_name(pool):
     offered, and an unresolved name is an answer nobody can read yet."""
     conn, _ = pool
     _record(conn)
-    _report(conn, 2, dict(WEEK2, Pat=("Quarter Two", "", "Flex One")), REPORT_AT)
+    report(conn, 2, dict(WEEK2, Pat=("Quarter Two", "", "Flex One")), REPORT_AT)
     scored, notes = predictions.score(conn, 2026)
     assert not len(scored[scored.entrant_id.eq("pat") & scored.slot.eq("RB")])
     reasons = [note["reason"] for note in notes]
@@ -310,7 +222,7 @@ def test_cli_records_and_scores(pool):
     conn = db.connect(path)
     assert not predictions.archived(conn, 2026), "a dry run archives nothing"
     _record(conn)
-    _report(conn, 2, WEEK2, REPORT_AT)
+    report(conn, 2, WEEK2, REPORT_AT)
     conn.close()
     scored = runner.invoke(app, ["research", "predict", "score", "--db", str(path)])
     assert scored.exit_code == 0, scored.output
@@ -321,7 +233,7 @@ def test_cli_says_so_when_the_prediction_can_no_longer_be_scored(pool):
     """The archive still happens -- a record that cannot be scored is still evidence --
     but a scripted run has to be told the observation was lost."""
     conn, path = pool
-    _report(conn, 2, WEEK2, REPORT_AT)
+    report(conn, 2, WEEK2, REPORT_AT)
     conn.close()
     result = runner.invoke(app, ["research", "predict", "record", "--week", "2", "--db", str(path)])
     assert result.exit_code == 1
@@ -336,8 +248,8 @@ def test_cli_refuses_to_predict_without_an_identity_and_archives_nothing(local):
     evidence about anybody. The command says what sets it rather than archiving that."""
     conn, path = local
     scoring.import_touchdowns(conn, 2026, pd.DataFrame([play(), end(), end("g2", 0, 0)]))
-    _history(conn)
-    _report(conn, 1, WEEK1, "2026-09-14T00:00:00+00:00", me=None)
+    history(conn)
+    report(conn, 1, WEEK1, "2026-09-14T00:00:00+00:00", me=None)
     conn.close()
     result = runner.invoke(app, ["research", "predict", "record", "--week", "2", "--db", str(path)])
     assert result.exit_code == 1
@@ -379,7 +291,7 @@ def test_a_check_receipt_is_not_a_delivery(pool):
     arrivals, unattributed = predictions.report_arrivals(conn, 2026)
     assert unattributed == 0 and 2 not in arrivals
     _record(conn)  # after both drafts, before the real report
-    _report(conn, 2, WEEK2, REPORT_AT)
+    report(conn, 2, WEEK2, REPORT_AT)
     arrivals, _ = predictions.report_arrivals(conn, 2026)
     assert datetime.fromisoformat(arrivals[2]) == datetime.fromisoformat(REPORT_AT)
     scored, notes = predictions.score(conn, 2026)

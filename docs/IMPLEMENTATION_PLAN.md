@@ -88,8 +88,8 @@ validation, and descriptive research does not require waiting for an entire pros
 
 ### Phase 3A: Evidence And Readiness
 
-**Implemented.** Each repair below has fixtures in `tests/test_phase3a.py`; the descriptive
-export is `pool diagnose`, saved in
+**Implemented.** Each repair below has fixtures in `tests/test_capture.py`, or for the fits
+and diagnostics in `tests/research/`; the descriptive export is `pool diagnose`, saved in
 [experiments/results/phase3a-readiness](../experiments/results/phase3a-readiness). The
 deliverable table records what was required.
 
@@ -134,7 +134,8 @@ are unchanged. Interpreting it remains a separate, dated authoring step.
 `pool benchmark --config experiments/phase3-calibration.toml`,
 which executes three stages with a barrier between each: identity forecast/outcome pairs for
 every season, then one fit per fold, then the candidates applied and replayed. Fitting lives
-in [`calibration.py`](../src/pool/calibration.py); fixtures are in `tests/test_phase3b.py`.
+in [`calibration.py`](../src/pool/research/calibration.py); fixtures are in
+`tests/research/test_calibration.py`.
 The declarations below are keys of the dated specification, and `benchmark.resolve` refuses a
 run that is missing any of them.
 

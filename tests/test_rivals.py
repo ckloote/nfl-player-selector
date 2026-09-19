@@ -1,13 +1,11 @@
 """Three hypotheses about a rival, ranked, and pure enough for the decision closure."""
 
-import ast
-from pathlib import Path
-
 import pandas as pd
 import pytest
 
 from pool import rivals
-from tests.conftest import proj_row
+from tests.support.frames import proj_row
+from tests.support.imports import top_level_imports
 
 PAT = rivals.RivalState("pat", "Pat", frozenset({"q1"}))
 OPEN = rivals.RivalState("open", "Open", frozenset())
@@ -81,24 +79,11 @@ def test_an_incomplete_used_pool_is_flagged_rather_than_trusted():
     assert not rivals.RivalState("x", "X", frozenset({"q1"}), unknown=1).pool_complete
 
 
-def _imports(module) -> set[str]:
-    found = set()
-    for node in ast.walk(ast.parse(Path(module.__file__).read_text())):
-        if isinstance(node, ast.Import):
-            found |= {a.name.split(".")[0] for a in node.names}
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                found.add(node.module.split(".")[0])
-            else:
-                found |= {a.name for a in node.names}
-    return found
-
-
 def test_rivals_reads_nothing_from_the_world():
     """This module is bound for the enforced decision closure. If it ever reaches for the
     database it drags a CSV parser in with it, and a changed column header starts
     invalidating real captured decisions. The seam is the point, so it is asserted."""
-    assert not _imports(rivals) & {
+    assert not top_level_imports(rivals) & {
         "sqlite3",
         "db",
         "entrants",

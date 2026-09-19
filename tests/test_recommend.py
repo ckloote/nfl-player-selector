@@ -5,7 +5,7 @@ import pytest
 
 from pool import config
 from pool.recommend import advise_slot, main_slate_start
-from tests.conftest import proj_row
+from tests.support.frames import proj_row
 
 advise_slot = partial(advise_slot, now=datetime(2026, 9, 1))
 

@@ -6,6 +6,9 @@ import pytest
 import time_machine
 
 from pool import db
+from tests.support import reports
+from tests.support.local import local_db
+from tests.support.season import seed_season
 
 # The CLI tests read Rich output as plain text at a known width, and whether it is plain was
 # otherwise up to the environment. Typer forces colour whenever GITHUB_ACTIONS, FORCE_COLOR or
@@ -33,48 +36,6 @@ def suite_clock():
         yield
 
 
-def proj_row(
-    pid,
-    name,
-    slot,
-    week,
-    lam,
-    kickoff="2026-09-13T13:00",
-    team="AAA",
-    opp="BBB",
-    position=None,
-    home=True,
-    status=None,
-):
-    return dict(
-        player_id=pid,
-        player_name=name,
-        position=position or {"QB": "QB", "RB": "RB", "FLEX": "WR"}[slot],
-        slot=slot,
-        team=team,
-        week=week,
-        opponent=opp,
-        home=home,
-        kickoff=kickoff,
-        kickoff_known=1,
-        game_id=f"g{week}",
-        base_rate=lam,
-        def_mult=1.0,
-        vegas_mult=1.0,
-        home_mult=1.0,
-        avail_mult={"Out": 0.0, "Doubtful": 0.0, "Questionable": 0.85}.get(status, 1.0),
-        hard_eligible=status not in ("Out", "Doubtful"),
-        report_status=status,
-        role_mult=1.0,
-        depth_rank=1,
-        lam=lam,
-        prior_games=10,
-        prior_tds=5,
-        cur_games=0,
-        cur_tds=0,
-    )
-
-
 @pytest.fixture
 def make_proj():
     def _make(rows):
@@ -85,11 +46,17 @@ def make_proj():
 
 @pytest.fixture
 def seeded(tmp_path):
-    """A four-week, four-team season with a full prior season behind it.
+    """A four-week, four-team season with a full prior season behind it."""
+    return seed_season(db.connect(tmp_path / "bt.db"))
 
-    Shared by the backtest and evaluation suites; the builder lives with the
-    backtest tests that define the schema expectations.
-    """
-    from tests.test_backtest import _seed
 
-    return _seed(db.connect(tmp_path / "bt.db"))
+@pytest.fixture
+def local(tmp_path):
+    """The small 2026 database: week 1's games and five players. Yields `(conn, path)`."""
+    yield from local_db(tmp_path)
+
+
+@pytest.fixture
+def reported(local):
+    """`local` with week 1 scored and its pool report imported, so week 2 has rivals."""
+    return reports.reported(local)

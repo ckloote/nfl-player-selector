@@ -126,7 +126,7 @@ def decision_modules(package: Path = PACKAGE) -> list[str]:
 
     Computed rather than listed. A hand-maintained list that quietly loses a module is
     worse than hashing the whole tree: the fingerprint would go on matching while the
-    function it certifies had moved underneath it. `tests/test_phase3a.py` pins the
+    function it certifies had moved underneath it. `tests/test_identity.py` pins the
     result, so widening the closure is a review decision rather than a silent one.
 
     The package root is always in it -- every import of a submodule runs `__init__`.

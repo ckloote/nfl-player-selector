@@ -6,8 +6,8 @@ import pandas as pd
 import pytest
 
 from pool import simulate
-from tests.conftest import proj_row
-from tests.test_rivals import _imports
+from tests.support.frames import proj_row
+from tests.support.imports import top_level_imports
 
 SIMS = 120_000
 
@@ -198,7 +198,7 @@ def test_weeks_outside_the_horizon_are_not_sampled(frame):
 
 
 def test_simulate_reads_nothing_from_the_world():
-    assert not _imports(simulate) & {
+    assert not top_level_imports(simulate) & {
         "sqlite3",
         "db",
         "entrants",

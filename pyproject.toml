@@ -34,6 +34,9 @@ module-name = "pool"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "research: replays, benchmarks, calibration and capture checks; `-m 'not research'` skips them",
+]
 
 [tool.ruff]
 line-length = 100

@@ -1,6 +1,9 @@
+import pandas as pd
 import pytest
 
 from pool import optimizer as O
+from pool.optimizer import plan_slot
+from tests.support.frames import proj_row
 
 
 def test_each_player_used_once_and_stars_spent_in_best_week(make_proj):
@@ -124,4 +127,14 @@ def test_the_discount_is_read_from_config_at_call_time(make_proj, monkeypatch):
     assert discounted < undiscounted
 
 
-from tests.conftest import proj_row  # noqa: E402
+def test_zero_is_eligible_and_pruning_uses_hard_mask():
+    frame = pd.DataFrame(
+        [
+            proj_row("b", "B", "QB", 1, 0),
+            proj_row("a", "A", "QB", 1, 0),
+            proj_row("out", "O", "QB", 1, 100, status="Out"),
+        ]
+    )
+    plan = plan_slot(frame, "QB", 1, set(), max_players=1)
+    assert plan.pick_for(1).player_id == "a"
+    assert plan.total == 0

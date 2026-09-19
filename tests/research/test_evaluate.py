@@ -7,7 +7,7 @@ import pytest
 from pool import projections as P
 from pool.research import evaluate as ev
 from pool.research import models
-from tests.test_backtest import SEASON, WEEKS
+from tests.support.season import SEASON, WEEKS
 
 
 # --- the forecast set -------------------------------------------------------
