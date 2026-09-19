@@ -119,6 +119,69 @@ def test_transform_rejects_silent_data_loss(change, message):
         entrants.transform_report(change(entrants.parse_csv(REFERENCE.read_bytes())), 2026, 1)
 
 
+# The reference report typed one row per entrant, the way a report read off a picture is
+# quickest to type.
+WIDE = (
+    b"week,entrant,QB,RB,FLEX,reported_week,reported_total,reported_rank\n"
+    b"1,Chris K.,Quarter One,Runner One,Flex One,3,3,1\n"
+    b"1,Pat,Quarter Two,Runner One,Flex Two,2,2,2\n"
+)
+
+
+def _stored(conn):
+    """Every derived row of the report, without the observation that carried it."""
+    return {
+        table: sorted(
+            tuple(v for k, v in dict(row).items() if k not in ("observation_id", "first_seen_at"))
+            for row in conn.execute(f"SELECT * FROM {table}")
+        )
+        for table in ("pool_entrants", "pool_picks", "pool_report_totals")
+    }
+
+
+def test_one_row_per_entrant_imports_exactly_as_one_row_per_slot(report_db, tmp_path):
+    wide = entrants.transform_report(entrants.parse_csv(WIDE), 2026, 1)
+    long = entrants.transform_report(entrants.parse_csv(REFERENCE.read_bytes()), 2026, 1)
+    for a, b in zip(wide, long, strict=True):
+        key = [c for c in ("entrant_id", "slot") if c in a]
+        pd.testing.assert_frame_equal(
+            a.sort_values(key).reset_index(drop=True), b.sort_values(key).reset_index(drop=True)
+        )
+    # Imported both ways over the same week: the second replaces the first in place, and
+    # nothing it leaves behind tells the two files apart.
+    assert import_reference(report_db).written
+    long_rows = _stored(report_db)
+    assert import_reference(report_db, WIDE).written
+    assert _stored(report_db) == long_rows
+
+
+def test_an_empty_cell_in_a_wide_report_is_a_no_pick(report_db):
+    result = import_reference(
+        report_db, WIDE.replace(b"Pat,Quarter Two,Runner One", b"Pat,Quarter Two,")
+    )
+    assert result.written and result.blanks == [dict(entrant_id="pat", slot="RB")]
+    picks = entrants.entrant_picks(report_db, 2026, 1).set_index(["entrant_id", "slot"])
+    assert pd.isna(picks.loc[("pat", "RB"), "player_name"])
+
+
+@pytest.mark.parametrize(
+    "header, message",
+    [
+        ("week,entrant,QB,RB", "missing slot columns: \\['FLEX'\\]"),
+        ("week,entrant,QB,RB,WR,TE", "two columns for one slot"),
+        ("week,entrant,QB,RB,FLEX,slot", "mixes layouts"),
+    ],
+)
+def test_a_wide_report_must_name_each_slot_once(header, message):
+    rows = [header] + [
+        ",".join(["1", name, *["Quarter One"] * (len(header.split(",")) - 2)])
+        for name in ("Chris K.", "Pat")
+    ]
+    frame = entrants.parse_csv("\n".join(rows).encode())
+    with pytest.raises(ValueError, match=message):
+        entrants.transform_report(frame, 2026, 1)
+
+
 def test_import_and_readback_keep_provenance_and_reported_totals(report_db):
     result = import_reference(report_db)
     assert result.ok and result.written and result.parsed
@@ -752,3 +815,37 @@ def test_cli_check_success_and_missing_totals_remain_unknown(report_cli, report_
     shown = report_cli("standings")
     assert shown.exit_code == 0 and "— means not supplied" in shown.output
     assert entrants.reported_totals(report_db, 2026)[entrants.TOTAL_COLUMNS].isna().all().all()
+
+
+def test_the_template_names_every_entrant_and_round_trips_through_check(
+    report_cli, report_db, tmp_path
+):
+    assert import_reference(report_db).written
+    path = tmp_path / "week2.csv"
+    written = report_cli("report", "template", "--week", "2", "--out", str(path))
+    assert written.exit_code == 0, written.output
+    assert "2 entrants, as in the week 1 report" in written.output
+    assert path.read_text() == "week,entrant,QB,RB,FLEX\n2,Chris K.,,,\n2,Pat,,,\n"
+    # Typed in as the report says, then checked: no roster change, nothing unresolved.
+    path.write_text(
+        path.read_text()
+        .replace("Chris K.,,,", "Chris K.,Quarter One,Runner One,Flex One")
+        .replace("Pat,,,", "Pat,Quarter Two,,Flex Two")
+    )
+    checked = report_cli("report", "import", str(path), "--check")
+    assert checked.exit_code == 0, checked.output
+    assert "Parsed 2026 week 2: 2 entrants, 6 picks" in checked.output
+    assert "roster" not in checked.output.lower() and "Unresolved" not in checked.output
+    # A file already being typed into is never replaced.
+    before = path.read_text()
+    again = report_cli("report", "template", "--week", "2", "--out", str(path))
+    assert again.exit_code == 1 and "already exists" in again.output
+    assert path.read_text() == before
+
+
+def test_the_template_defaults_beside_the_database_and_says_when_it_has_no_names(report_cli):
+    written = report_cli("report", "template", "--week", "1")
+    assert written.exit_code == 0, written.output
+    assert "no report is imported for 2026 yet" in written.output
+    path = next(Path(p) for p in written.output.split() if p.endswith("week1.csv"))
+    assert path.parent.name == "reports" and path.read_text() == "week,entrant,QB,RB,FLEX\n"

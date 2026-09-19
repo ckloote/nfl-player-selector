@@ -53,7 +53,8 @@ season is always used for the start-of-season prior.
 ```bash
 uv run pool week                                  # this week's decisions; refreshes stale data first
 uv run pool record --week 5 --rb "Kyren Williams" # the line `week` prints, once you have submitted
-uv run pool report import data/reports/week5.csv  # when the pool's report arrives
+uv run pool report template --week 5              # when the pool's report arrives: type it in,
+uv run pool report import data/reports/week5.csv  # then import it
 ```
 
 `pool week` is the routine. It refreshes the data when it is older than the limits under
@@ -169,9 +170,13 @@ that report had not arrived, and the screen names it as a guess.
 
 ## Reports and standings
 
+The pool's report arrives as a picture or a PDF, so it is typed in. Start from a template
+with every entrant's name already written, type the picks, check, then import:
+
 ```bash
-uv run pool report import data/reports/week1.csv --check             # validate, write nothing
-uv run pool report import data/reports/week1.csv --me "Chris K."     # the first import names you
+uv run pool report template --week 3                                 # data/reports/week3.csv
+uv run pool report import data/reports/week3.csv --check             # validate, write nothing
+uv run pool report import data/reports/week3.csv --me "Chris K."     # the first import names you
 uv run pool report list
 uv run pool standings                   # latest picks, computed season ranks
 uv run pool standings --week 1          # choose the displayed picks, not the ranking cutoff
@@ -180,7 +185,22 @@ uv run pool standings --week 1          # choose the displayed picks, not the ra
 Keep report files in `data/reports/`. Git ignores that folder, because a report names every
 entrant in the pool.
 
-The initial `--format csv` parser accepts UTF-8 CSV with one row per entrant and slot:
+A template has one row per entrant:
+
+```csv
+week,entrant,QB,RB,FLEX
+3,Chris K.,Quarter One,Runner One,Flex One
+3,Pat,Quarter Two,,Flex Two
+```
+
+Type each pick under its slot; an empty cell is a no-pick (Pat's RB above). The names come
+from the last imported week, the set the import compares against, so a new or departed
+entrant is still a roster change to acknowledge. Your own row is left blank on purpose: type
+it from the report too, so the import can catch the pool registering a different pick from
+the one you recorded. `template` never overwrites a file; `--out` writes somewhere else.
+
+The importer also reads one row per entrant and slot, and tells the two layouts apart by the
+header:
 
 ```csv
 week,entrant,slot,player_name,reported_week,reported_total,reported_rank
@@ -189,21 +209,21 @@ week,entrant,slot,player_name,reported_week,reported_total,reported_rank
 1,Chris K.,WR/TE,Flex One,,,
 ```
 
-Include every entrant and all three slots: `QB`, `RB`, and `FLEX` (`WR`, `TE`, and
-`WR/TE` also map to `FLEX`). The `entrant`, `slot`, and `player_name` columns are all
-required, and `entrant` and `slot` must be filled in on every row. Supply
-`week` on every row or use `--week`; when both are present they must agree. An optional
-`season` column must agree with `--season`. Totals and rank are optional integers; put
-them on one row per entrant or repeat consistent values. Missing totals stay unknown.
-Duplicate slots, conflicting totals, and unknown columns are rejected.
-The full [reference fixture](tests/fixtures/pool_report.csv) includes two entrants.
-The delivery format has not yet been confirmed against a real pool report.
+Either way, include every entrant and all three slots: `QB`, `RB`, and `FLEX` (`WR`, `TE`,
+and `WR/TE` also mean `FLEX`, as a slot value or a column header). `entrant` must be filled
+in on every row, and so must `slot` in the long layout. Supply `week` on every row or use
+`--week`; when both are present they must agree. An optional `season` column must agree
+with `--season`. The reported week TDs, season total and rank (`reported_week`,
+`reported_total`, `reported_rank`) are optional integer columns in either layout; in the long
+one, put them on one row per entrant or repeat consistent values. Missing totals stay
+unknown. Duplicate slots, conflicting totals, and unknown columns are rejected. The full
+[reference fixture](tests/fixtures/pool_report.csv) includes two entrants.
 
-To report an entrant who submitted nothing for a slot, keep the row and leave
-`player_name` empty. That stores a no-pick, which `standings` shows as `(no pick)` and
-which stays distinct from a name that could not be resolved and from a week that was
-never imported. Dropping the row instead is still rejected as a missing slot, because
-nothing distinguishes it from a truncated file.
+An entrant who submitted nothing for a slot is a no-pick: an empty cell, or in the long
+layout a row with `player_name` empty. `standings` shows it as `(no pick)`, distinct from a
+name that could not be resolved and from a week that was never imported. A missing slot
+column, or a dropped slot row, is still rejected, because nothing distinguishes it from a
+truncated file.
 
 Every import commits the original bytes before parsing, including imports that fail.
 Re-imports add an observation while sharing the same stored payload and updating the

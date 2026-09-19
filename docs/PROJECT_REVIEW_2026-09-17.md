@@ -380,6 +380,11 @@ part of capture identity.
    report, make the normal import one step, and retain the existing review output for
    ambiguous names. Stable aliases and one-time personal identity setup also repair
    the most consequential ingestion friction.
+   **Status:** done on branch `claude/typed-reports` for the format that actually arrives. The
+   report comes as a picture or a PDF and is typed in, so there is no delivered file to
+   match. The importer also reads one row per entrant (`entrant,QB,RB,FLEX`), a third of
+   the rows, and `pool report template --week N` writes that file with every current
+   entrant's name filled in. Aliases still wait for a real case.
 2. **Show data readiness where the decision is made.** Distinguish missing reports,
    unresolved scores, stale inputs, and an experimental pot-share estimate. Offer the
    one command that fixes each problem without flooding normal output with provenance.
