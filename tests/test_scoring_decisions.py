@@ -304,10 +304,10 @@ def test_capture_stores_final_results_and_survives_later_corrections(local):
     pool = predictions.pool_state(conn, 2026, 1, at=now)
     assert (1, "q1", 4) in pool.finalized
     detail = capture._pool_detail(pool)
-    assert capture._pool_from_detail(detail) == pool
+    assert capture.pool_from_detail(detail) == pool
     assert detail["state_hash"] != capture._pool_detail(replace(pool, finalized=()))["state_hash"]
     old = {k: v for k, v in detail.items() if k != "finalized"}
-    assert capture._pool_from_detail(old).finalized == ()
+    assert capture.pool_from_detail(old).finalized == ()
     proj = frame()
     proj["player_id"] = proj.player_id.replace({"qa": "q1", "qb": "q2"})
     proj.loc[proj.player_id.eq("q1"), "kickoff"] = "2026-09-10T20:15"

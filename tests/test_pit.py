@@ -300,7 +300,7 @@ def _schema_one(conn, week=1, observed_at="2026-09-09T12:00:00+00:00"):
         surface_hash=None,
     )
     with db.transaction(conn):
-        payload["surface_hash"] = capture._store_surface(
+        payload["surface_hash"] = capture.store_surface(
             conn, proj[proj.week.eq(week)].reset_index(drop=True)
         )
     return predictions.archive(conn, 2026, week, payload, observed_at=observed_at, kind=pit.KIND)

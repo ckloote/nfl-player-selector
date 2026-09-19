@@ -48,7 +48,7 @@ SURFACE_EXTRAS = [
 ]
 
 
-def _json(value: Any) -> str:
+def to_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
 
@@ -79,7 +79,7 @@ def current_constants() -> dict:
 def _identity_payload(model: str, calibrator: str, artifact_hash: str | None) -> tuple[str, str]:
     code_hash, decision_hash, revision, dirty = _code_identity()
     runtime = package_identity.runtime()
-    raw = _json(
+    raw = to_json(
         {
             "model": model,
             "calibrator": calibrator,
@@ -196,7 +196,7 @@ def surface(
     return out.reset_index(drop=True)
 
 
-def _store_surface(conn: sqlite3.Connection, frame: pd.DataFrame) -> str:
+def store_surface(conn: sqlite3.Connection, frame: pd.DataFrame) -> str:
     """Content-address the surface beside the archived feeds.
 
     Parquet rather than the feeds' JSON: a surface is a typed numeric frame, and a
@@ -267,7 +267,7 @@ def _pool_detail(pool: rivals.PoolState | None) -> dict | None:
         # Hashed separately from the decision's own identity: two weeks apart with the same
         # standings and the same spent pools are the same opposition, and that is worth
         # being able to see at a glance in a log of many decisions.
-        state_hash=hashlib.sha256(_json(observed).encode()).hexdigest(),
+        state_hash=hashlib.sha256(to_json(observed).encode()).hexdigest(),
         sims=config.WINPROB_SIMS,
         seed=config.WINPROB_SEED,
         scenarios=config.RIVAL_SCENARIOS,
@@ -280,7 +280,7 @@ def _pool_detail(pool: rivals.PoolState | None) -> dict | None:
     )
 
 
-def _pool_from_detail(detail: dict | None) -> rivals.PoolState | None:
+def pool_from_detail(detail: dict | None) -> rivals.PoolState | None:
     if not detail:
         return None
     return rivals.PoolState(
@@ -305,7 +305,7 @@ def _pool_from_detail(detail: dict | None) -> rivals.PoolState | None:
     )
 
 
-def _advice_detail(a: SlotAdvice) -> dict:
+def advice_detail(a: SlotAdvice) -> dict:
     def candidate(c):
         if c is None:
             return None
@@ -364,7 +364,7 @@ def _append(conn, decision_id, recorded_at, decision_at, season, week, identity_
                 slot,
                 kind,
                 player_id,
-                _json(detail),
+                to_json(detail),
                 surface_hash,
                 identity_hash,
                 SCHEMA_VERSION,
@@ -410,7 +410,7 @@ def record_decision(
         original=original_lam,
     )
     with db.transaction(conn):
-        surface_hash = _store_surface(conn, frame)
+        surface_hash = store_surface(conn, frame)
         rows = [
             (
                 None,
@@ -431,7 +431,7 @@ def record_decision(
             )
         ]
         for a in advice:
-            rows.append((a.slot, "advice", _recommended_id(a), _advice_detail(a), surface_hash))
+            rows.append((a.slot, "advice", _recommended_id(a), advice_detail(a), surface_hash))
             if a.recommended is not None and a.recommended.early:
                 # Hold or commit is the decision the early deadline forces, so it is
                 # its own event rather than a field on the advice.
@@ -585,7 +585,7 @@ def _canonical(value):
     """The form a value takes in the log, so recorded and live settings compare like
     with like. Tuples arrive back as lists and integer keys as strings; without this
     every reconstruction would report drift in settings nobody had touched."""
-    return json.loads(_json(value))
+    return json.loads(to_json(value))
 
 
 def constants_drift(recorded: dict, current: dict | None = None) -> dict:
@@ -713,7 +713,7 @@ def reconstruct(conn: sqlite3.Connection, decision_id: str, *, allow_code_drift:
             # would re-derive a January decision against a pool that has since spent
             # another ten weeks, and report the difference as a capture that was
             # insufficient rather than as a question asked of the wrong season.
-            pool=_pool_from_detail(detail.get("pool")),
+            pool=pool_from_detail(detail.get("pool")),
         )
     recorded = {r["slot"]: json.loads(r["detail"]) for r in rows if r["kind"] == "advice"}
     return frame, advice, recorded, drift

@@ -48,7 +48,7 @@ FEED = predictions.FEED
 KIND = "pit"
 DRAWS_CODEC = "zlib-npz"
 # A frozen schema-1 commitment's outcomes, keyed by its observation. `meta`, like a report's
-# parse receipt, and never a new observation: `_eligible` reads observation times, and a
+# parse receipt, and never a new observation: `eligible` reads observation times, and a
 # freeze written after kickoff is a copy of an earlier claim, not a late one.
 FROZEN_PREFIX = "pit_draws:"
 
@@ -97,7 +97,7 @@ def commit(
     }
     draws = simulate.sample(frame, [week], sims=int(sims), seed=int(seed), params=params)
     with db.transaction(conn):
-        payload["surface_hash"] = capture._store_surface(conn, frame)
+        payload["surface_hash"] = capture.store_surface(conn, frame)
         payload["draws_hash"] = _store_draws(conn, draws)
     return predictions.archive(conn, season, week, payload, observed_at=observed_at, kind=KIND)
 
@@ -245,7 +245,7 @@ def score(conn: sqlite3.Connection, season: int) -> tuple[pd.DataFrame, list[dic
         by_week.setdefault(int(record["week"]), []).append(record)
     for week, records in sorted(by_week.items()):
         arrival = arrivals.get(week)
-        chosen, reasons = predictions._eligible(
+        chosen, reasons = predictions.eligible(
             records, predictions.first_kickoff(conn, season, week), arrival
         )
         notes.extend(dict(week=week, reason=reason) for reason in reasons)

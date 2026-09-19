@@ -756,7 +756,7 @@ def test_a_mid_week_report_pins_no_picks_and_shows_unresolved_names_as_guesses(s
     assert pat.pinned("RB", [2]) == {2: None} and pat.pinned("FLEX", [2]) == {2: None}
     jamie = next(r for r in pool.rivals if r.display_name == "Jamie")
     assert jamie.pinned("QB", [2]) == {}, "an unreadable name is not an answer"
-    assert capture._pool_from_detail(capture._pool_detail(pool)) == pool
+    assert capture.pool_from_detail(capture._pool_detail(pool)) == pool
     ahead = predictions.unresolved_ahead(conn, 2026, 2, datetime.now(UTC))
     assert ahead == [("Jamie", 2, "QB", "Nobody Known")]
     conn.close()
@@ -893,7 +893,7 @@ def test_a_withheld_decision_is_captured_and_replays_without_a_share(seeded):
     pool = predictions.pool_state(conn, 2026, 2)
     detail = capture._pool_detail(pool)
     assert detail["withheld"] == list(pool.withheld)
-    assert capture._pool_from_detail(detail) == pool
+    assert capture.pool_from_detail(detail) == pool
     now = state.eastern_now(datetime(2026, 9, 19, 12, 0, tzinfo=UTC))
     proj = _proj_for(conn)
     used, locked = state.used_ids(conn, 2026), state.locked_by_slot(conn, 2026)

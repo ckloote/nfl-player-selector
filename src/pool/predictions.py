@@ -157,7 +157,7 @@ def _reported_ahead(conn, season, week, at) -> pd.DataFrame:
     """Every reported cell from `week` on that was on record at `at`, latest observation."""
     rows = entrants.entrant_picks(conn, season)
     rows = rows[rows.week.ge(week)]
-    # Compared as instants, not as text, for the reason `_eligible` is: the two writers
+    # Compared as instants, not as text, for the reason `eligible` is: the two writers
     # agree on a format today and nothing enforces that they keep agreeing.
     arrived = [datetime.fromisoformat(value) <= at for value in rows.observed_at]
     rows = rows[pd.Series(arrived, index=rows.index, dtype=bool)]
@@ -273,7 +273,7 @@ def _decision_outcomes(conn, season, week, at, members):
     reported = entrants.entrant_picks(conn, season)
     if not reported.empty:
         reported = reported[[datetime.fromisoformat(t) <= at for t in reported.observed_at]]
-        for pick in standings._score_rows(conn, season, reported, scores):
+        for pick in standings.score_rows(conn, season, reported, scores):
             if pick.week < week:
                 cells[(pick.entrant_id, pick.week, pick.slot)] = (pick.status, pick.tds)
             elif not pick.is_me and pick.status == "final" and pick.player_id:
@@ -454,7 +454,7 @@ def archived(conn: sqlite3.Connection, season: int, kind: str = "picks") -> list
     return out
 
 
-def _eligible(records, kickoff, arrival):
+def eligible(records, kickoff, arrival):
     """The last prediction that beat both deadlines, and why the others did not.
 
     Compared as instants rather than as text. Both timestamps are written UTC with
@@ -482,7 +482,7 @@ def scorable(conn: sqlite3.Connection, season: int, week: int) -> dict | None:
     its first kickoff and its report. None when none did."""
     records = [r for r in archived(conn, season) if r["week"] == week]
     arrival = report_arrivals(conn, season)[0].get(week)
-    return _eligible(records, first_kickoff(conn, season, week), arrival)[0]
+    return eligible(records, first_kickoff(conn, season, week), arrival)[0]
 
 
 SCORED_COLUMNS = [
@@ -515,7 +515,7 @@ def score(conn: sqlite3.Connection, season: int) -> tuple[pd.DataFrame, list[dic
         by_week.setdefault(record["week"], []).append(record)
     for week in sorted(by_week):
         arrival = arrivals.get(week)
-        chosen, reasons = _eligible(by_week[week], first_kickoff(conn, season, week), arrival)
+        chosen, reasons = eligible(by_week[week], first_kickoff(conn, season, week), arrival)
         if chosen is None:
             notes.append(dict(week=week, reason="; ".join(reasons) or "no prediction archived"))
             continue
