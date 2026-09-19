@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 from typer.testing import CliRunner
 
-from pool import db, ingest, projections, scoring, state
+from pool import db, ingest, projections, results, scoring, state
 from pool.cli import app
 from pool.optimizer import plan_slot
 from pool.recommend import advise_slot
@@ -272,7 +272,7 @@ def test_incomplete_game_does_not_claim_zero(local, rows, reason):
     conn, _ = local
     record(conn, RB="r1")
     scoring.import_touchdowns(conn, 2026, pd.DataFrame(rows))
-    result = scoring.pick_results(conn, 2026, recompute=True).iloc[0]
+    result = results.pick_results(conn, 2026).iloc[0]
     assert reason in result.pending_reason
     assert pd.isna(result.tds)
 
@@ -283,7 +283,7 @@ def test_score_partial_week_zero_inactive_and_unresolved(local):
     scoring.import_touchdowns(
         conn, 2026, pd.DataFrame([end(), end("g2", 0, 0, desc="in progress")])
     )
-    result = scoring.pick_results(conn, 2026, recompute=True).set_index("slot")
+    result = results.pick_results(conn, 2026).set_index("slot")
     assert result.loc["QB", "tds"] == result.loc["RB", "tds"] == 0
     assert result.loc["FLEX", "pending_reason"] == "no end-of-game marker"
     out = runner.invoke(app, ["picks", "--db", str(path)])
@@ -292,37 +292,37 @@ def test_score_partial_week_zero_inactive_and_unresolved(local):
         conn.execute("UPDATE my_picks SET game_id = NULL WHERE slot = 'FLEX'")
     # g2 has no end-of-game marker, so week 1 is not final and we still do not know.
     assert (
-        scoring.pick_results(conn, 2026).set_index("slot").loc["FLEX", "pending_reason"]
+        results.pick_results(conn, 2026).set_index("slot").loc["FLEX", "pending_reason"]
         == "game unresolved"
     )
     # Once the week is final, a pick with no game is the pool's own zero, not a wait.
     scoring.import_touchdowns(conn, 2026, pd.DataFrame([play(), end(), end("g2", 0, 0)]))
-    flex = scoring.pick_results(conn, 2026, recompute=True).set_index("slot").loc["FLEX"]
+    flex = results.pick_results(conn, 2026).set_index("slot").loc["FLEX"]
     assert flex.pending_reason == "" and flex.tds == 0
 
 
-def test_score_local_only_recompute_corrections_and_preserve_on_missing_feed(local, monkeypatch):
+def test_picks_are_scored_when_read_and_follow_a_correction(local, monkeypatch):
+    """No scoring step to run: a finished game counts on the next read, and so does a
+    result corrected upstream. Nothing reaches for the network to do it."""
     conn, path = local
     record(conn, RB="r1")
 
     def no_network(*args, **kw):
-        pytest.fail("local score attempted refresh")
+        pytest.fail("reading picks attempted a refresh")
 
     monkeypatch.setattr(ingest, "refresh", no_network)
     scoring.import_touchdowns(conn, 2026, pd.DataFrame([play(), end()]))
-    for _ in range(2):
-        out = runner.invoke(app, ["score", "--week", "1", "--db", str(path)])
+    for command in ("picks", "score"):
+        out = runner.invoke(app, [command, "--db", str(path)])
         assert out.exit_code == 0, out.stdout
-        assert "Season 2026 subtotal: 1 TDs" in out.stdout
+        assert "Season 2026 subtotal: 1 TDs; 0 pending" in out.stdout
     scoring.import_touchdowns(conn, 2026, pd.DataFrame([end()]))
-    assert scoring.pick_results(conn, 2026, recompute=True).tds.iloc[0] == 0
-    scoring.import_touchdowns(conn, 2026, pd.DataFrame([play(), end()]))
-    scoring.pick_results(conn, 2026, recompute=True)
+    assert results.pick_results(conn, 2026).tds.iloc[0] == 0
+    # A result that goes missing is pending again, not the last value that was seen.
     with conn:
         conn.execute("DELETE FROM game_results")
-    pending = scoring.pick_results(conn, 2026, recompute=True).iloc[0]
-    assert pending.tds == 1 and pending.pending_reason == "scoring feed missing"
-    assert state.picks(conn, 2026).tds.iloc[0] == 1
+    pending = results.pick_results(conn, 2026).iloc[0]
+    assert pd.isna(pending.tds) and pending.pending_reason == "scoring feed missing"
 
 
 def test_actual_stat_game_overrides_recorded_team_and_schedule_correction_invalidates(local):
@@ -334,13 +334,13 @@ def test_actual_stat_game_overrides_recorded_team_and_schedule_correction_invali
             "position,team,game_id) VALUES (2026,1,'REG','f1','Flex One','WR','A','g1')"
         )
     scoring.import_touchdowns(conn, 2026, pd.DataFrame([play(pid="f1"), end()]))
-    result = scoring.pick_results(conn, 2026, recompute=True)
+    result = results.pick_results(conn, 2026)
     assert result.tds.iloc[0] == 1
-    assert state.picks(conn, 2026).game_id.iloc[0] == "g1"
+    assert result.game_id.iloc[0] == "g1"
     with conn:
         conn.execute("UPDATE games SET home_score = 29 WHERE game_id = 'g1'")
-    result = scoring.pick_results(conn, 2026, recompute=True).iloc[0]
-    assert result.tds == 1 and "terminal scores" in result.pending_reason
+    result = results.pick_results(conn, 2026).iloc[0]
+    assert pd.isna(result.tds) and "terminal scores" in result.pending_reason
 
 
 def test_shared_aggregation_includes_roster_only_scorers_and_legacy_stays_unknown(local):
@@ -427,24 +427,34 @@ def test_cli_week_validation_leaves_picks_unchanged(local, command, week):
     pd.testing.assert_frame_equal(state.picks(conn, 2026), before)
 
 
-def test_score_week_scope_and_atomic_update_rollback(local):
-    conn, _ = local
+def test_reading_scores_writes_nothing_and_ignores_the_old_cache(local):
+    """`my_picks.tds` was the cache `pool score` filled. It is still in the schema, and a
+    value left in it is ignored rather than shown."""
+    conn, path = local
     record(conn, QB="q1", RB="r1")
     state.record_pick(conn, 2026, 2, "QB", "q2", "Quarter Two", "QB")
-    with conn:
-        conn.execute("UPDATE my_picks SET tds = 4")
     scoring.import_touchdowns(conn, 2026, pd.DataFrame([play(), end()]))
-    scoring.pick_results(conn, 2026, week=1, recompute=True)
-    assert state.picks(conn, 2026).set_index(["week", "slot"]).loc[(2, "QB"), "tds"] == 4
     with conn:
-        conn.execute("UPDATE my_picks SET tds = 4")
+        conn.execute("UPDATE my_picks SET tds = 9")
         conn.execute(
-            "CREATE TRIGGER prevent_second_score BEFORE UPDATE ON my_picks "
-            "WHEN NEW.slot='RB' BEGIN SELECT RAISE(ABORT, 'score rejected'); END"
+            "CREATE TRIGGER no_writes BEFORE UPDATE ON my_picks "
+            "BEGIN SELECT RAISE(ABORT, 'picks were written'); END"
         )
-    with pytest.raises(sqlite3.IntegrityError, match="score rejected"):
-        scoring.pick_results(conn, 2026, week=1, recompute=True)
-    assert state.picks(conn, 2026).tds.eq(4).all()
+    before = state.picks(conn, 2026)
+    week = results.pick_results(conn, 2026, week=1).set_index("slot")
+    assert list(week.tds) == [0, 1] and set(week.week) == {1}
+    for command in (["picks"], ["score", "--week", "1"]):
+        out = runner.invoke(app, [*command, "--db", str(path)])
+        assert out.exit_code == 0, out.stdout
+        assert "Week 1 subtotal: 1 TDs; 0 pending" in out.stdout
+    pd.testing.assert_frame_equal(state.picks(conn, 2026), before)
+
+
+def test_score_is_kept_as_a_hidden_name_for_picks():
+    import typer
+
+    commands = typer.main.get_command(app).commands
+    assert commands["score"].hidden and not commands["picks"].hidden
 
 
 def test_candidate_limit_cannot_be_consumed_by_expired_cells():

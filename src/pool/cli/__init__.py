@@ -25,11 +25,12 @@ for command in (
     picks.record,
     picks.unrecord,
     picks.picks,
-    picks.score,
     picks.status,
     advice.plan,
     advice.players,
 ):
     app.command()(command)
+# Picks are scored when they are read now; `score` is kept so the old habit still works.
+app.command(hidden=True)(picks.score)
 app.add_typer(reports.report_app, name="report")
 app.add_typer(research.app, name="research")

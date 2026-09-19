@@ -344,8 +344,3 @@ def _render_standings(result: st.Board) -> None:
             )
         console.print(table)
     console.print("Totals are touchdown counts, not points.")
-    if result.cache_stale:
-        console.print(
-            "Your recorded score cache is empty or stale for a finished game. "
-            "Run pool score so pool picks and standings use the same current counts."
-        )
