@@ -5,11 +5,13 @@ shipped production constants, baseline `shipped`, historical inputs and usage ro
 seeds 0–19, both greedy and optimizer replay, shipped random-top-10 trials, and hindsight.
 Seasons 2011–2025 require prior history beginning in 2010. The two eras are retrospective.
 
-Run from the repository root with the pinned environment:
+Run from the repository root with the pinned environment. Until 2026-09-19 the research
+commands were top-level (`pool benchmark`, `pool diagnose`); at a study's recorded revision,
+which `--resume` requires, that is still how they are spelled.
 
 ```bash
 uv sync --locked
-OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 uv run pool benchmark \
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 uv run pool research benchmark \
   --config experiments/phase2-validation.toml \
   --output data/experiments/phase2-validation
 # Keep the same environment and add --resume for compatible checkpoints.
@@ -57,8 +59,9 @@ Artifact schema version 1:
 **Phase 3C tooling retired 2026-09-19.** The collection window closed on 2026-09-07 without
 being run, so no baseline was ever exported, and `pool baseline` and `prospective.py` have
 been removed. Revision `bc57683` is the last one that has them; check it out to run what
-follows exactly. The reconstruction and parity checks remain, as `pool verify-capture`
-(`src/pool/verify.py`). The rest of this section describes the tooling as it was.
+follows exactly. The reconstruction and parity checks remain, as
+`pool research verify-capture` (`src/pool/research/verify.py`). The rest of this section
+describes the tooling as it was.
 
 `phase3c-baseline.toml` is the dated Phase 3C collection protocol. It is not a benchmark
 specification: no run reads a frozen research dataset and nothing is fitted. It declares
@@ -128,7 +131,7 @@ After a completed run, independently verify and publish the saved artifacts:
 
 ```bash
 uv run python experiments/verify.py <experiment> <tests-passed>
-OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 uv run pool benchmark \
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 uv run pool research benchmark \
   --config experiments/<experiment>.toml \
   --output data/experiments/<experiment> --resume
 uv run python experiments/publish.py <experiment>
@@ -141,12 +144,13 @@ databases remain in the ignored output directory.
 
 ## Descriptive diagnostics
 
-`pool diagnose` reads a completed run's saved surface and forecast exports and describes the
-model's rate errors by population, position, rate bin, availability and forecast lead horizon.
+`pool research diagnose` reads a completed run's saved surface and forecast exports and
+describes the model's rate errors by population, position, rate bin, availability and forecast
+lead horizon.
 It fits no correction, selects no model and states no conclusion.
 
 ```bash
-uv run pool diagnose --run data/experiments/roster-snapshot-repair \
+uv run pool research diagnose --run data/experiments/roster-snapshot-repair \
   --out experiments/results/phase3a-readiness
 ```
 
@@ -189,7 +193,7 @@ remains unchanged. The next recommended work is identity-only prospective baseli
 capture/validation, not a threshold amendment or an automatically promoted candidate.
 
 ```bash
-OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 uv run pool benchmark \
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 uv run pool research benchmark \
   --config experiments/phase3-calibration.toml \
   --output data/experiments/phase3-calibration
 uv run python experiments/verify.py phase3-calibration <tests-passed>

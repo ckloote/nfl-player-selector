@@ -7,10 +7,11 @@ import pandas as pd
 import pytest
 from typer.testing import CliRunner
 
-from pool import backtest, db, ingest, projections, scoring, state
+from pool import db, ingest, projections, scoring, state
 from pool.cli import app
 from pool.optimizer import plan_slot
 from pool.recommend import advise_slot
+from pool.research import backtest
 from tests.conftest import proj_row
 
 runner = CliRunner()

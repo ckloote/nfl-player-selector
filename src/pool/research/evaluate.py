@@ -14,7 +14,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from . import backtest, config, projections, scoring
+from .. import config, projections, scoring
+from . import backtest
 from . import models as registry
 
 FORECAST_COLUMNS = [

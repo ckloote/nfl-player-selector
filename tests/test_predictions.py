@@ -302,7 +302,9 @@ def test_a_week_with_no_report_yet_is_reported_as_standing_unscored(pool):
 def test_cli_records_and_scores(pool):
     conn, path = pool
     conn.close()
-    dry = runner.invoke(app, ["predict", "record", "--week", "2", "--dry-run", "--db", str(path)])
+    dry = runner.invoke(
+        app, ["research", "predict", "record", "--week", "2", "--dry-run", "--db", str(path)]
+    )
     assert dry.exit_code == 0, dry.output
     assert "Dry run" in dry.output and "Quarter Two" in dry.output
     conn = db.connect(path)
@@ -310,7 +312,7 @@ def test_cli_records_and_scores(pool):
     _record(conn)
     _report(conn, 2, WEEK2, REPORT_AT)
     conn.close()
-    scored = runner.invoke(app, ["predict", "score", "--db", str(path)])
+    scored = runner.invoke(app, ["research", "predict", "score", "--db", str(path)])
     assert scored.exit_code == 0, scored.output
     assert "greedy" in scored.output and "naive" in scored.output
 
@@ -321,7 +323,7 @@ def test_cli_says_so_when_the_prediction_can_no_longer_be_scored(pool):
     conn, path = pool
     _report(conn, 2, WEEK2, REPORT_AT)
     conn.close()
-    result = runner.invoke(app, ["predict", "record", "--week", "2", "--db", str(path)])
+    result = runner.invoke(app, ["research", "predict", "record", "--week", "2", "--db", str(path)])
     assert result.exit_code == 1
     assert "will not be scorable" in result.output
     conn = db.connect(path)
@@ -337,7 +339,7 @@ def test_cli_refuses_to_predict_without_an_identity_and_archives_nothing(local):
     _history(conn)
     _report(conn, 1, WEEK1, "2026-09-14T00:00:00+00:00", me=None)
     conn.close()
-    result = runner.invoke(app, ["predict", "record", "--week", "2", "--db", str(path)])
+    result = runner.invoke(app, ["research", "predict", "record", "--week", "2", "--db", str(path)])
     assert result.exit_code == 1
     assert "--me" in result.output
     conn = db.connect(path)
@@ -398,7 +400,7 @@ def test_cli_prints_notes_as_text_and_names_only_a_real_undated_delivery(pool):
     )
     assert undated.observation_id and undated.errors, "a real delivery whose week is unknown"
     conn.close()
-    result = runner.invoke(app, ["predict", "score", "--db", str(path)])
+    result = runner.invoke(app, ["research", "predict", "score", "--db", str(path)])
     assert result.exit_code == 0, result.output
     assert "[yellow]" not in result.output and "[dim]" not in result.output
     assert "Week None" not in result.output

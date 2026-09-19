@@ -38,10 +38,11 @@ If you prefer bare commands, `source .venv/bin/activate` once and drop the
 prefix, or install the CLI globally with `uv tool install .`.
 
 An installed `pool` runs the weekly commands (`week`, `refresh`, `recommend`, `record`,
-`unrecord`, `report`, `standings`, `predict`) from any directory. Set `POOL_DB` to an absolute
-path, because the default `data/pool.db` is relative to wherever you run it. Research commands
-(`backtest`, `sweep`, `evaluate`, `benchmark`) still need the checkout, because a study is
-reproduced from a revision.
+`unrecord`, `report`, `standings`) from any directory. Set `POOL_DB` to an absolute path,
+because the default `data/pool.db` is relative to wherever you run it. The research commands
+sit under `pool research` (`backtest`, `sweep`, `evaluate`, `benchmark`, `captures`,
+`verify-capture`, `predict` and more; see [RESEARCH.md](docs/RESEARCH.md)). The studies among
+them still need the checkout, because a study is reproduced from a revision.
 
 Data comes from [nflverse](https://github.com/nflverse) via `nflreadpy`. The
 default season is 2026 (override with `--season` or `POOL_SEASON`); the prior
@@ -136,7 +137,7 @@ uv run pool picks                       # your picks, scores, pending reasons an
 uv run pool score --week 3              # recompute recorded scores; --refresh fetches first
 uv run pool status --week 3             # feed attempts, coverage, freshness, fallbacks
 uv run pool unrecord 3 QB               # remove an incorrect entry
-uv run pool predict score               # how the saved rival predictions have done
+uv run pool research predict score      # how the saved rival predictions have done
 ```
 
 ## The pot share

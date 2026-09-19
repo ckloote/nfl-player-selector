@@ -1,9 +1,10 @@
 import pandas as pd
 import pytest
 
-from pool import backtest as B
-from pool import config, db, models
+from pool import config, db
 from pool import projections as P
+from pool.research import backtest as B
+from pool.research import models
 
 PRIOR, SEASON, WEEKS = 2023, 2024, [1, 2, 3, 4]
 TEAMS = ["AAA", "BBB", "CCC", "DDD"]

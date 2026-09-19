@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from pool import benchmark, capture, db, identity
+from pool import capture, db, identity
+from pool.research import benchmark
 from tests.test_backtest import SEASON, _seed
 
 SOURCE = Path(identity.__file__).resolve().parent

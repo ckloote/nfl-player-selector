@@ -65,21 +65,22 @@ def test_backtest_without_prior_season_data_names_the_refresh_to_run(dbfile):
     """The prior season is the model's starting prior: without it every
     positional mean collapses to zero and the replay silently returns garbage
     instead of failing."""
-    result = runner.invoke(app, ["backtest", "--season", "2026", "--db", str(dbfile)])
+    result = runner.invoke(app, ["research", "backtest", "--season", "2026", "--db", str(dbfile)])
     assert result.exit_code == 1
     assert "No 2025 stats loaded" in result.stdout
     assert "pool refresh --season 2026" in result.stdout
 
 
 def test_backtest_on_a_season_with_no_schedule_points_at_refresh(dbfile):
-    result = runner.invoke(app, ["backtest", "--season", "2030", "--db", str(dbfile)])
+    result = runner.invoke(app, ["research", "backtest", "--season", "2030", "--db", str(dbfile)])
     assert result.exit_code == 1
     assert "No 2030 schedule loaded" in result.stdout
 
 
 def test_backtest_rejects_an_unknown_strategy(dbfile):
     result = runner.invoke(
-        app, ["backtest", "--season", "2026", "--strategy", "bogus", "--db", str(dbfile)]
+        app,
+        ["research", "backtest", "--season", "2026", "--strategy", "bogus", "--db", str(dbfile)],
     )
     assert result.exit_code == 1
     assert "Unknown strategy 'bogus'" in result.stdout
@@ -87,7 +88,7 @@ def test_backtest_rejects_an_unknown_strategy(dbfile):
 
 @pytest.mark.parametrize("spec", ["twenty", "2024-", "20x4"])
 def test_backtest_explains_an_unreadable_season_spec(spec, dbfile):
-    result = runner.invoke(app, ["backtest", "--season", spec, "--db", str(dbfile)])
+    result = runner.invoke(app, ["research", "backtest", "--season", spec, "--db", str(dbfile)])
     assert result.exit_code == 1
     assert "as a season, list, or range" in result.stdout
 
@@ -101,6 +102,7 @@ def test_backtest_renders_a_summary_table(tmp_path):
     result = runner.invoke(
         app,
         [
+            "research",
             "backtest",
             "--season",
             str(SEASON),
@@ -133,6 +135,7 @@ def test_a_winprob_backtest_prints_the_invented_rivals_caveat(tmp_path):
     result = runner.invoke(
         app,
         [
+            "research",
             "backtest",
             "--season",
             str(SEASON),
@@ -158,7 +161,16 @@ def test_a_backtest_without_winprob_invents_nobody_and_says_nothing(tmp_path):
     path = _backtest_db(tmp_path)
     result = runner.invoke(
         app,
-        ["backtest", "--season", str(SEASON), "--strategy", "optimizer,greedy", "--db", str(path)],
+        [
+            "research",
+            "backtest",
+            "--season",
+            str(SEASON),
+            "--strategy",
+            "optimizer,greedy",
+            "--db",
+            str(path),
+        ],
     )
     assert result.exit_code == 0, result.stdout
     assert "invented" not in result.stdout
@@ -175,7 +187,17 @@ def test_a_bad_invented_field_is_named_rather_than_crashing(tmp_path, args, expe
     path = _backtest_db(tmp_path)
     result = runner.invoke(
         app,
-        ["backtest", "--season", str(SEASON), "--strategy", "winprob", "--db", str(path), *args],
+        [
+            "research",
+            "backtest",
+            "--season",
+            str(SEASON),
+            "--strategy",
+            "winprob",
+            "--db",
+            str(path),
+            *args,
+        ],
     )
     assert result.exit_code == 1
     assert expected in result.stdout
@@ -189,6 +211,7 @@ def test_sweep_renders_the_grid_and_warns_about_noise(tmp_path):
     result = runner.invoke(
         app,
         [
+            "research",
             "sweep",
             "--season",
             str(SEASON),

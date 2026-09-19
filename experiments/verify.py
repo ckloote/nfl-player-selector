@@ -15,8 +15,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from pool import benchmark, models
-from pool import evaluate as ev
+from pool.research import benchmark, models
+from pool.research import evaluate as ev
 
 experiment = sys.argv[1] if len(sys.argv) > 1 else "phase2-validation"
 tests_passed = int(sys.argv[2]) if len(sys.argv) > 2 else 0
@@ -131,7 +131,7 @@ if calibrated is None:
         counts.append(verify_season(out / str(season), expected, replay_rows, season))
         print(season, "verified", flush=True)
 else:
-    from pool import calibration as cal
+    from pool.research import calibration as cal
 
     names = [n for _f, _g, n in cal.candidates(spec)]
     pair_expected = model_seeds([spec["baseline"]])

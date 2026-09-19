@@ -22,8 +22,8 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from . import capture, db, projections, state
-from .recommend import advise_week
+from .. import capture, db, projections, state
+from ..recommend import advise_week
 
 # The live path's role source, which every captured decision was made with.
 ROLE_SOURCE = "depth"

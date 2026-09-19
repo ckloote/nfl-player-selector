@@ -19,12 +19,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import backtest, config, db, identity, ingest, models, projections, scoring, snapshots
+from .. import config, db, identity, ingest, projections, scoring, snapshots
+from ..identity import constants, digest, json_text
+from . import backtest, models
 from . import evaluate as ev
-from .identity import constants, digest, json_text
 
 SCHEMA_VERSION = 1
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 ASSUMPTIONS = [
     "Scoring: one credit for each touchdown scored and each credited passing touchdown thrown; "
     "negated plays and conversions excluded; complete game coverage required.",
@@ -326,7 +327,7 @@ def apply_corrections(conn, spec, log=print):
     No scoring waivers: the corrected scorer ledger must equal independently sourced
     player totals. Preserve the original observations and append a correction observation.
     """
-    from . import snapshots
+    from .. import snapshots
 
     for fix in spec.get("resolved_corrections", {}).get("corrections", []):
         if not spec["history_start"] <= fix["season"] <= max(spec["seasons"]):
@@ -1209,7 +1210,7 @@ def render_reports(data, spec, manifest, output, config_path=None):
         f"Code revision `{manifest['code']['revision']}`; source fingerprint "
         f"`{manifest['code']['code_hash']}`; dirty tree: {manifest['code']['dirty']}. "
         f"Frozen dataset SHA-256 `{manifest['dataset_hash']}`.\n\n"
-        f"Reproduce: `pool benchmark --config {config} "
+        f"Reproduce: `pool research benchmark --config {config} "
         f"--output {output} --resume`. Checkpoints require matching "
         "code, configuration, dependencies and frozen dataset. Saved compact artifacts are in "
         f"`experiments/results/{experiment}`; detailed forecasts and future surfaces remain "

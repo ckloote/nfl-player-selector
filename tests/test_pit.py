@@ -126,7 +126,7 @@ def test_recording_a_prediction_commits_the_distribution_with_it(seeded, monkeyp
     monkeypatch.setenv("COLUMNS", "200")
     conn, path = seeded
     conn.close()
-    result = runner.invoke(app, ["predict", "record", "--week", "2", "--db", str(path)])
+    result = runner.invoke(app, ["research", "predict", "record", "--week", "2", "--db", str(path)])
     assert result.exit_code == 0, result.output
     assert "Committed week 2's implied distribution" in result.output
     conn = db.connect(path)
@@ -139,7 +139,7 @@ def test_a_dry_run_commits_nothing(seeded):
     conn, path = seeded
     conn.close()
     result = runner.invoke(
-        app, ["predict", "record", "--week", "2", "--dry-run", "--db", str(path)]
+        app, ["research", "predict", "record", "--week", "2", "--dry-run", "--db", str(path)]
     )
     assert result.exit_code == 0, result.output
     conn = db.connect(path)

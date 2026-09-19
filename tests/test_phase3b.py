@@ -19,10 +19,11 @@ import pandas as pd
 import pytest
 from scipy import stats
 
-from pool import backtest, benchmark, capture, config, db, diagnostics, models
-from pool import calibration as cal
-from pool import evaluate as ev
+from pool import capture, config, db
 from pool.recommend import advise_slot
+from pool.research import backtest, benchmark, diagnostics, models
+from pool.research import calibration as cal
+from pool.research import evaluate as ev
 from tests.test_phase3a import _reference_mle
 
 HISTORY, SEASONS, APPLY = 2022, [2023, 2024, 2025], [2024, 2025]

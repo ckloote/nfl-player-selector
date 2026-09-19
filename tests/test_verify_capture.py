@@ -13,9 +13,10 @@ from datetime import datetime
 import pytest
 from typer.testing import CliRunner
 
-from pool import capture, config, snapshots, verify
+from pool import capture, config, snapshots
 from pool import projections as P
 from pool.cli import app
+from pool.research import verify
 from tests.test_backtest import SEASON
 from tests.test_phase2 import archive_all
 from tests.test_phase3a import DECISION, POST_SUN, POST_THU, PRE_WEEK3, _decide, _publish, _staged
@@ -179,7 +180,15 @@ def test_drift_outside_the_decision_path_is_reported_and_still_verifies(tmp_path
     conn.commit()
     conn.close()
     result = CliRunner().invoke(
-        app, ["verify-capture", "--season", str(SEASON), "--db", str(tmp_path / "parity.db")]
+        app,
+        [
+            "research",
+            "verify-capture",
+            "--season",
+            str(SEASON),
+            "--db",
+            str(tmp_path / "parity.db"),
+        ],
     )
     assert result.exit_code == 0, result.output
     assert "outside the decision path" in result.output
@@ -214,6 +223,7 @@ def test_an_overridden_fingerprint_is_not_reported_as_harmless_drift(tmp_path, m
     result = CliRunner().invoke(
         app,
         [
+            "research",
             "verify-capture",
             "--season",
             str(SEASON),
@@ -241,7 +251,15 @@ def test_a_decision_that_failed_parity_is_not_called_verified(tmp_path, monkeypa
     conn.commit()
     conn.close()
     result = CliRunner().invoke(
-        app, ["verify-capture", "--season", str(SEASON), "--db", str(tmp_path / "parity.db")]
+        app,
+        [
+            "research",
+            "verify-capture",
+            "--season",
+            str(SEASON),
+            "--db",
+            str(tmp_path / "parity.db"),
+        ],
     )
     assert result.exit_code == 1 and "did not verify" in result.output
     assert "outside the decision path" not in result.output
@@ -365,12 +383,20 @@ def test_the_cli_lists_and_verifies_what_it_captured(tmp_path):
     conn.close()
     runner = CliRunner()
     listed = runner.invoke(
-        app, ["captures", "--season", str(SEASON), "--db", str(tmp_path / "parity.db")]
+        app, ["research", "captures", "--season", str(SEASON), "--db", str(tmp_path / "parity.db")]
     )
     assert listed.exit_code == 0, listed.output
     assert "Fri 9/20 12:00PM ET" in listed.output  # when it was made, on the Eastern clock
     verified = runner.invoke(
-        app, ["verify-capture", "--season", str(SEASON), "--db", str(tmp_path / "parity.db")]
+        app,
+        [
+            "research",
+            "verify-capture",
+            "--season",
+            str(SEASON),
+            "--db",
+            str(tmp_path / "parity.db"),
+        ],
     )
     assert verified.exit_code == 0, verified.output
     assert "reconstruct and match replay" in verified.output
@@ -384,7 +410,15 @@ def test_the_cli_fails_loudly_when_a_decision_cannot_be_verified(tmp_path):
     conn.commit()
     conn.close()
     result = CliRunner().invoke(
-        app, ["verify-capture", "--season", str(SEASON), "--db", str(tmp_path / "parity.db")]
+        app,
+        [
+            "research",
+            "verify-capture",
+            "--season",
+            str(SEASON),
+            "--db",
+            str(tmp_path / "parity.db"),
+        ],
     )
     assert result.exit_code == 1
     assert "did not verify" in result.output
@@ -397,7 +431,55 @@ def test_verifying_a_season_with_no_decisions_is_not_a_verification(tmp_path):
     conn.commit()
     conn.close()
     result = CliRunner().invoke(
-        app, ["verify-capture", "--season", str(SEASON), "--db", str(tmp_path / "parity.db")]
+        app,
+        [
+            "research",
+            "verify-capture",
+            "--season",
+            str(SEASON),
+            "--db",
+            str(tmp_path / "parity.db"),
+        ],
     )
     assert result.exit_code == 1
     assert "nothing was verified" in result.output
+
+
+def test_the_listed_id_is_enough_to_name_a_decision(tmp_path):
+    """`captures` prints twelve characters of each id, and asking for one of them back used
+    to fail because only the full id matched."""
+    import typer
+
+    from pool.research import cli as research_cli
+
+    conn, _ = _archived(tmp_path)
+    early, _, _ = _decide(conn, 3, datetime.fromisoformat(PRE_WEEK3))
+    late, _, _ = _decide(conn, 3, datetime.fromisoformat(DECISION))
+    assert research_cli._decision_id(conn, early[:12]) == early
+    with pytest.raises(typer.Exit):
+        research_cli._decision_id(conn, "")  # starts both
+    with pytest.raises(typer.Exit):
+        research_cli._decision_id(conn, "not-a-decision")
+    conn.commit()
+    conn.close()
+    shown = CliRunner().invoke(
+        app,
+        ["research", "captures", "--decision", early[:12], "--db", str(tmp_path / "parity.db")],
+    )
+    assert shown.exit_code == 0, shown.output
+    assert early in shown.output
+    checked = CliRunner().invoke(
+        app,
+        [
+            "research",
+            "verify-capture",
+            "--season",
+            str(SEASON),
+            "--decision",
+            late[:12],
+            "--db",
+            str(tmp_path / "parity.db"),
+        ],
+    )
+    assert checked.exit_code == 0, checked.output
+    assert "All 1 captured decisions" in checked.output

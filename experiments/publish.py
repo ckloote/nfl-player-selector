@@ -11,7 +11,7 @@ import appendix
 import figures
 import pandas as pd
 
-from pool import benchmark
+from pool.research import benchmark
 
 # Insert each figure group before the following section. Missing or duplicate headings
 # indicate a renderer mismatch rather than a valid publication.
@@ -106,7 +106,9 @@ if calibrated is not None:
     # The Phase 3B report is written by the run from its own saved tables, so publication
     # copies it rather than re-rendering it: there is no second renderer to drift. The
     # bake-off's figures are drawn for the bake-off's metric set and are not reused.
-    presentation(("src/pool/benchmark.py", "experiments/publish.py", "experiments/appendix.py"))
+    presentation(
+        ("src/pool/research/benchmark.py", "experiments/publish.py", "experiments/appendix.py")
+    )
     report = (output / "compact" / "CALIBRATION.md").read_text()
     report += appendix.run_verification(verification)
     report += PRESENTATION_NOTE
@@ -157,7 +159,7 @@ for name, svg in figures.render(metrics, spec["baseline"]).items():
 
 presentation(
     (
-        "src/pool/benchmark.py",
+        "src/pool/research/benchmark.py",
         "experiments/publish.py",
         "experiments/figures.py",
         "experiments/appendix.py",

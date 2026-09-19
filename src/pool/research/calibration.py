@@ -30,7 +30,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from . import config, diagnostics, models, recommend
+from .. import config, recommend
+from . import diagnostics, models
 from . import evaluate as ev
 
 SCHEMA_VERSION = 1

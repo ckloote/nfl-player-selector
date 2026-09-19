@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import config
+from .. import config
 from . import evaluate as ev
 
 SCHEMA_VERSION = 1
