@@ -15,6 +15,9 @@ appetite change with your position on the leaderboard?
 - [`docs/HISTORY.md`](docs/HISTORY.md) — how the project got here: phases, reviews, outcomes and
   archived reports
 
+Version **1.0.0** is available from [GitHub Releases](https://github.com/ckloote/nfl-player-selector/releases/tag/v1.0.0).
+See the [release notes](docs/releases/1.0.0.md) for installation and known limitations.
+
 ## Setup
 
 This project uses [uv](https://docs.astral.sh/uv/) for Python, dependency, and

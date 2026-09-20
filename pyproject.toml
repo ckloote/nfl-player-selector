@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "nfl-pool"
-version = "0.1.0"
+version = "1.0.0"
 description = "Decision support for a season-long NFL touchdown pool"
 requires-python = ">=3.11"
 dependencies = [
