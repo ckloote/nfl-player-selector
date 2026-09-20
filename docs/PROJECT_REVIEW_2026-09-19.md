@@ -187,14 +187,14 @@ migration or dependency was added.
 
 ## Remaining work for 1.0
 
-The four medium findings above are complete. The remaining engineering requirements for
-1.0 are command guidance and wheel-install CI; the wheel test is not the only open item.
+The four medium findings above are complete. Command guidance and wheel-install CI are
+implemented below; release preparation remains a separate step.
 
-- [ ] **Fix command guidance (finding 5).** Suggested report-import, weekly rerun and
+- [x] **Fix command guidance (finding 5).** Suggested report-import, weekly rerun and
   full-detail commands must quote paths and preserve the selected database and season.
   Verify that the printed commands run with a database/report path containing spaces and
   a nondefault season, and keep copyable commands on one line.
-- [ ] **Add wheel-install CI.** Build the wheel, install it into a clean environment, and
+- [x] **Add wheel-install CI.** Build the wheel, install it into a clean environment, and
   run the installed `pool` command from outside the checkout without source-tree imports.
   Verify distribution metadata and exercise recording/capture with a disposable fixture
   database and no live feed downloads. Keep the existing lint, formatting and suite checks.
@@ -214,5 +214,48 @@ Explicitly deferred beyond 1.0:
   orchestration, entrant-alias and membership refinements listed above.
 
 These deferrals do not reopen the completed data-preservation, automatic prediction-save
-or settled-season refresh fixes. This patch records the release checklist; it does not
-implement the remaining requirements or publish a release.
+or settled-season refresh fixes. The engineering follow-up below completes the two implementation items; release preparation
+and publication remain unchecked.
+
+## Engineering completion — 2026-09-20
+
+Finding 5 and the wheel-install coverage gap are implemented. A shared token formatter
+retains the launcher, explicit database, nondefault season and applicable week; a shared
+printer keeps commands literal and on one line at an 80-column terminal. Template checks,
+weekly recording/full-detail/rerun/report-import guidance and prediction-save recovery all
+use it. Unknown report filenames have a quoted placeholder with replacement instructions.
+Player lookup, ambiguous-name omission and explicit decision links retain their behavior.
+
+The separate `wheel-install` CI job builds into a fresh temporary directory and runs
+`tests/wheel_smoke.py`. The driver creates a clean environment, installs only the wheel
+and its declared runtime dependencies, and removes inherited Python import-path overrides.
+From outside the checkout it verifies installed location, project/distribution metadata,
+runtime dependency versions and the entry point, then runs help, records a historical
+fixture pick, reads it back and checks its captured submission and identity. The identity
+must have no checkout revision. Only the synthetic season helper is copied; application
+code comes from the installed wheel. Subprocess failures expose their output and fail
+the check; temporary data and environments are cleaned up. README includes the local
+invocation, and the existing package-copy regression remains in pytest.
+
+Verification on this patch used disposable data and mocked feeds:
+
+- `uv sync --locked`: passed; the existing environment already matched the lockfile.
+- `.venv/bin/pytest -q tests/test_guidance.py tests/test_week.py tests/test_entrants.py tests/test_identity.py`:
+  **125 passed**.
+- `.venv/bin/pytest -q`: **767 passed in 189.60 seconds**.
+- README's wheel build/install smoke command: **passed**, using Python 3.12.13,
+  `nfl-pool 0.1.0` and a fresh environment with resolved runtime dependencies.
+- `.venv/bin/ruff check .`: passed.
+- `.venv/bin/ruff format --check src tests`: passed; **87 files formatted**.
+- `git diff --check`: passed.
+
+Regressions execute the printed template-check arguments against a nondefault season and
+database/report filenames containing spaces and quotes, confirm the intended fixture
+players resolve and the entire database remains unchanged, and cover both launchers,
+shell metacharacters, 80-column output and prediction-save failure recovery.
+
+These are local verification results. Both `check` and `wheel-install` must also pass
+on the final patch in GitHub Actions before merge/release acceptance; no hosted run was
+triggered from this working-tree implementation. Release preparation/publication remains
+unchecked, and the standings and legacy PIT migration deferrals above remain in force.
+No version change, migration or runtime dependency was added.

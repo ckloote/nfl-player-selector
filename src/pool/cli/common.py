@@ -20,6 +20,11 @@ DbOpt = typer.Option(None, "--db", help="SQLite path (default data/pool.db)")
 WeekOpt = typer.Option(None, "--week", "-w", help="Week (default: current)")
 
 
+def print_command(command: str) -> None:
+    """Keep shell syntax literal and copyable even on a narrow terminal."""
+    console.print(f"  {command}", soft_wrap=True, markup=False, highlight=False)
+
+
 def _conn(path: Path | None):
     return db.connect(path)
 

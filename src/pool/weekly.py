@@ -13,8 +13,10 @@ import json
 import os
 import shlex
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 
@@ -140,10 +142,19 @@ def program() -> str:
     return "uv run pool" if os.environ.get("UV_RUN_RECURSION_DEPTH") else "pool"
 
 
-def _quoted(name: str) -> str:
-    """Double quotes, as a person would type them, unless the shell would still expand
-    something inside them."""
-    return shlex.quote(name) if set(name) & set('"$`\\!') else f'"{name}"'
+def command(
+    args: Sequence[str],
+    *,
+    season: int = config.DEFAULT_SEASON,
+    db_path: str | Path | None = None,
+) -> str:
+    """A pasteable shell command retaining the selected launcher and data context."""
+    tokens = [*shlex.split(program()), *args]
+    if season != config.DEFAULT_SEASON:
+        tokens += ["--season", str(season)]
+    if db_path is not None:
+        tokens += ["--db", str(db_path)]
+    return shlex.join(tokens)
 
 
 def record_command(
@@ -172,17 +183,13 @@ def record_command(
                 "line leaves him out; `pool record` lists who it matched."
             )
             continue
-        args += [f"--{view.slot.lower()}", _quoted(name)]
+        args += [f"--{view.slot.lower()}", name]
     if not args:
         return None, notes
-    line = [program(), "record", "--week", str(week), *args]
-    if season != config.DEFAULT_SEASON:
-        line += ["--season", str(season)]
-    if db_path is not None:
-        line += ["--db", shlex.quote(str(db_path))]
+    args = ["record", "--week", str(week), *args]
     if decision_id:
-        line += ["--decision", decision_id]
-    return " ".join(line), notes
+        args += ["--decision", decision_id]
+    return command(args, season=season, db_path=db_path), notes
 
 
 def locked_results(conn: sqlite3.Connection, season: int, week: int) -> dict[str, tuple[str, str]]:

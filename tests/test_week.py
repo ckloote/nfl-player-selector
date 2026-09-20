@@ -327,7 +327,14 @@ def test_the_screen_fits_eighty_columns_without_cutting_a_name(week_db):
     assert "…" not in output
     for _, name, *_ in HOLD_WEEK:
         assert name in output
-    assert max(len(line) for line in output.splitlines() if " record " not in line) <= 80
+    assert (
+        max(
+            len(line)
+            for line in output.splitlines()
+            if not line.startswith(("  pool ", "  uv run pool "))
+        )
+        <= 80
+    )
     alternatives = [line for line in output.splitlines() if line.startswith("         ")]
     assert len(alternatives) <= 3 * weekly.ALTERNATIVES
 
@@ -340,7 +347,7 @@ def test_tuesday_prints_only_wednesday_s_pick_and_says_when_to_come_back(week_db
     assert "Submit next: QB (first deadline Wed 7:00PM)" in output
     words = pasted(output)
     assert "--qb" in words and "--rb" not in words and "--flex" not in words
-    assert "Waiting: RB, FLEX. Run `" in output and " week` again before Thu 12:00PM" in output
+    assert "Waiting: RB, FLEX. Run again before Thu 12:00PM:" in output
 
 
 def test_thursday_then_sunday(week_db):
@@ -358,7 +365,7 @@ def test_thursday_then_sunday(week_db):
     assert words[words.index("--rb") + 1] == "Thursday Runner" and "--flex" not in words
     assert "HOLD Friday Catcher" in thursday
     # Held, so decided before the Friday catcher is gone rather than the Monday one.
-    assert "Waiting: FLEX." in thursday and " week` again before Fri 2:00PM" in thursday
+    assert "Waiting: FLEX." in thursday and "Run again before Fri 2:00PM:" in thursday
     paste(week_db, thursday, "2026-09-17T10:05")
     thursday_id = decisions(week_db)[-1]
     assert links(week_db)["RB"] == (thursday_id, "named")
@@ -400,7 +407,7 @@ def test_a_fully_recorded_week_saves_no_decision_and_points_at_the_report(week_d
     output = run_week(week_db, "2026-09-19T12:10")
     assert decisions(week_db) == before
     assert "Week 2 is fully recorded." in output
-    assert "report import <file>" in output
+    assert "report import '<file>'" in output
     assert " record --week " not in output
 
 
@@ -716,3 +723,50 @@ def test_a_prediction_that_cannot_be_saved_is_one_line_and_the_advice_still_prin
     output = weekly_run(path, BEFORE_KICKOFF)
     assert "PICK " in output
     assert "Could not save rival rankings and distribution for week 2: ValueError" in output
+
+
+@pytest.mark.parametrize("uv_launcher", [False, True])
+def test_week_followups_retain_context_at_eighty_columns(
+    week_db, tmp_path, monkeypatch, refreshes, uv_launcher
+):
+    path = tmp_path / "my [red] pool's database.db"
+    week_db.rename(path)
+    conn = db.connect(path)
+    with conn:
+        conn.execute("UPDATE games SET season = 2024")
+        conn.execute("UPDATE rosters SET season = 2024")
+    conn.close()
+    if uv_launcher:
+        monkeypatch.setenv("UV_RUN_RECURSION_DEPTH", "1")
+    else:
+        monkeypatch.delenv("UV_RUN_RECURSION_DEPTH", raising=False)
+
+    def broken(*args, **kwargs):
+        raise ValueError("save failed")
+
+    monkeypatch.setattr(weekly, "save_predictions", broken)
+    output = run_week(path, "2026-09-15T12:00", "--week", "2", "--season", "2024", "--refresh")
+    launcher = ["uv", "run", "pool"] if uv_launcher else ["pool"]
+    lines = [line for line in output.splitlines() if line.startswith("  " + " ".join(launcher))]
+    commands = [shlex.split(line)[len(launcher) :] for line in lines]
+    assert {tuple(c[:3]) for c in commands} >= {
+        ("report", "import", "<file>"),
+        ("research", "predict", "record"),
+        ("record", "--week", "2"),
+        ("week", "--week", "2"),
+        ("recommend", "--week", "2"),
+    }
+    assert len(commands) == 5
+    assert all(len(line) > 80 for line in lines), "commands must survive narrow output intact"
+    for command in commands:
+        assert command[command.index("--db") + 1] == str(path)
+        assert command[command.index("--season") + 1] == "2024"
+        assert command[command.index("--week") + 1] == "2"
+    assert refreshes == [2024]
+    assert "Replace the quoted '<file>' placeholder" in output
+    record = next(c for c in commands if c[0] == "record")
+    assert record[record.index("--decision") + 1] == decisions(path)[-1]
+    with time_machine.travel(at("2026-09-15T12:05"), tick=False):
+        result = runner.invoke(app, record)
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert links(path)["QB"] == (decisions(path)[-1], "named")
