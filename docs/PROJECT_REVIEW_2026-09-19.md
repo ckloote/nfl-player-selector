@@ -188,7 +188,7 @@ migration or dependency was added.
 ## Remaining work for 1.0
 
 The four medium findings above are complete. Command guidance and wheel-install CI are
-implemented below; release preparation remains a separate step.
+implemented below. Release preparation and publication are recorded in the 1.0 section below.
 
 - [x] **Fix command guidance (finding 5).** Suggested report-import, weekly rerun and
   full-detail commands must quote paths and preserve the selected database and season.
@@ -198,7 +198,7 @@ implemented below; release preparation remains a separate step.
   run the installed `pool` command from outside the checkout without source-tree imports.
   Verify distribution metadata and exercise recording/capture with a disposable fixture
   database and no live feed downloads. Keep the existing lint, formatting and suite checks.
-- [ ] **Prepare and publish 1.0.** After both engineering items pass CI and merge, update
+- [x] **Prepare and publish 1.0.** After both engineering items pass CI and merge, update
   the package version from `0.1.0` to `1.0.0` and any corresponding lockfile metadata,
   record release notes and known limitations, then tag and publish the release.
 
@@ -259,3 +259,17 @@ on the final patch in GitHub Actions before merge/release acceptance; no hosted 
 triggered from this working-tree implementation. Release preparation/publication remains
 unchecked, and the standings and legacy PIT migration deferrals above remain in force.
 No version change, migration or runtime dependency was added.
+
+## Version 1.0 release — 2026-09-20
+
+The engineering changes merged in PR #32, and both CI jobs passed on the merged revision
+`edf98c5` ([run](https://github.com/ckloote/nfl-player-selector/actions/runs/35516288658)).
+The release updates `pyproject.toml` and the matching `uv.lock` package metadata to
+`1.0.0`, with no runtime code, dependency or migration change.
+
+[Release notes](releases/1.0.0.md) document installation, the shipped workflow and known
+limitations, including standings presentation and unfrozen legacy PIT commitments.
+Publication is the annotated `v1.0.0` tag and
+[GitHub release](https://github.com/ckloote/nfl-player-selector/releases/tag/v1.0.0), with
+the verified wheel, source archive and SHA-256 checksums. Both CI jobs must pass on the
+release revision before publication. The existing deferrals remain in force.
