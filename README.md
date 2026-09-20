@@ -362,9 +362,28 @@ uv run ruff check .
 uv run ruff format --check src tests
 ```
 
-CI runs exactly these three, after `uv sync --locked`, on every push to `main` and every
+CI runs these three checks, after `uv sync --locked`, on every push to `main` and every
 pull request (`.github/workflows/ci.yml`). `--locked` fails when `uv.lock` does not match
 `pyproject.toml`, so a dependency change has to commit its updated lockfile.
+
+A separate `wheel-install` job builds a wheel and installs it with its runtime dependencies
+in a temporary environment. From outside the checkout it checks package metadata, the
+installed `pool` entry point, and a historical fixture pick and its captured identity.
+It uses no live feeds and installs no development dependencies. Run the same check locally:
+
+```bash
+(
+  set -e
+  wheel_dir="$(mktemp -d)"
+  trap 'rm -rf "$wheel_dir"' EXIT
+  uv build --wheel --out-dir "$wheel_dir"
+  uv run --no-project --python "$(cat .python-version)" python tests/wheel_smoke.py "$wheel_dir"/*.whl
+)
+```
+
+The standalone driver also accepts an existing wheel path; it cleans up its temporary
+environment and database on success or failure. The package-copy pytest regression remains
+a fast local check.
 
 The suite runs as of 18 September 2026, week 2 of the season its fixtures describe, whatever
 today's date is: `tests/conftest.py` pins the clock with `time-machine`.

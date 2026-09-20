@@ -1,5 +1,4 @@
-# The three checks README's Development section documents, on every push to main and
-# every pull request. Nothing here that is not also run locally.
+# The checks in README's Development section, also runnable locally.
 name: CI
 
 on:
@@ -26,3 +25,16 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check src tests
       - run: uv run pytest -q
+
+  wheel-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+      - run: |
+          wheel_dir="$(mktemp -d)"
+          trap 'rm -rf "$wheel_dir"' EXIT
+          uv build --wheel --out-dir "$wheel_dir"
+          uv run --no-project --python "$(cat .python-version)" python tests/wheel_smoke.py "$wheel_dir"/*.whl

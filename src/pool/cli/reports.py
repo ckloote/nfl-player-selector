@@ -13,7 +13,7 @@ from rich.table import Table
 
 from .. import config, entrants, weekly
 from .. import standings as st
-from .common import DbOpt, SeasonOpt, _conn, _week, console
+from .common import DbOpt, SeasonOpt, _conn, _week, console, print_command
 
 report_app = typer.Typer(
     help="Archive and read official weekly pool reports.", no_args_is_help=True
@@ -63,7 +63,13 @@ def report_template(
         "Then check it:",
         markup=False,
     )
-    console.print(f"  {weekly.program()} report import {path} --check", markup=False)
+    print_command(
+        weekly.command(
+            ["report", "import", str(path), "--check", "--week", str(week)],
+            season=season,
+            db_path=db_path,
+        )
+    )
 
 
 @report_app.command("import")

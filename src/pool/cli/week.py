@@ -17,7 +17,7 @@ from rich.text import Text
 from .. import config, freshness, ingest, predictions, state, weekly
 from ..recommend import Candidate, SlotAdvice, main_slate_start
 from .advice import Decided, _decide, _divergence
-from .common import DbOpt, SeasonOpt, WeekOpt, _conn, _short, console
+from .common import DbOpt, SeasonOpt, WeekOpt, _conn, _short, console, print_command
 
 
 @dataclass
@@ -101,29 +101,32 @@ def _render_week(d: Decided, season: int, refreshed, db_path, predicted=None) ->
         )
     for warning in d.freshness_warnings:
         console.print(f"Warning: {warning}", style="yellow", markup=False)
-    _print_week_pool(pool, season, d.uncertain)
+    _print_week_pool(pool, season, d.uncertain, wk, db_path)
     console.print()
     _print_week_slots(d.advice, views, pool)
     console.print()
     _print_next(d, season, views, reads, db_path)
     if predicted:
-        _print_predicted(d.week, *predicted)
-    console.print(
-        f"Full detail: {weekly.program()} recommend --week {d.week}"
-        + (f" --season {season}" if season != config.DEFAULT_SEASON else ""),
-        style="dim",
-    )
+        _print_predicted(d.week, *predicted, season=season, db_path=db_path)
+    console.print("Full detail:", style="dim")
+    print_command(weekly.command(["recommend", "--week", str(wk)], season=season, db_path=db_path))
 
 
-def _print_predicted(wk: int, what: str, kickoff) -> None:
+def _print_predicted(wk: int, what: str, kickoff, *, season: int, db_path) -> None:
     """The save status of the rival rankings and implied distribution."""
     if what == "failed":
         console.print(
             f"Could not save rival rankings and distribution for week {wk}: {kickoff}. "
-            f"Run pool research predict record --week {wk} before first kickoff "
-            "to save them by hand.",
+            "Save them by hand before first kickoff:",
             style="yellow",
             markup=False,
+        )
+        print_command(
+            weekly.command(
+                ["research", "predict", "record", "--week", str(wk)],
+                season=season,
+                db_path=db_path,
+            )
         )
         return
     when = _short(state.eastern_now(kickoff))
@@ -243,7 +246,7 @@ def _versus(c: Candidate) -> str:
     return f"{'vs' if c.home else '@'} {c.opponent}"
 
 
-def _print_week_pool(pool, season: int, uncertain) -> None:
+def _print_week_pool(pool, season: int, uncertain, wk: int, db_path) -> None:
     """The pot share in a line or two: its state, and what fixes it when it is withheld."""
     if pool.withheld:
         console.print(
@@ -255,8 +258,9 @@ def _print_week_pool(pool, season: int, uncertain) -> None:
     elif not pool:
         console.print(
             f"[dim]No rivals on record for {season}, so no pot-share view; "
-            "`pool report import` turns it on.[/dim]"
+            "import a pool report to turn it on.[/dim]"
         )
+        _print_report_import(season, wk, db_path)
     else:
         leader = max(pool.rivals, key=lambda r: r.season_tds)
         console.print(
@@ -272,21 +276,25 @@ def _print_week_pool(pool, season: int, uncertain) -> None:
             )
 
 
+def _print_report_import(season: int, wk: int, db_path) -> None:
+    console.print("Replace the quoted '<file>' placeholder with the report filename.", markup=False)
+    print_command(
+        weekly.command(
+            ["report", "import", "<file>", "--week", str(wk)], season=season, db_path=db_path
+        )
+    )
+
+
 def _print_next(d: Decided, season: int, views, reads: _WeekReads, db_path) -> None:
     """What to do next, and the line to paste once it is done."""
     wk = d.week
     now_views, later = weekly.due(views)
     holds = [v for v in views if v.status == "hold"]
-    prog = weekly.program()
-    season_arg = f" --season {season}" if season != config.DEFAULT_SEASON else ""
     if all(v.status == "locked" for v in views):
         console.print(f"Week {wk} is fully recorded.")
         if not reads.reported:
-            console.print(
-                f"When the pool's week {wk} report arrives: {prog} report import "
-                f"<file>{season_arg}",
-                markup=False,
-            )
+            console.print(f"When the pool's week {wk} report arrives:")
+            _print_report_import(season, wk, db_path)
     if now_views:
         first = min(now_views, key=lambda v: v.player.deadline).player
         slate = main_slate_start(d.proj, wk)
@@ -311,8 +319,7 @@ def _print_next(d: Decided, season: int, views, reads: _WeekReads, db_path) -> N
             str(db_path) if db_path is not None else None,
         )
         if command:
-            # One line whatever the width: a command Rich wrapped would paste as two.
-            console.print(f"  {command}", soft_wrap=True, markup=False, highlight=False)
+            print_command(command)
         for note in notes:
             console.print(note, style="yellow", markup=False)
     waiting = later + holds
@@ -321,6 +328,7 @@ def _print_next(d: Decided, season: int, views, reads: _WeekReads, db_path) -> N
         # means looking again before the early player is gone, in case the gap has grown.
         until = min(v.player.deadline for v in waiting)
         console.print(
-            f"Waiting: {_slots(waiting)}. Run `{prog} week` again before {_short(until)}.",
+            f"Waiting: {_slots(waiting)}. Run again before {_short(until)}:",
             markup=False,
         )
+        print_command(weekly.command(["week", "--week", str(wk)], season=season, db_path=db_path))
