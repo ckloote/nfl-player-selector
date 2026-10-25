@@ -487,3 +487,20 @@ def test_a_pick_with_no_game_waits_while_the_week_is_unfinished_then_scores_zero
     shown = invoke("standings")
     assert "had no week 1 game; scored 0" in shown
     assert "A bye or a team the schedule does not match." in shown
+
+
+def test_a_misplaced_pick_scores_zero_final_and_spends_the_player(pool):
+    """Flex Two returned a punt for a touchdown, but as Pat's RB he scores nothing."""
+    from pool import standings
+
+    conn, _ = pool
+    result = report(conn, picks=DEFAULT_PICKS | {"Pat": ("Quarter One", "Flex Two", "Flex One")})
+    assert result.ok and [m["player_id"] for m in result.misplaced] == ["f2"]
+    board = standings.board(conn, 2026)
+    pat = next(row for row in board.rows if row.entrant_id == "pat")
+    rb = next(pick for pick in pat.picks if pick.slot == "RB")
+    assert (rb.player_id, rb.tds, rb.status, rb.misplaced) == ("f2", 0, "final", True)
+    assert "misplaced" in rb.note
+    assert pat.season_total.tds == 1 and not pat.season_total.incomplete
+    assert "f2" in pat.used.player_ids and pat.used.complete
+    assert board.final

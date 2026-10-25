@@ -238,6 +238,8 @@ def _standing_pick(pick: st.EntrantPick) -> str:
         return "—"
     if pick.player_name is None:
         return "(no pick)"
+    if pick.misplaced:
+        return pick.player_name + " (misplaced)"
     return pick.player_name + (" (unresolved)" if pick.status == "unresolved" else "")
 
 
@@ -364,6 +366,13 @@ def _render_standings(result: st.Board) -> None:
         )
     noted = [(row, pick) for row in result.rows for pick in row.picks if pick.note]
     for row, pick in noted:
+        if pick.misplaced:
+            console.print(
+                f"{row.display_name} {pick.slot}: {pick.player_name} is not a {pick.slot}; "
+                f"the misplaced week {pick.week} pick scores 0 and he is still spent.",
+                markup=False,
+            )
+            continue
         console.print(
             f"{row.display_name} {pick.slot}: {pick.player_name} had no week {pick.week} game; "
             "scored 0. A bye or a team the schedule does not match.",

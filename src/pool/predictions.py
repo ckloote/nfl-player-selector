@@ -92,12 +92,12 @@ def identified(conn: sqlite3.Connection, season: int) -> bool:
     return found.empty or bool(found.is_me.any())
 
 
-def _standing(row, spent, played: set[int], known=None) -> rivals.RivalState:
+def _standing(row, spent, played: set[int], known=None, misplaced=None) -> rivals.RivalState:
     pool = spent[row.entrant_id]
     return rivals.RivalState(
         row.entrant_id,
         row.display_name,
-        pool.player_ids,
+        pool.player_ids | (misplaced or {}).get(row.entrant_id, frozenset()),
         pool.unknown,
         row.season_total.tds,
         tuple(w for w in pool.missing_weeks if w in played),
@@ -125,15 +125,32 @@ def known_picks(
 
     A reported no-pick is kept, as None: the slot is held empty rather than predicted. A
     name that never resolved is not -- who they took is unknown, so the week stays a
-    prediction, and `unresolved_ahead` says so.
+    prediction, and `unresolved_ahead` says so. A misplaced pick is held as None too,
+    because it scores nothing; that he is spent is `misplaced_ahead`'s to say.
     """
     rows = _reported_ahead(conn, season, week, at)
     rows = rows[rows.player_id.notna() | rows.player_name.isna()]
     out: dict[str, list[tuple[str, int, str | None]]] = {}
     for row in rows.itertuples():
-        pid = None if pd.isna(row.player_id) else str(row.player_id)
+        pid = None if pd.isna(row.player_id) or row.misplaced else str(row.player_id)
         out.setdefault(row.entrant_id, []).append((str(row.slot), int(row.week), pid))
     return {entrant: tuple(sorted(picks)) for entrant, picks in out.items()}
+
+
+def misplaced_ahead(
+    conn: sqlite3.Connection, season: int, week: int, at: datetime
+) -> dict[str, frozenset[str]]:
+    """Players spent in reported misplaced picks from `week` on, by entrant.
+
+    `known_picks` pins those slots empty, which scores them right but would leave the
+    player free for the simulated rival to spend again in the slot he does fit.
+    """
+    rows = _reported_ahead(conn, season, week, at)
+    rows = rows[rows.misplaced.eq(1) & rows.player_id.notna()]
+    out: dict[str, set[str]] = {}
+    for row in rows.itertuples():
+        out.setdefault(row.entrant_id, set()).add(str(row.player_id))
+    return {entrant: frozenset(ids) for entrant, ids in out.items()}
 
 
 def unresolved_ahead(
@@ -199,6 +216,7 @@ def _as_of(conn, season, week, at):
             standings.used_pools(conn, season, through=week - 1),
             played_weeks(conn, season, week - 1, at),
             known_picks(conn, season, week, at),
+            misplaced_ahead(conn, season, week, at),
         )
 
 
@@ -209,7 +227,7 @@ def rival_states(
     at = at or datetime.now(UTC)
     if not identified(conn, season):
         raise ValueError(entrants.IDENTITY_PROMPT)
-    board, spent, played, _known = _as_of(conn, season, week, at)
+    board, spent, played, _known, _misplaced = _as_of(conn, season, week, at)
     # Deliberately without `known`: this builds the state a *prediction* is made from, and
     # handing it the answer would make every hit rate meaningless. `pool_state` takes it,
     # because the policy is entitled to intelligence the prediction log is not.
@@ -232,11 +250,14 @@ def pool_state(
     with db.transaction(conn):
         if not identified(conn, season):
             return rivals.PoolState(withheld=(entrants.IDENTITY_PROMPT,))
-        board, spent, played, known = _as_of(conn, season, week, at)
+        board, spent, played, known, misplaced = _as_of(conn, season, week, at)
         banked, my_tds, finalized, gaps = _decision_outcomes(conn, season, week, at, board.rows)
     return rivals.PoolState(
         tuple(
-            replace(_standing(row, spent, played, known), season_tds=banked.get(row.entrant_id, 0))
+            replace(
+                _standing(row, spent, played, known, misplaced),
+                season_tds=banked.get(row.entrant_id, 0),
+            )
             for row in board.rows
             if not row.is_me
         ),
@@ -277,7 +298,10 @@ def _decision_outcomes(conn, season, week, at, members):
             if pick.week < week:
                 cells[(pick.entrant_id, pick.week, pick.slot)] = (pick.status, pick.tds)
             elif not pick.is_me and pick.status == "final" and pick.player_id:
-                fixed[(pick.week, pick.player_id)] = pick.tds
+                # A misplaced zero is the pick's, not the player's week: anyone holding him
+                # in a slot he fits scores what he actually did.
+                if not pick.misplaced:
+                    fixed[(pick.week, pick.player_id)] = pick.tds
     me = next((row.entrant_id for row in members if row.is_me), None)
     for pick in personal_picks(conn, season).itertuples():
         if datetime.fromisoformat(pick.recorded_at) > at:
@@ -533,6 +557,17 @@ def score(conn: sqlite3.Connection, season: int) -> tuple[pd.DataFrame, list[dic
                     continue
                 pick = found.iloc[0]
                 pid = None if pd.isna(pick.player_id) else str(pick.player_id)
+                if pid is not None and pick.misplaced:
+                    # No predictor ranks a player outside the slot, and an entry mistake
+                    # scored as a miss would read as a model defect.
+                    notes.append(
+                        dict(
+                            week=week,
+                            reason=f"{entrant_id} {slot}: misplaced pick; not a choice "
+                            "the predictors rank",
+                        )
+                    )
+                    continue
                 if pid is None:
                     # Two different facts. A no-pick is an answer no predictor offered, and
                     # an unresolved name is an answer nobody can read yet.
