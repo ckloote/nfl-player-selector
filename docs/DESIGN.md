@@ -19,6 +19,11 @@ Pool rules, restated as constraints:
 6. Each week, the person running the pool sends a report of every entrant's
    picks and running totals. It is sent by hand: sometimes before that week's
    games have finished, always before the next week's first lock.
+7. A player submitted in a slot his position does not fit (a WR as the RB)
+   still stands: the pick **scores zero** and the player is **spent** all the
+   same. This was ruled in 2026 week 6. The importer records such a pick as
+   *misplaced* when the name exactly matches one player at another position;
+   a near-miss spelling stays unresolved, so a typo is never scored as zero.
 
 Consequences worth calling out:
 

@@ -317,3 +317,37 @@ def test_cli_prints_notes_as_text_and_names_only_a_real_undated_delivery(pool):
     assert "[yellow]" not in result.output and "[dim]" not in result.output
     assert "Week None" not in result.output
     assert result.output.count("1 archived report(s) name no week") == 2, "once per section"
+
+
+def test_a_misplaced_reported_pick_is_skipped_rather_than_scored_a_miss(pool):
+    """No predictor ranks a WR for an RB slot, so the entry mistake is not a model miss."""
+    conn, _ = pool
+    _record(conn)
+    report(conn, 2, dict(WEEK2, Pat=("Quarter Two", "Flex Two", "Flex One")), REPORT_AT)
+    scored, notes = predictions.score(conn, 2026)
+    assert not len(scored[scored.entrant_id.eq("pat") & scored.slot.eq("RB")])
+    assert any("pat RB: misplaced pick" in note["reason"] for note in notes)
+
+
+def test_a_misplaced_pick_holds_its_slot_empty_and_spends_the_player(pool):
+    """Reported ahead of the decision, it is pinned as scoring nothing, kept out of the
+    player-week results anyone else holding him would score from, and spent for the rival."""
+    conn, _ = pool
+    report(conn, 2, dict(WEEK2, Pat=("Quarter Two", "Flex Two", "Flex One")), REPORT_AT)
+    state = predictions.pool_state(conn, 2026, 2, at=datetime.fromisoformat(AFTER_REPORT))
+    pat = next(rival for rival in state.rivals if rival.entrant_id == "pat")
+    assert pat.pinned("RB", [2]) == {2: None}
+    assert "f2" in pat.used_ids
+    assert (2, "f2") not in {(week, pid) for week, pid, _ in state.finalized}
+
+
+def test_a_past_misplaced_pick_banks_zero_and_withholds_nothing(pool):
+    conn, _ = pool
+    before = predictions.pool_state(conn, 2026, 2, at=datetime.fromisoformat(AFTER_REPORT))
+    report(conn, 1, dict(WEEK1, Pat=("Quarter One", "Flex One", "Flex Two")), REPORT_AT)
+    after = predictions.pool_state(conn, 2026, 2, at=datetime.fromisoformat(AFTER_REPORT))
+    assert after.withheld == before.withheld == ()
+    tds = {rival.entrant_id: rival.season_tds for rival in after.rivals}
+    assert tds == {rival.entrant_id: rival.season_tds for rival in before.rivals}
+    pat = next(rival for rival in after.rivals if rival.entrant_id == "pat")
+    assert "f1" in pat.used_ids and pat.pool_complete

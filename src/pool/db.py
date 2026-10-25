@@ -154,6 +154,13 @@ def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
 
 # Migrations deliberately do not infer scoring completeness from legacy totals.
 MIGRATIONS = {
+    5: [
+        # A fourth pick state: a resolved player submitted in a slot his position does not
+        # fit. The pool's ruling is that he is spent and scores zero. Stored rather than
+        # derived from his position when read, so a later roster reclassification cannot
+        # rescore a settled week; each import replaces the week's rows and recomputes it.
+        "ALTER TABLE pool_picks ADD COLUMN misplaced INTEGER NOT NULL DEFAULT 0",
+    ],
     4: [
         # Delivered pool reports. A pick row distinguishes three states the leaderboard
         # must not conflate: a resolved pick (both columns set), a reported name we could

@@ -849,3 +849,59 @@ def test_the_template_defaults_beside_the_database_and_says_when_it_has_no_names
     assert "no report is imported for 2026 yet" in written.output
     path = next(Path(p) for p in written.output.split() if p.endswith("week1.csv"))
     assert path.parent.name == "reports" and path.read_text() == "week,entrant,QB,RB,FLEX\n"
+
+
+MISPLACED_RB = (b"1,Pat,RB,Runner One", b"1,Pat,RB,Flex One")
+
+
+def test_an_exact_name_from_another_position_is_a_misplaced_pick(report_db):
+    """The pool's ruling on a WR submitted as the RB: the pick stands, scores zero, and
+    spends him. That is a fact about the week, so the import is not failed for it."""
+    result = import_reference(report_db, REFERENCE.read_bytes().replace(*MISPLACED_RB))
+    assert result.ok and result.written and not result.unresolved
+    assert result.misplaced == [
+        dict(
+            entrant_id="pat",
+            slot="RB",
+            player_name="Flex One",
+            player_id="f1",
+            team="C",
+            position="WR",
+        )
+    ]
+    assert "pat RB: 'Flex One' is a WR; stored as a misplaced pick" in " ".join(result.warnings)
+    row = report_db.execute(
+        "SELECT player_id, game_id, misplaced FROM pool_picks "
+        "WHERE entrant_id = 'pat' AND slot = 'RB'"
+    ).fetchone()
+    assert dict(row) == dict(player_id="f1", game_id="g2", misplaced=1)
+    others = report_db.execute(
+        "SELECT COUNT(*) FROM pool_picks WHERE misplaced = 1 AND NOT "
+        "(entrant_id = 'pat' AND slot = 'RB')"
+    ).fetchone()[0]
+    assert others == 0
+
+
+@pytest.mark.parametrize("typed", [b"Flex On", b"Flex"])
+def test_an_inexact_name_from_another_position_stays_unresolved(report_db, typed):
+    """A near miss outside the slot is far likelier a typo than a mistake, and a typo
+    scored as a misplaced zero would be wrong without anyone being told."""
+    raw = REFERENCE.read_bytes().replace(b"1,Pat,RB,Runner One", b"1,Pat,RB," + typed)
+    result = import_reference(report_db, raw)
+    assert not result.misplaced and not result.ok
+    assert [item["slot"] for item in result.unresolved] == ["RB"]
+
+
+def test_cli_import_warns_and_standings_label_a_misplaced_pick(report_cli, tmp_path):
+    path = tmp_path / "misplaced.csv"
+    path.write_bytes(REFERENCE.read_bytes().replace(*MISPLACED_RB))
+    expected = "pat RB: 'Flex One' is a WR; stored as a misplaced pick (spent, scores zero)."
+    checked = report_cli("report", "import", str(path), "--check")
+    assert checked.exit_code == 0 and expected in checked.output
+    imported = report_cli("report", "import", str(path))
+    assert imported.exit_code == 0 and expected in imported.output
+    assert "Unresolved" not in imported.output
+    shown = report_cli("standings")
+    assert shown.exit_code == 0 and "Flex One (misplaced)" in shown.output
+    assert "Pat RB: Flex One is not a RB; the misplaced week 1 pick scores 0" in shown.output
+    assert "(unresolved)" not in shown.output and "had no week" not in shown.output

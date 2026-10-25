@@ -39,6 +39,7 @@ class ImportResult:
     totals: int = 0
     unresolved: list[dict] = field(default_factory=list)
     inexact: list[dict] = field(default_factory=list)
+    misplaced: list[dict] = field(default_factory=list)
     blanks: list[dict] = field(default_factory=list)
     previous_week: int | None = None
     added: list[str] = field(default_factory=list)
@@ -52,12 +53,13 @@ class ImportResult:
     def ok(self) -> bool:
         """Findings that mean the import cannot be trusted as it stands.
 
-        `unrecorded`, `blanks` and `inexact` are deliberately absent. A week I never
-        recorded is incomplete bookkeeping of my own, a slot the report says went unpicked
-        is a fact about the week, and a name matched by partial or close spelling is almost
-        always a typo that found the right player. None of them says the ingested data is
-        wrong. Failing on them would make the routine import red and teach the exit code to
-        be ignored; they are reported so they are seen, not so they block.
+        `unrecorded`, `blanks`, `inexact` and `misplaced` are deliberately absent. A week I
+        never recorded is incomplete bookkeeping of my own, a slot the report says went
+        unpicked is a fact about the week, a name matched by partial or close spelling is
+        almost always a typo that found the right player, and a player submitted in the
+        wrong slot is an entrant's mistake the pool scores as zero. None of them says the
+        ingested data is wrong. Failing on them would make the routine import red and teach
+        the exit code to be ignored; they are reported so they are seen, not so they block.
         """
         return not (self.errors or self.unresolved or self.conflicts)
 
@@ -224,7 +226,7 @@ def transform_report(
 
 def resolve_players(
     conn: sqlite3.Connection, season: int, week: int, picks: pd.DataFrame
-) -> tuple[pd.DataFrame, list[dict], list[dict]]:
+) -> tuple[pd.DataFrame, list[dict], list[dict], list[dict]]:
     """Resolve by slot against week-specific history; retain every unresolved name.
 
     `state.find_player` falls back from an exact name to a word-start match and then to a
@@ -232,16 +234,45 @@ def resolve_players(
     also returned as `inexact`, with what was typed and who it matched, so a typo that
     found the wrong player is shown rather than silently written. Exact means equal after
     the matcher's own normalisation, so case and punctuation never count as inexact.
+
+    A name nobody in the slot matches may be a real player submitted in the wrong slot --
+    a WR as the RB. The pool scores that pick zero and still counts him spent, so he is
+    resolved, flagged `misplaced` and returned as such. Only an exact name, and only one
+    player, earns that: a fallback match outside the slot is far likelier a typo than a
+    mistake, and a typo must stay unresolved rather than quietly score zero.
     """
     history = state.historical_pool(conn, season, week)
     resolved = picks.copy()
     resolved["player_id"] = None
     resolved["game_id"] = None
-    unresolved, inexact = [], []
+    resolved["misplaced"] = 0
+    unresolved, inexact, misplaced = [], [], []
     for index, pick in picks.iterrows():
         if _blank(pick.player_name):
             continue  # the report named no player; there is nothing to resolve
         matches = state.find_player(history, pick.player_name, positions=config.SLOTS[pick.slot])
+        if matches.empty:
+            elsewhere = tuple(p for p in config.POSITIONS if p not in config.SLOTS[pick.slot])
+            found = state.find_player(history, pick.player_name, positions=elsewhere)
+            exact = found[
+                found.player_name.map(state.normalize_name).eq(
+                    state.normalize_name(pick.player_name)
+                )
+            ]
+            if len(exact) == 1:
+                player = exact.iloc[0]
+                misplaced.append(
+                    dict(
+                        entrant_id=pick.entrant_id,
+                        slot=pick.slot,
+                        player_name=pick.player_name,
+                        player_id=player.player_id,
+                        team="" if pd.isna(player.team) else player.team,
+                        position=player.position,
+                    )
+                )
+                resolved.at[index, "misplaced"] = 1
+                matches = exact
         if len(matches) != 1:
             unresolved.append(
                 dict(
@@ -276,7 +307,7 @@ def resolve_players(
         game = stat_game or db.resolve_game(conn, season, week, player.team)
         resolved.at[index, "player_id"] = player.player_id
         resolved.at[index, "game_id"] = game["game_id"] if game else None
-    return resolved, unresolved, inexact
+    return resolved, unresolved, inexact, misplaced
 
 
 def archive_report(
@@ -528,7 +559,14 @@ def import_report(
         result.parsed = True
         result.entrants, result.picks, result.totals = len(entrant_rows), len(picks), len(totals)
         state.validate_week(conn, season, week)
-        picks, result.unresolved, result.inexact = resolve_players(conn, season, week, picks)
+        picks, result.unresolved, result.inexact, result.misplaced = resolve_players(
+            conn, season, week, picks
+        )
+        for item in result.misplaced:
+            result.warnings.append(
+                f"{item['entrant_id']} {item['slot']}: {item['player_name']!r} is a "
+                f"{item['position']}; stored as a misplaced pick (spent, scores zero)."
+            )
         result.blanks = [
             dict(entrant_id=r.entrant_id, slot=r.slot)
             for r in picks.itertuples()

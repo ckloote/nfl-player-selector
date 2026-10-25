@@ -26,6 +26,7 @@ class EntrantPick:
     pending: str = ""
     source: str = "reported"
     note: str = ""
+    misplaced: bool = False
 
 
 @dataclass(frozen=True)
@@ -119,8 +120,14 @@ def score_rows(conn, season, rows, scores) -> list[EntrantPick]:
         name, pid = _optional(row.player_name), _optional(row.player_id)
         gid = _optional(row.game_id)
         note = ""
+        misplaced = bool(getattr(row, "misplaced", 0))
         if name is None:
             value, status, reason = 0, "final", ""
+        elif misplaced:
+            # The pool's ruling, not a result: nothing he does that week counts, so there
+            # is no game to wait for.
+            value, status, reason = 0, "final", ""
+            note = f"not a {row.slot}; misplaced pick scores zero"
         elif pid is None:
             value, status, reason = None, "unresolved", "name unresolved; re-import pool report"
         else:
@@ -142,6 +149,7 @@ def score_rows(conn, season, rows, scores) -> list[EntrantPick]:
                 status,
                 reason,
                 note=note,
+                misplaced=misplaced,
             )
         )
     return result
